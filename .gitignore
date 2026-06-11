@@ -1,0 +1,30 @@
+# Environment variables (contains secrets)
+.env
+
+# Rust build artifacts
+target/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Storage data (if contains user data)
+/storage/
+
+release-assets/
+node_modules/
+playwright-report/
+test-results/
+.superpowers/
+.codegraph/
