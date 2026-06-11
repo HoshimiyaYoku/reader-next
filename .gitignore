@@ -28,3 +28,7 @@ playwright-report/
 test-results/
 .superpowers/
 .codegraph/
+
+# Local agent secrets/context
+AGENTS.local.md
+/storage-docker/
