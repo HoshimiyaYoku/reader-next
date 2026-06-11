@@ -2,49 +2,99 @@
 
 ## 环境要求
 
-- Rust 1.70+ (推荐最新稳定版)
-- Node.js 16+ (用于前端开发)
+- Rust stable
+- Node.js 20+
+- npm
 
 ## 克隆项目
 
 ```bash
-git clone https://github.com/givenge/reader-rust.git
-cd reader-rust
+git clone https://github.com/Maple0517/reader-next.git
+cd reader-next
 ```
 
-## 运行后端
+## 启动后端
 
 ```bash
-# 开发模式运行
 cargo run
-
-# 构建发布版本
-cargo build --release
 ```
 
-服务器默认运行在 `0.0.0.0:8080`。
+默认监听：
 
-## 运行前端
+```text
+0.0.0.0:8080
+```
+
+后端 API 前缀为 `/reader3`。
+
+## 启动前端
+
+另开一个终端：
 
 ```bash
-cd web
+cd frontend
 npm install
-npm run serve
+npm run dev
 ```
 
-前端开发服务器通常运行在 `http://localhost:8081`。
+Vite 默认地址：
 
-## 验证安装
+```text
+http://localhost:5173
+```
 
-打开浏览器访问前端地址，如果能看到界面并可以添加书源，说明安装成功。
+开发环境会把 `/reader3` 代理到本地后端。
 
-## 默认配置
+## 构建前端
+
+```bash
+cd frontend
+npm run build
+```
+
+构建产物位于 `frontend/dist/`。后端生产运行时默认从这里提供静态文件。
+
+## 运行测试
+
+```bash
+cargo test
+
+cd frontend
+npm run test
+```
+
+## 配置
+
+配置从 `.env` 或环境变量读取。复制 `.env.example` 后按需修改：
+
+```bash
+cp .env.example .env
+```
+
+常用配置：
 
 | 配置项 | 默认值 | 说明 |
-|--------|--------|------|
-| SERVER_HOST | 0.0.0.0 | 服务器绑定地址 |
-| SERVER_PORT | 8080 | 服务器端口 |
-| DATABASE_URL | sqlite:storage/reader.db?mode=rwc | SQLite 数据库路径 |
-| LOG_LEVEL | info | 日志级别 |
+| --- | --- | --- |
+| `SERVER_HOST` | `0.0.0.0` | 服务绑定地址 |
+| `SERVER_PORT` | `8080` | 服务端口 |
+| `DATABASE_URL` | `sqlite:storage/reader.db?mode=rwc` | SQLite 数据库 |
+| `WEB_ROOT` | `frontend/dist` | 前端静态资源目录 |
+| `LOG_LEVEL` | `info` | 日志级别 |
 
-更多配置选项请参考 [配置指南](./configuration)。
+更多配置见 [配置指南](./configuration)。
+
+## GitHub Pages 文档
+
+文档站由 GitHub Actions 发布：
+
+```text
+https://maple0517.github.io/reader-next/
+```
+
+本地预览文档：
+
+```bash
+cd docs
+npm install
+npm run docs:dev
+```

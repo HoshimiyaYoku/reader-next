@@ -1,6 +1,6 @@
 # 标准测试流程
 
-本文定义 `reader-rust` 的标准回归测试流程，目标是让前端、后端和交互流程在发布前都有一套统一检查。
+本文定义 Reader Next 的标准回归测试流程，目标是让前端、后端和交互流程在发布前都有一套统一检查。
 
 ## 测试目标
 
@@ -32,9 +32,9 @@ cd frontend && npm run build
 
 Playwright 目录在仓库根目录：
 
-- [playwright.config.ts](/Users/mac/project/reder/reader-rust/playwright.config.ts)
-- [tests/e2e/app-shell.spec.ts](/Users/mac/project/reder/reader-rust/tests/e2e/app-shell.spec.ts)
-- [tests/e2e/standard-flow.spec.ts](/Users/mac/project/reder/reader-rust/tests/e2e/standard-flow.spec.ts)
+- `playwright.config.ts`
+- `tests/e2e/app-shell.spec.ts`
+- `tests/e2e/standard-flow.spec.ts`
 
 安装依赖：
 

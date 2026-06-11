@@ -1,42 +1,43 @@
 # 简介
 
-Reader-Rust 是一个用 Rust 实现的书源阅读服务器。它提供了书源管理、搜索、章节检索和内容解析等功能。
+Reader Next 是一个独立维护的阅读 3.0 Rust 服务端，提供书源管理、书籍搜索、章节解析、服务端书架、缓存、RSS、TTS、本地 TXT 上传和 AI 资料能力。
 
-## 特性
+它从 `reader-rust` 代码基础继续演进，但当前主线会优先按 `reader-next` 的使用体验和重构节奏推进。
 
-- **高性能**: 基于 Rust 和 axum 构建，内存安全，并发处理能力强
-- **灵活书源**: 支持 CSS选择器、JSONPath、XPath、正则、JavaScript 多种解析方式
-- **规则引擎**: 自动检测内容类型，智能匹配解析规则
-- **数据持久化**: SQLite 存储书源配置，文件缓存章节内容
-- **Vue 2 前端**: 配套 Web 界面，连接 Rust 后端 API
+## 当前重点
+
+- **新版前端**：`frontend/`，Vue 3 + Vite + TypeScript + Pinia。
+- **服务端书架**：远程书源书籍和上传的本地 TXT 都进入统一书架。
+- **跨设备进度**：打开书籍和恢复会话时同步服务端最新阅读进度。
+- **本地 TXT**：支持上传、解析目录、阅读正文、删除导入文件。
+- **AI 资料**：围绕已读章节整理摘要、世界观、角色、关系和地图。
+- **文档站**：GitHub Pages 发布到 `https://maple0517.github.io/reader-next/`。
 
 ## 架构概览
 
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Web 前端   │────→│   API 层    │────→│  服务层     │
-│  (Vue 2)    │     │  (axum)     │     │  (业务逻辑) │
-└─────────────┘     └─────────────┘     └──────┬──────┘
-                                               │
-                         ┌─────────────────────┼─────────────────────┐
-                         ↓                     ↓                     ↓
-                   ┌─────────┐          ┌──────────┐          ┌──────────┐
-                   │ 爬虫层   │          │ 解析层    │          │ 存储层    │
-                   │(HTTP请求)│          │(规则引擎) │          │(SQLite)  │
-                   └─────────┘          └──────────┘          └──────────┘
+```text
+Vue 3 前端
+  -> /reader3 API
+  -> axum handler
+  -> service
+  -> crawler / parser / storage
+  -> SQLite + 文件缓存
 ```
 
-## 模块结构
+## 主要目录
 
-- **`src/api/`** - HTTP 处理程序和路由 (axum)
-- **`src/service/`** - 业务逻辑层
-- **`src/parser/`** - 内容提取引擎
-- **`src/crawler/`** - HTTP 抓取
-- **`src/model/`** - 数据结构
-- **`src/storage/`** - 持久化层
+- `src/api/`：HTTP handlers 和路由。
+- `src/service/`：业务逻辑。
+- `src/parser/`：规则解析引擎。
+- `src/crawler/`：HTTP 抓取。
+- `src/storage/`：SQLite 和文件缓存。
+- `frontend/`：Vue 3 + Vite 前端。
+- `docs/`：VitePress 文档站。
 
 ## 下一步
 
-- [快速开始](./quickstart) - 运行你的第一个 Reader 服务器
-- [API 文档](../api/) - 查看完整的 API 接口
-- [书源开发](../book-source/) - 学习如何编写自定义书源
+- [快速开始](./quickstart)
+- [近期变更](./recent-changes)
+- [功能特性](./features)
+- [AI 资料](./ai-book)
+- [API 文档](../api/)

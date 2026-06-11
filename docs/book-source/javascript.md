@@ -1,6 +1,6 @@
 # JavaScript 规则
 
-Reader-Rust 的 JS 规则运行在服务端 QuickJS 中，不是浏览器页面环境。
+Reader Next 的 JS 规则运行在服务端 QuickJS 中，不是浏览器页面环境。
 
 ## 基本语法
 

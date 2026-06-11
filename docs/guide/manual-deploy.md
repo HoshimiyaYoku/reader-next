@@ -6,8 +6,8 @@
 
 ```bash
 # 克隆项目
-git clone https://github.com/givenge/reader-rust.git
-cd reader-rust
+git clone https://github.com/Maple0517/reader-next.git
+cd reader-next
 
 # 编译发布版本
 cargo build --release
@@ -38,13 +38,13 @@ cargo build --release --target aarch64-unknown-linux-musl
 mkdir -p /opt/reader
 cp target/release/reader-rust /opt/reader/
 cd /opt/reader
-mkdir -p storage assets web
+mkdir -p storage assets frontend
 ```
 
 ### 2. 复制前端文件
 
 ```bash
-cp -r /path/to/web/dist /opt/reader/web/
+cp -r frontend/dist /opt/reader/frontend/
 ```
 
 ### 3. 创建配置文件
@@ -55,7 +55,7 @@ cp -r /path/to/web/dist /opt/reader/web/
 SERVER_HOST=0.0.0.0
 SERVER_PORT=8080
 DATABASE_URL=sqlite:storage/reader.db?mode=rwc
-WEB_ROOT=./web/dist
+WEB_ROOT=./frontend/dist
 STORAGE_DIR=./storage
 ASSETS_DIR=./assets
 LOG_LEVEL=info
@@ -67,7 +67,7 @@ LOG_LEVEL=info
 
 ```ini
 [Unit]
-Description=Reader-Rust
+Description=Reader Next
 After=network.target
 
 [Service]
@@ -109,7 +109,7 @@ server {
 ## 更新
 
 ```bash
-cd /path/to/reader-rust
+cd /path/to/reader-next
 git pull
 cargo build --release
 cp target/release/reader-rust /opt/reader/

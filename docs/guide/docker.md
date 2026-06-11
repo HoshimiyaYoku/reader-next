@@ -5,7 +5,7 @@
 ### 构建镜像
 
 ```bash
-docker build -t reader-rust .
+docker build -t reader-next .
 ```
 
 ### 运行容器
@@ -15,7 +15,7 @@ docker run -d \
   --name reader \
   -p 8080:8080 \
   -v $(pwd)/storage:/app/storage \
-  reader-rust
+  reader-next
 ```
 
 ## 使用 Docker Compose
@@ -27,7 +27,7 @@ version: '3.8'
 
 services:
   reader:
-    image: reader-rust
+    image: reader-next
     container_name: reader
     ports:
       - "8080:8080"
@@ -75,6 +75,6 @@ environment:
 ```bash
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
-  -t yourusername/reader-rust:latest \
+  -t yourusername/reader-next:latest \
   --push .
 ```

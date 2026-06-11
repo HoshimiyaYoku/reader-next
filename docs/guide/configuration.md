@@ -1,6 +1,6 @@
 # 配置
 
-Reader-Rust 通过环境变量进行配置。默认配置定义在 `src/app/config.rs` 中。
+Reader Next 通过环境变量进行配置。默认配置定义在 `src/app/config.rs` 中。
 
 ## 环境变量
 
@@ -28,7 +28,7 @@ Reader-Rust 通过环境变量进行配置。默认配置定义在 `src/app/conf
 
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
-| `WEB_ROOT` | `../reader/web` | 静态 Web 文件目录 |
+| `WEB_ROOT` | `frontend/dist` | 静态 Web 文件目录 |
 
 ### 其他配置
 

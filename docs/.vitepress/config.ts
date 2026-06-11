@@ -3,7 +3,7 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   base: '/reader-next/',
   title: 'Reader Next',
-  description: '阅读3.0 - Rust版书源阅读服务器',
+  description: '独立维护的阅读 3.0 Rust 服务端',
 
   themeConfig: {
     nav: [
@@ -20,6 +20,7 @@ export default defineConfig({
           items: [
             { text: '简介', link: '/guide/' },
             { text: '快速开始', link: '/guide/quickstart' },
+            { text: '近期变更', link: '/guide/recent-changes' },
             { text: '配置', link: '/guide/configuration' },
             { text: '功能特性', link: '/guide/features' },
             { text: '用户手册', link: '/guide/user-manual' },
