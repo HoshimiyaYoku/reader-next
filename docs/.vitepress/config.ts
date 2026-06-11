@@ -1,8 +1,8 @@
 import { defineConfig } from 'vitepress'
 
 export default defineConfig({
-  base: '/reader-rust/',
-  title: 'Reader-Rust',
+  base: '/reader-next/',
+  title: 'Reader Next',
   description: '阅读3.0 - Rust版书源阅读服务器',
 
   themeConfig: {
@@ -10,7 +10,7 @@ export default defineConfig({
       { text: '指南', link: '/guide/' },
       { text: 'API', link: '/api/' },
       { text: '书源', link: '/book-source/' },
-      { text: 'GitHub', link: 'https://github.com/givenge/reader-rust' }
+      { text: 'GitHub', link: 'https://github.com/Maple0517/reader-next' }
     ],
 
     sidebar: {
@@ -65,11 +65,11 @@ export default defineConfig({
     },
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/givenge/reader-rust' }
+      { icon: 'github', link: 'https://github.com/Maple0517/reader-next' }
     ],
 
     editLink: {
-      pattern: 'https://github.com/givenge/reader-rust/edit/main/docs/:path'
+      pattern: 'https://github.com/Maple0517/reader-next/edit/master/docs/:path'
     }
   }
 })
