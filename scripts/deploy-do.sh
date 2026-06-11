@@ -2,7 +2,7 @@
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/reader/app}"
-BRANCH="${BRANCH:-Maple/ai-book-v2}"
+BRANCH="${BRANCH:-main}"
 REPO="${REPO:-https://github.com/Maple0517/reader-next.git}"
 
 if [[ ! -d "$APP_DIR/.git" ]]; then

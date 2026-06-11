@@ -3,7 +3,7 @@ name: Deploy Reader to VPS
 on:
   push:
     branches:
-      - Maple/ai-book-v2
+      - main
   workflow_dispatch:
 
 permissions:
