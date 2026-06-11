@@ -528,9 +528,23 @@ export async function uploadGeneratedMap({
   useBackendProxy = false,
   fetchImpl = fetch,
 }: UploadGeneratedMapParams) {
+  const upstreamImageUrl = imageUrl?.trim()
+  const canKeepUpstreamImageUrl = Boolean(upstreamImageUrl && !isDataImageUrl(upstreamImageUrl))
   const blob = b64Json
     ? base64ToBlob(b64Json, 'image/png')
-    : await fetchImageBlob(imageUrl || '', fetchImpl, useBackendProxy)
+    : isDataImageUrl(upstreamImageUrl)
+      ? dataUrlToBlob(upstreamImageUrl)
+      : await fetchImageBlob(upstreamImageUrl || '', fetchImpl, useBackendProxy).catch((error) => {
+        if (canKeepUpstreamImageUrl) return null
+        throw error
+      })
+
+  if (!blob && canKeepUpstreamImageUrl && upstreamImageUrl) {
+    return upstreamImageUrl
+  }
+  if (!blob) {
+    throw new Error('地图图片下载失败')
+  }
 
   const formData = new FormData()
   formData.append('file', blob, filename)
@@ -547,6 +561,7 @@ export async function uploadGeneratedMap({
     body: formData,
   })
   if (!response.ok) {
+    if (canKeepUpstreamImageUrl && upstreamImageUrl) return upstreamImageUrl
     throw new Error(await readModelError(response, '地图上传失败'))
   }
 
@@ -556,10 +571,12 @@ export async function uploadGeneratedMap({
     data?: string[]
   }
   if (data.isSuccess === false) {
+    if (canKeepUpstreamImageUrl && upstreamImageUrl) return upstreamImageUrl
     throw new Error(data.errorMsg || '地图上传失败')
   }
   const url = Array.isArray(data.data) ? data.data[0] : ''
   if (!url) {
+    if (canKeepUpstreamImageUrl && upstreamImageUrl) return upstreamImageUrl
     throw new Error('地图上传结果为空')
   }
   return url
@@ -1122,6 +1139,24 @@ function base64ToBlob(value: string, contentType: string) {
     bytes[index] = binary.charCodeAt(index)
   }
   return new Blob([bytes], { type: contentType })
+}
+
+function isDataImageUrl(value: string | undefined): value is string {
+  return Boolean(value?.trim().startsWith('data:image/'))
+}
+
+function dataUrlToBlob(value: string) {
+  const match = value.match(/^data:([^;,]+)(;base64)?,(.*)$/)
+  if (!match) {
+    throw new Error('地图图片 data URL 无效')
+  }
+  const contentType = match[1] || 'image/png'
+  const isBase64 = Boolean(match[2])
+  const data = match[3] || ''
+  if (isBase64) {
+    return base64ToBlob(data, contentType)
+  }
+  return new Blob([decodeURIComponent(data)], { type: contentType })
 }
 
 async function fetchImageBlob(imageUrl: string, fetchImpl: typeof fetch, useBackendProxy: boolean) {

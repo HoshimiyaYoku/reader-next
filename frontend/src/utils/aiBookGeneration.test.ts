@@ -908,6 +908,59 @@ describe('aiBookGeneration', () => {
     })
   })
 
+  it('keeps upstream image urls when backend proxy image download fails', async () => {
+    const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
+      if (String(url) === '/reader3/aiProxyImage') {
+        return {
+          ok: false,
+          json: async () => ({
+            isSuccess: false,
+            errorMsg: 'only http/https proxy targets are supported',
+          }),
+          text: async () => 'only http/https proxy targets are supported',
+        }
+      }
+      throw new Error(`unexpected fetch ${String(url)}`)
+    })
+
+    const url = await uploadGeneratedMap({
+      imageUrl: 'https://img.example.test/generated-map.png',
+      filename: 'map.png',
+      useBackendProxy: true,
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    })
+
+    expect(url).toBe('https://img.example.test/generated-map.png')
+  })
+
+  it('uploads data url image results without routing them through the backend image proxy', async () => {
+    const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
+      if (String(url) === '/reader3/aiProxyImage') {
+        throw new Error('data urls should not be proxied')
+      }
+      if (String(url) === '/reader3/uploadFile?type=ai-maps') {
+        return {
+          ok: true,
+          json: async () => ({
+            isSuccess: true,
+            data: ['/assets/admin/ai-maps/map.png'],
+          }),
+        }
+      }
+      throw new Error(`unexpected fetch ${String(url)}`)
+    })
+
+    const url = await uploadGeneratedMap({
+      imageUrl: `data:image/png;base64,${btoa('fake-png')}`,
+      filename: 'map.png',
+      useBackendProxy: true,
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    })
+
+    expect(url).toBe('/assets/admin/ai-maps/map.png')
+    expect(fetchMock).not.toHaveBeenCalledWith('/reader3/aiProxyImage', expect.anything())
+  })
+
   it('can downgrade a failed map image into an interactive relationship graph fallback', () => {
     const memory: AiBookMemory = {
       bookUrl: 'book-1',
