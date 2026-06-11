@@ -1,0 +1,39 @@
+services:
+  reader:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    image: reader-rust:prod
+    container_name: reader-rust-prod
+    restart: unless-stopped
+    env_file:
+      - .env.prod
+    volumes:
+      - /opt/reader/storage:/app/storage
+    networks:
+      - reader-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/ >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: reader-caddy
+    restart: unless-stopped
+    depends_on:
+      - reader
+    ports:
+      - "80:80"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - /opt/reader/caddy-data:/data
+      - /opt/reader/caddy-config:/config
+    networks:
+      - reader-net
+
+networks:
+  reader-net:
+    name: reader-net
