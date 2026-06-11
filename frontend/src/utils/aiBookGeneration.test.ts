@@ -15,10 +15,12 @@ const readyConfig: AiBookConfig = {
   textBaseUrl: 'http://localhost:8825',
   textApiKey: '',
   textModel: 'gpt-4o-mini',
+  textPath: '/v1/chat/completions',
   textUseFullUrl: false,
   imageBaseUrl: 'http://localhost:8826',
   imageApiKey: 'image-key',
   imageModel: 'gpt-image-1',
+  imagePath: '/v1/images/generations',
   imageSize: '1024x1024',
   imageUseFullUrl: false,
   useBackendProxy: false,
@@ -855,6 +857,53 @@ describe('aiBookGeneration', () => {
     )
   })
 
+  it('uses configured text path for non-OpenAI-compatible gateways', async () => {
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => ({
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              memory: {
+                summary: '主角抵达北境。',
+                worldview: [],
+                characters: [],
+                relationships: [],
+                locations: [],
+              },
+            }),
+          },
+        }],
+      }),
+    }))
+
+    await requestAiBookMemoryUpdate({
+      config: {
+        ...readyConfig,
+        textBaseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+        textPath: '/v1/chat/completions',
+      },
+      book: { name: '山海旧事', author: '佚名', bookUrl: 'book-1', origin: 'source-1' },
+      chapter: { title: '第八章', url: 'chapter-8', index: 7 },
+      chapterContent: '主角抵达北境。',
+      memory: {
+        bookUrl: 'book-1',
+        enabled: true,
+        updatedAt: 0,
+        worldview: [],
+        characters: [],
+        relationships: [],
+        locations: [],
+      },
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+      expect.objectContaining({ method: 'POST' }),
+    )
+  })
+
   it('uses the separated image endpoint and key for map requests', async () => {
     const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => ({
       ok: true,
@@ -927,6 +976,52 @@ describe('aiBookGeneration', () => {
         body: expect.stringContaining('"path":"/v1/images/generations"'),
       }),
     )
+  })
+
+  it('passes custom text path through the backend proxy', async () => {
+    installLocalStorage()
+    localStorage.setItem('accessToken', 'alice-token')
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => ({
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              memory: {
+                summary: '主角抵达北境。',
+                worldview: [],
+                characters: [],
+                relationships: [],
+                locations: [],
+              },
+            }),
+          },
+        }],
+      }),
+    }))
+
+    await requestAiBookMemoryUpdate({
+      config: { ...readyConfig, useBackendProxy: true, textPath: '/v1/responses' },
+      book: { name: '山海旧事', author: '佚名', bookUrl: 'book-1', origin: 'source-1' },
+      chapter: { title: '第八章', url: 'chapter-8', index: 7 },
+      chapterContent: '主角抵达北境。',
+      memory: {
+        bookUrl: 'book-1',
+        enabled: true,
+        updatedAt: 0,
+        worldview: [],
+        characters: [],
+        relationships: [],
+        locations: [],
+      },
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    })
+
+    const proxyRequest = fetchMock.mock.calls[0]?.[1] as RequestInit
+    expect(JSON.parse(String(proxyRequest.body))).toMatchObject({
+      kind: 'text',
+      path: '/v1/responses',
+    })
   })
 
   it('uses backend configured image model without browser credentials when selected', async () => {

@@ -12,7 +12,12 @@ import type {
   Book,
   BookChapter,
 } from '../types'
-import { isAiBookConfigReady, isAiBookImageConfigReady } from './aiBookConfig'
+import {
+  DEFAULT_IMAGE_MODEL_PATH,
+  DEFAULT_TEXT_MODEL_PATH,
+  isAiBookConfigReady,
+  isAiBookImageConfigReady,
+} from './aiBookConfig'
 import { isAiBookMemoryV2, reconcileAiBookMemoryV2 } from './aiBookV2'
 import { summarizeHttpErrorBody } from './httpError'
 
@@ -89,10 +94,11 @@ interface OpenAIImageResponse {
 
 interface AiProxyRequestParams {
   config: AiBookConfig
+  kind: 'text' | 'image'
   baseUrl: string
   apiKey: string
   fullUrl: boolean
-  path: '/v1/chat/completions' | '/v1/images/generations'
+  path: string
   body: Record<string, unknown>
   fetchImpl: typeof fetch
 }
@@ -371,10 +377,11 @@ export async function requestAiBookMemoryUpdate({
   for (let step = 0; step < MAX_AI_BOOK_AGENT_STEPS; step += 1) {
     const response = await requestModelJson({
       config,
+      kind: 'text',
       baseUrl: config.textBaseUrl,
       apiKey: config.textApiKey,
       fullUrl: config.textUseFullUrl,
-      path: '/v1/chat/completions',
+      path: config.textPath || DEFAULT_TEXT_MODEL_PATH,
       fetchImpl,
       body: {
         model: config.textModel,
@@ -623,10 +630,11 @@ export async function requestAiBookMapImage({
 
   const response = await requestModelJson({
     config,
+    kind: 'image',
     baseUrl: config.imageBaseUrl,
     apiKey: config.imageApiKey,
     fullUrl: config.imageUseFullUrl,
-    path: '/v1/images/generations',
+    path: config.imagePath || DEFAULT_IMAGE_MODEL_PATH,
     fetchImpl,
     body: {
       model: config.imageModel,
@@ -1162,6 +1170,7 @@ function buildModelHeaders(apiKey: string) {
 
 async function requestModelJson({
   config,
+  kind,
   baseUrl,
   apiKey,
   fullUrl,
@@ -1178,14 +1187,14 @@ async function requestModelJson({
       },
       body: JSON.stringify({
         useServerConfig: true,
-        kind: path === '/v1/images/generations' ? 'image' : 'text',
+        kind,
         path,
         body,
       }),
     })
   }
 
-  const endpointUrl = fullUrl ? normalizeBaseUrl(baseUrl) : `${normalizeBaseUrl(baseUrl)}${path}`
+  const endpointUrl = fullUrl ? normalizeBaseUrl(baseUrl) : joinModelEndpointUrl(baseUrl, path)
   if (config.useBackendProxy) {
     return fetchImpl('/reader3/aiProxy', {
       method: 'POST',
@@ -1196,6 +1205,7 @@ async function requestModelJson({
       body: JSON.stringify({
         baseUrl: normalizeBaseUrl(baseUrl),
         apiKey: apiKey.trim(),
+        kind,
         path,
         fullUrl,
         body,
@@ -1212,6 +1222,22 @@ async function requestModelJson({
 
 function normalizeBaseUrl(url: string) {
   return url.trim().replace(/\/+$/, '')
+}
+
+function joinModelEndpointUrl(baseUrl: string, path: string) {
+  const base = normalizeBaseUrl(baseUrl)
+  const endpointPath = normalizeProxyPath(path)
+  if ((base.endsWith('/v1') || base.endsWith('/v1/openai') || base.endsWith('/v1beta/openai'))
+    && endpointPath.startsWith('/v1/')) {
+    return `${base}${endpointPath.slice('/v1'.length)}`
+  }
+  return `${base}${endpointPath}`
+}
+
+function normalizeProxyPath(path: string) {
+  const value = path.trim()
+  if (!value) return DEFAULT_TEXT_MODEL_PATH
+  return value.startsWith('/') ? value : `/${value}`
 }
 
 function buildMapImagePrompt(prompt: string) {

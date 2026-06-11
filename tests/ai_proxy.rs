@@ -4,7 +4,7 @@ use reader_rust::model::ai_proxy::{
 };
 
 #[test]
-fn ai_proxy_url_allows_only_openai_compatible_paths() {
+fn ai_proxy_url_allows_known_model_paths() {
     let url =
         build_ai_proxy_url("https://api.example.test/", "/v1/chat/completions", false).unwrap();
     assert_eq!(url.as_str(), "https://api.example.test/v1/chat/completions");
@@ -14,6 +14,39 @@ fn ai_proxy_url_allows_only_openai_compatible_paths() {
     assert_eq!(
         speech_url.as_str(),
         "https://api.example.test/v1/audio/speech"
+    );
+
+    let responses_url =
+        build_ai_proxy_url("https://api.example.test/", "/v1/responses", false).unwrap();
+    assert_eq!(
+        responses_url.as_str(),
+        "https://api.example.test/v1/responses"
+    );
+
+    let claude_url =
+        build_ai_proxy_url("https://api.anthropic.com/", "/v1/messages", false).unwrap();
+    assert_eq!(claude_url.as_str(), "https://api.anthropic.com/v1/messages");
+
+    let gemini_url = build_ai_proxy_url(
+        "https://generativelanguage.googleapis.com/",
+        "/v1beta/models/gemini-2.5-pro:generateContent",
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        gemini_url.as_str(),
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"
+    );
+
+    let gemini_openai_url = build_ai_proxy_url(
+        "https://generativelanguage.googleapis.com/v1beta/openai",
+        "/v1/chat/completions",
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        gemini_openai_url.as_str(),
+        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
     );
 
     let err = build_ai_proxy_url("https://api.example.test/", "/v1/models", false).unwrap_err();

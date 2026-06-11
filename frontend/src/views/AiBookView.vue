@@ -339,6 +339,10 @@
                   <input v-model="configDraft.textModel" />
                 </label>
                 <label class="field">
+                  <span>接口路径</span>
+                  <input v-model="configDraft.textPath" placeholder="/v1/chat/completions" />
+                </label>
+                <label class="field">
                   <span>API Key</span>
                   <input v-model="configDraft.textApiKey" type="password" autocomplete="off" />
                 </label>
@@ -362,6 +366,10 @@
                 <label class="field">
                   <span>模型</span>
                   <input v-model="configDraft.imageModel" />
+                </label>
+                <label class="field">
+                  <span>接口路径</span>
+                  <input v-model="configDraft.imagePath" placeholder="/v1/images/generations" />
                 </label>
                 <label class="field">
                   <span>尺寸</span>
@@ -416,6 +424,10 @@
                     <input v-model="serverConfigDraft.text.model" placeholder="gpt-4o-mini" />
                   </label>
                   <label class="field">
+                    <span>接口路径</span>
+                    <input v-model="serverConfigDraft.text.path" placeholder="/v1/chat/completions" />
+                  </label>
+                  <label class="field">
                     <span>API Key</span>
                     <input v-model="serverConfigDraft.text.apiKey" type="password" autocomplete="off" />
                   </label>
@@ -444,6 +456,10 @@
                   <label class="field">
                     <span>模型</span>
                     <input v-model="serverConfigDraft.image.model" placeholder="gpt-image-1" />
+                  </label>
+                  <label class="field">
+                    <span>接口路径</span>
+                    <input v-model="serverConfigDraft.image.path" placeholder="/v1/images/generations" />
                   </label>
                   <label class="field">
                     <span>尺寸</span>
@@ -482,6 +498,10 @@
                   <label class="field">
                     <span>模型</span>
                     <input v-model="serverConfigDraft.speech.model" placeholder="gpt-4o-mini-tts" />
+                  </label>
+                  <label class="field">
+                    <span>接口路径</span>
+                    <input v-model="serverConfigDraft.speech.path" placeholder="/v1/audio/speech" />
                   </label>
                   <label class="field">
                     <span>音色</span>
@@ -537,7 +557,11 @@ import type {
 import { buildAiBookRelationshipGraph, layoutAiBookRelationshipGraph } from '../utils/aiBookGraph'
 import { buildAiBookLocationRows, groupAiBookWorldview } from '../utils/aiBookPresentation'
 import { isAiBookMemoryV2, toAiBookDisplayMemory } from '../utils/aiBookV2'
-import { shouldAutoUseServerAiBookConfig } from '../utils/aiBookConfig'
+import {
+  DEFAULT_IMAGE_MODEL_PATH,
+  DEFAULT_TEXT_MODEL_PATH,
+  shouldAutoUseServerAiBookConfig,
+} from '../utils/aiBookConfig'
 import { collapseWhitespace, summarizeDisplayError } from '../utils/httpError'
 
 type AiTab = 'overview' | 'characters' | 'relationships' | 'map' | 'settings'
@@ -565,6 +589,7 @@ const selectedGraphNodeId = ref('')
 const characterSearch = ref('')
 const collapsedLocationIds = ref(new Set<string>())
 const collapsedWorldviewCategories = ref(new Set<string>())
+const DEFAULT_SPEECH_MODEL_PATH = '/v1/audio/speech'
 
 const tabs: Array<{ key: AiTab; label: string }> = [
   { key: 'overview', label: '总览' },
@@ -996,6 +1021,7 @@ function createEmptyServerModelConfig(): AiServerModelConfig {
       baseUrl: '',
       apiKey: '',
       model: 'gpt-4o-mini',
+      path: DEFAULT_TEXT_MODEL_PATH,
       useFullUrl: false,
     },
     image: {
@@ -1003,6 +1029,7 @@ function createEmptyServerModelConfig(): AiServerModelConfig {
       baseUrl: '',
       apiKey: '',
       model: 'gpt-image-1',
+      path: DEFAULT_IMAGE_MODEL_PATH,
       useFullUrl: false,
       imageSize: '1024x1024',
     },
@@ -1011,6 +1038,7 @@ function createEmptyServerModelConfig(): AiServerModelConfig {
       baseUrl: '',
       apiKey: '',
       model: 'gpt-4o-mini-tts',
+      path: DEFAULT_SPEECH_MODEL_PATH,
       useFullUrl: false,
       voice: 'alloy',
       responseFormat: 'mp3',
@@ -1019,7 +1047,16 @@ function createEmptyServerModelConfig(): AiServerModelConfig {
 }
 
 function cloneServerModelConfig(config: AiServerModelConfig): AiServerModelConfig {
-  return JSON.parse(JSON.stringify(config)) as AiServerModelConfig
+  const cloned = JSON.parse(JSON.stringify(config)) as AiServerModelConfig
+  cloned.text.path = normalizeModelPath(cloned.text.path, DEFAULT_TEXT_MODEL_PATH)
+  cloned.image.path = normalizeModelPath(cloned.image.path, DEFAULT_IMAGE_MODEL_PATH)
+  cloned.speech.path = normalizeModelPath(cloned.speech.path, DEFAULT_SPEECH_MODEL_PATH)
+  return cloned
+}
+
+function normalizeModelPath(path: string | undefined, fallback: string) {
+  const value = (path || '').trim() || fallback
+  return value.startsWith('/') ? value : `/${value}`
 }
 </script>
 

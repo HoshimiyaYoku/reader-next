@@ -1,14 +1,19 @@
 import type { AiBookConfig } from '../types'
 
+export const DEFAULT_TEXT_MODEL_PATH = '/v1/chat/completions'
+export const DEFAULT_IMAGE_MODEL_PATH = '/v1/images/generations'
+
 export const DEFAULT_AI_BOOK_CONFIG: AiBookConfig = {
   modelSource: 'browser',
   textBaseUrl: '',
   textApiKey: '',
   textModel: 'gpt-4o-mini',
+  textPath: DEFAULT_TEXT_MODEL_PATH,
   textUseFullUrl: false,
   imageBaseUrl: '',
   imageApiKey: '',
   imageModel: 'gpt-image-1',
+  imagePath: DEFAULT_IMAGE_MODEL_PATH,
   imageSize: '1024x1024',
   imageUseFullUrl: false,
   useBackendProxy: false,
@@ -33,6 +38,11 @@ function normalizeBaseUrl(url?: string | null) {
   return (url || '').trim().replace(/\/+$/, '')
 }
 
+function normalizeProxyPath(path: string | undefined, fallback: string) {
+  const value = (path || '').trim() || fallback
+  return value.startsWith('/') ? value : `/${value}`
+}
+
 export function getAiBookConfig(username?: string | null): AiBookConfig {
   try {
     const raw = localStorage.getItem(storageKey(username))
@@ -46,10 +56,12 @@ export function getAiBookConfig(username?: string | null): AiBookConfig {
       textBaseUrl: normalizeBaseUrl(parsed.textBaseUrl || legacyBaseUrl || DEFAULT_AI_BOOK_CONFIG.textBaseUrl),
       textApiKey: (parsed.textApiKey || legacyApiKey || DEFAULT_AI_BOOK_CONFIG.textApiKey).trim(),
       textModel: (parsed.textModel || DEFAULT_AI_BOOK_CONFIG.textModel).trim(),
+      textPath: normalizeProxyPath(parsed.textPath, DEFAULT_TEXT_MODEL_PATH),
       textUseFullUrl: Boolean(parsed.textUseFullUrl),
       imageBaseUrl: normalizeBaseUrl(parsed.imageBaseUrl || legacyBaseUrl || DEFAULT_AI_BOOK_CONFIG.imageBaseUrl),
       imageApiKey: (parsed.imageApiKey || legacyApiKey || DEFAULT_AI_BOOK_CONFIG.imageApiKey).trim(),
       imageModel: (parsed.imageModel || DEFAULT_AI_BOOK_CONFIG.imageModel).trim(),
+      imagePath: normalizeProxyPath(parsed.imagePath, DEFAULT_IMAGE_MODEL_PATH),
       imageSize: (parsed.imageSize || DEFAULT_AI_BOOK_CONFIG.imageSize).trim(),
       imageUseFullUrl: Boolean(parsed.imageUseFullUrl),
       useBackendProxy: Boolean(parsed.useBackendProxy),
@@ -65,10 +77,12 @@ export function saveAiBookConfig(username: string | null | undefined, config: Ai
     textBaseUrl: normalizeBaseUrl(config.textBaseUrl),
     textApiKey: config.textApiKey.trim(),
     textModel: config.textModel.trim(),
+    textPath: normalizeProxyPath(config.textPath, DEFAULT_TEXT_MODEL_PATH),
     textUseFullUrl: Boolean(config.textUseFullUrl),
     imageBaseUrl: normalizeBaseUrl(config.imageBaseUrl),
     imageApiKey: config.imageApiKey.trim(),
     imageModel: config.imageModel.trim(),
+    imagePath: normalizeProxyPath(config.imagePath, DEFAULT_IMAGE_MODEL_PATH),
     imageSize: config.imageSize.trim(),
     imageUseFullUrl: Boolean(config.imageUseFullUrl),
     useBackendProxy: Boolean(config.useBackendProxy),

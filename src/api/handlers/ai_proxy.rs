@@ -71,12 +71,13 @@ async fn resolve_ai_proxy_target(
                 "后端模型配置未启用或不完整".to_string(),
             ));
         }
-        return Ok((
-            endpoint,
-            Some(kind),
-            default_ai_model_path(kind).to_string(),
-            req.body,
-        ));
+        let path = resolve_server_ai_model_path(&endpoint, kind, &req.path);
+        return Ok((endpoint, Some(kind), path, req.body));
+    }
+
+    let path = req.path.trim().to_string();
+    if !req.full_url && path.is_empty() {
+        return Err(AppError::BadRequest("模型代理路径不能为空".to_string()));
     }
 
     Ok((
@@ -85,13 +86,14 @@ async fn resolve_ai_proxy_target(
             base_url: req.base_url,
             api_key: req.api_key.unwrap_or_default(),
             model: String::new(),
+            path: String::new(),
             use_full_url: req.full_url,
             image_size: None,
             voice: None,
             response_format: None,
         },
         None,
-        req.path,
+        path,
         req.body,
     ))
 }
@@ -110,6 +112,28 @@ fn default_ai_model_path(kind: AiModelKind) -> &'static str {
         AiModelKind::Image => "/v1/images/generations",
         AiModelKind::Speech => "/v1/audio/speech",
     }
+}
+
+fn resolve_server_ai_model_path(
+    endpoint: &ResolvedAiModelEndpoint,
+    kind: AiModelKind,
+    requested_path: &str,
+) -> String {
+    let configured_path = endpoint.path.trim();
+    if !configured_path.is_empty() {
+        return configured_path.to_string();
+    }
+
+    let requested_path = requested_path.trim();
+    if !requested_path.is_empty() {
+        return requested_path.to_string();
+    }
+
+    if endpoint.use_full_url {
+        return String::new();
+    }
+
+    default_ai_model_path(kind).to_string()
 }
 
 fn apply_server_model_body_defaults(
@@ -243,4 +267,47 @@ fn map_ai_proxy_http_error(error: reqwest::Error) -> AppError {
         return AppError::BadRequest("模型服务请求超时，请检查模型地址或稍后重试".to_string());
     }
     AppError::Http(error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn endpoint(path: &str, use_full_url: bool) -> ResolvedAiModelEndpoint {
+        ResolvedAiModelEndpoint {
+            enabled: true,
+            base_url: "https://api.example.test".to_string(),
+            api_key: String::new(),
+            model: "model".to_string(),
+            path: path.to_string(),
+            use_full_url,
+            image_size: None,
+            voice: None,
+            response_format: None,
+        }
+    }
+
+    #[test]
+    fn server_ai_proxy_path_prefers_configured_or_requested_path() {
+        assert_eq!(
+            resolve_server_ai_model_path(
+                &endpoint("/v1/messages", false),
+                AiModelKind::Text,
+                "/v1/chat/completions",
+            ),
+            "/v1/messages",
+        );
+        assert_eq!(
+            resolve_server_ai_model_path(&endpoint("", false), AiModelKind::Text, "/v1/responses"),
+            "/v1/responses",
+        );
+        assert_eq!(
+            resolve_server_ai_model_path(&endpoint("", false), AiModelKind::Text, ""),
+            "/v1/chat/completions",
+        );
+        assert_eq!(
+            resolve_server_ai_model_path(&endpoint("", true), AiModelKind::Text, ""),
+            "",
+        );
+    }
 }

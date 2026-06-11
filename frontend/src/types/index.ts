@@ -220,10 +220,12 @@ export interface AiBookConfig {
   textBaseUrl: string
   textApiKey: string
   textModel: string
+  textPath: string
   textUseFullUrl: boolean
   imageBaseUrl: string
   imageApiKey: string
   imageModel: string
+  imagePath: string
   imageSize: string
   imageUseFullUrl: boolean
   useBackendProxy: boolean
@@ -234,6 +236,7 @@ export interface AiModelEndpointConfig {
   baseUrl: string
   apiKey: string
   model: string
+  path: string
   useFullUrl: boolean
 }
 

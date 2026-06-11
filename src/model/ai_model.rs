@@ -7,6 +7,7 @@ pub struct AiModelEndpointConfig {
     pub base_url: String,
     pub api_key: String,
     pub model: String,
+    pub path: String,
     pub use_full_url: bool,
 }
 
@@ -17,6 +18,7 @@ pub struct AiImageModelConfig {
     pub base_url: String,
     pub api_key: String,
     pub model: String,
+    pub path: String,
     pub use_full_url: bool,
     pub image_size: String,
 }
@@ -28,6 +30,7 @@ impl Default for AiImageModelConfig {
             base_url: String::new(),
             api_key: String::new(),
             model: "gpt-image-1".to_string(),
+            path: "/v1/images/generations".to_string(),
             use_full_url: false,
             image_size: "1024x1024".to_string(),
         }
@@ -41,6 +44,7 @@ pub struct AiSpeechModelConfig {
     pub base_url: String,
     pub api_key: String,
     pub model: String,
+    pub path: String,
     pub use_full_url: bool,
     pub voice: String,
     pub response_format: String,
@@ -53,6 +57,7 @@ impl Default for AiSpeechModelConfig {
             base_url: String::new(),
             api_key: String::new(),
             model: "gpt-4o-mini-tts".to_string(),
+            path: "/v1/audio/speech".to_string(),
             use_full_url: false,
             voice: "alloy".to_string(),
             response_format: "mp3".to_string(),
@@ -82,6 +87,7 @@ pub struct ResolvedAiModelEndpoint {
     pub base_url: String,
     pub api_key: String,
     pub model: String,
+    pub path: String,
     pub use_full_url: bool,
     pub image_size: Option<String>,
     pub voice: Option<String>,
@@ -93,15 +99,18 @@ impl AiModelConfig {
         self.text.base_url = normalize_url(self.text.base_url);
         self.text.api_key = self.text.api_key.trim().to_string();
         self.text.model = self.text.model.trim().to_string();
+        self.text.path = normalize_proxy_path(self.text.path, "/v1/chat/completions");
 
         self.image.base_url = normalize_url(self.image.base_url);
         self.image.api_key = self.image.api_key.trim().to_string();
         self.image.model = self.image.model.trim().to_string();
+        self.image.path = normalize_proxy_path(self.image.path, "/v1/images/generations");
         self.image.image_size = default_if_empty(self.image.image_size, "1024x1024");
 
         self.speech.base_url = normalize_url(self.speech.base_url);
         self.speech.api_key = self.speech.api_key.trim().to_string();
         self.speech.model = default_if_empty(self.speech.model, "gpt-4o-mini-tts");
+        self.speech.path = normalize_proxy_path(self.speech.path, "/v1/audio/speech");
         self.speech.voice = default_if_empty(self.speech.voice, "alloy");
         self.speech.response_format = default_if_empty(self.speech.response_format, "mp3");
         self
@@ -121,6 +130,7 @@ impl AiModelConfig {
                 base_url: self.text.base_url.clone(),
                 api_key: self.text.api_key.clone(),
                 model: self.text.model.clone(),
+                path: self.text.path.clone(),
                 use_full_url: self.text.use_full_url,
                 image_size: None,
                 voice: None,
@@ -131,6 +141,7 @@ impl AiModelConfig {
                 base_url: self.image.base_url.clone(),
                 api_key: self.image.api_key.clone(),
                 model: self.image.model.clone(),
+                path: self.image.path.clone(),
                 use_full_url: self.image.use_full_url,
                 image_size: Some(self.image.image_size.clone()),
                 voice: None,
@@ -141,6 +152,7 @@ impl AiModelConfig {
                 base_url: self.speech.base_url.clone(),
                 api_key: self.speech.api_key.clone(),
                 model: self.speech.model.clone(),
+                path: self.speech.path.clone(),
                 use_full_url: self.speech.use_full_url,
                 image_size: None,
                 voice: Some(self.speech.voice.clone()),
@@ -160,5 +172,17 @@ fn default_if_empty(value: String, default_value: &str) -> String {
         default_value.to_string()
     } else {
         value.to_string()
+    }
+}
+
+fn normalize_proxy_path(value: String, default_value: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        return default_value.to_string();
+    }
+    if value.starts_with('/') {
+        value.to_string()
+    } else {
+        format!("/{value}")
     }
 }

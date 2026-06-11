@@ -39,6 +39,7 @@ function createServerModelConfigResponse(): AiServerModelConfigResponse {
         baseUrl: 'https://api.example.com',
         apiKey: '',
         model: 'gpt-4o-mini',
+        path: '/v1/chat/completions',
         useFullUrl: false,
       },
       image: {
@@ -46,6 +47,7 @@ function createServerModelConfigResponse(): AiServerModelConfigResponse {
         baseUrl: 'https://api.example.com',
         apiKey: '',
         model: 'gpt-image-1',
+        path: '/v1/images/generations',
         imageSize: '1024x1024',
         useFullUrl: false,
       },
@@ -54,6 +56,7 @@ function createServerModelConfigResponse(): AiServerModelConfigResponse {
         baseUrl: 'https://api.example.com',
         apiKey: '',
         model: 'gpt-4o-mini-tts',
+        path: '/v1/audio/speech',
         voice: 'alloy',
         responseFormat: 'mp3',
         useFullUrl: false,

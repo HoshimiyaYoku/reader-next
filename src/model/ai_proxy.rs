@@ -5,10 +5,11 @@ use std::time::Duration;
 use url::Url;
 
 const AI_PROXY_TIMEOUT_SECS: u64 = 300;
-const ALLOWED_PROXY_PATHS: [&str; 3] = [
-    "/v1/chat/completions",
-    "/v1/images/generations",
-    "/v1/audio/speech",
+const OPENAI_COMPATIBLE_SUFFIXES: [&str; 4] = [
+    "/chat/completions",
+    "/images/generations",
+    "/audio/speech",
+    "/responses",
 ];
 
 #[derive(Debug, Deserialize)]
@@ -17,6 +18,7 @@ pub struct AiProxyRequest {
     #[serde(default)]
     pub base_url: String,
     pub api_key: Option<String>,
+    #[serde(default)]
     pub path: String,
     #[serde(default)]
     pub full_url: bool,
@@ -36,14 +38,12 @@ pub fn build_ai_proxy_url(base_url: &str, path: &str, full_url: bool) -> Result<
         return parse_http_url(base_url);
     }
 
-    if !ALLOWED_PROXY_PATHS.contains(&path) {
-        return Err(format!("unsupported proxy path: {}", path));
-    }
+    let proxy_path = parse_ai_proxy_path(path)?;
 
     let mut base = parse_http_url(base_url)?;
-    let joined_path = format!("{}{}", base.path().trim_end_matches('/'), path,);
+    let joined_path = join_ai_proxy_path(base.path(), &proxy_path.path);
     base.set_path(&joined_path);
-    base.set_query(None);
+    base.set_query(proxy_path.query.as_deref());
     base.set_fragment(None);
     Ok(base)
 }
@@ -74,6 +74,80 @@ fn parse_http_url(raw: &str) -> Result<Url, String> {
         "http" | "https" => Ok(url),
         _ => Err("only http/https proxy targets are supported".to_string()),
     }
+}
+
+struct ParsedAiProxyPath {
+    path: String,
+    query: Option<String>,
+}
+
+fn parse_ai_proxy_path(raw: &str) -> Result<ParsedAiProxyPath, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("proxy path must not be empty".to_string());
+    }
+    if !trimmed.starts_with('/') || trimmed.starts_with("//") {
+        return Err("proxy path must start with /".to_string());
+    }
+    if trimmed.contains('#') {
+        return Err("proxy path must not contain fragment".to_string());
+    }
+
+    let url = Url::parse(&format!("http://reader.local{trimmed}")).map_err(|e| e.to_string())?;
+    let path = url.path().to_string();
+    if path
+        .split('/')
+        .any(|segment| segment == "." || segment == "..")
+    {
+        return Err("proxy path must not contain path traversal".to_string());
+    }
+    if !is_allowed_ai_proxy_path(&path) {
+        return Err(format!("unsupported proxy path: {}", path));
+    }
+
+    Ok(ParsedAiProxyPath {
+        path,
+        query: url.query().map(str::to_string),
+    })
+}
+
+fn is_allowed_ai_proxy_path(path: &str) -> bool {
+    if path == "/v1/messages" {
+        return true;
+    }
+
+    if (path.starts_with("/v1/") || path.starts_with("/v1beta/"))
+        && OPENAI_COMPATIBLE_SUFFIXES
+            .iter()
+            .any(|suffix| path.ends_with(suffix))
+    {
+        return true;
+    }
+
+    if (path.starts_with("/v1/models/") || path.starts_with("/v1beta/models/"))
+        && (path.ends_with(":generateContent") || path.ends_with(":streamGenerateContent"))
+    {
+        return true;
+    }
+
+    false
+}
+
+fn join_ai_proxy_path(base_path: &str, proxy_path: &str) -> String {
+    let base_path = base_path.trim_end_matches('/');
+    if base_path.ends_with("/v1")
+        && proxy_path.starts_with("/v1/")
+        && proxy_path.len() > "/v1".len()
+    {
+        return format!("{}{}", base_path, &proxy_path["/v1".len()..]);
+    }
+    if (base_path.ends_with("/v1/openai") || base_path.ends_with("/v1beta/openai"))
+        && proxy_path.starts_with("/v1/")
+        && proxy_path.len() > "/v1".len()
+    {
+        return format!("{}{}", base_path, &proxy_path["/v1".len()..]);
+    }
+    format!("{}{}", base_path, proxy_path)
 }
 
 fn extract_error_detail(body: &str) -> String {

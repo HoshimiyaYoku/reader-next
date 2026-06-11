@@ -39,7 +39,7 @@ impl AiModelService {
         }
 
         if !self.legacy_config_path.exists() {
-            return Ok(AiModelConfig::default());
+            return Ok(AiModelConfig::default().sanitized());
         }
         let data = fs::read_to_string(&self.legacy_config_path)
             .await
