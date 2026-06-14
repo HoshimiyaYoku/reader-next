@@ -6,6 +6,7 @@ import type {
   AiBookLocation,
   AiBookMap,
   AiBookMemory,
+  AiBookMemoryV2,
   AiBookModelUpdate,
   AiBookNote,
   AiBookRelationship,
@@ -371,6 +372,11 @@ export async function requestAiBookMemoryUpdate({
   memory,
   fetchImpl = fetch,
 }: GenerateMemoryParams): Promise<AiBookModelUpdate> {
+  const isNativeGeminiTextTarget = isGeminiGenerateContentTarget(
+    config.textBaseUrl,
+    config.textPath || DEFAULT_TEXT_MODEL_PATH,
+    config.textUseFullUrl,
+  )
   const messages: AiBookChatMessage[] = buildAiBookPromptMessages({
     bookName: book.name,
     chapterTitle: chapter.title,
@@ -437,9 +443,74 @@ export async function requestAiBookMemoryUpdate({
     if (content) {
       return coerceModelUpdate(parseJsonContent(content), memory, book, chapter)
     }
+
+    if (shouldFallbackToDirectJsonMemoryUpdate(config, isNativeGeminiTextTarget) && step === 0 && isAiBookMemoryV2(memory)) {
+      return requestAiBookMemoryUpdateGeminiJson({
+        config,
+        book,
+        chapter,
+        chapterContent,
+        memory,
+        fetchImpl,
+      })
+    }
   }
 
   throw new Error('AI 资料生成超过工具调用轮次限制')
+}
+
+async function requestAiBookMemoryUpdateGeminiJson({
+  config,
+  book,
+  chapter,
+  chapterContent,
+  memory,
+  fetchImpl,
+}: {
+  config: AiBookConfig
+  book: Book
+  chapter: BookChapter
+  chapterContent: string
+  memory: AiBookMemoryV2
+  fetchImpl: typeof fetch
+}): Promise<AiBookModelUpdate> {
+  const response = await requestModelJson({
+    config,
+    kind: 'text',
+    baseUrl: config.textBaseUrl,
+    apiKey: config.textApiKey,
+    fullUrl: config.textUseFullUrl,
+    path: config.textPath || DEFAULT_TEXT_MODEL_PATH,
+    fetchImpl,
+      body: {
+        messages: buildAiBookGeminiJsonPromptMessages({
+          book,
+          chapter,
+          chapterContent,
+          memory,
+        }),
+        responseMimeType: 'application/json',
+        responseSchema: buildAiBookGeminiJsonResponseSchema(),
+        max_tokens: 4096,
+        temperature: 0.2,
+      },
+  })
+
+  if (!response.ok) {
+    throw new Error(await readModelError(response, 'AI 资料生成失败'))
+  }
+
+  const data = await response.json() as OpenAIChatResponse
+  const message = extractAiBookModelMessage(data)
+  const content = message?.content
+  if (!content) {
+    throw new Error('AI 资料生成结果为空')
+  }
+  return coerceModelUpdate(parseJsonContent(content), memory, book, chapter)
+}
+
+function shouldFallbackToDirectJsonMemoryUpdate(config: AiBookConfig, isNativeGeminiTextTarget: boolean) {
+  return isNativeGeminiTextTarget || config.modelSource === 'server'
 }
 
 function executeAiBookToolCall(
@@ -510,6 +581,233 @@ function executeAiBookToolCall(
     content: {
       ok: false,
       error: `未知工具：${name}`,
+    },
+  }
+}
+
+function buildAiBookGeminiJsonPromptMessages({
+  book,
+  chapter,
+  chapterContent,
+  memory,
+}: {
+  book: Book
+  chapter: BookChapter
+  chapterContent: string
+  memory: AiBookMemoryV2
+}): AiBookChatMessage[] {
+  return [
+    {
+      role: 'system',
+      content: [
+        '你是小说阅读资料维护 agent。',
+        '不要调用工具，不要输出 Markdown，不要输出解释，只输出一个严格 JSON 对象。',
+        '根据 currentMemory 和 chapterContent 生成本章的增量资料。',
+        '输出必须尽量符合 ChapterKnowledgePatch 结构：chapterDigest、summary、worldFacts、characters、relationships、locations、mapChanges。',
+        '所有关键条目必须带 evidence；如果不确定，写“推断”或“未知”。',
+        'worldFacts 只记录可复用设定；不要写章节流水账。',
+        'characters 只输出重要角色；relationships 只输出重要关系；locations 必须尽量给 parentName。',
+        '不要输出空白说明文字，不要包裹在代码块里。',
+      ].join('\n'),
+    },
+    {
+      role: 'user',
+      content: JSON.stringify({
+        task: 'direct-json-ai-book-memory-update',
+        book: {
+          name: book.name,
+          author: book.author,
+          bookUrl: book.bookUrl,
+        },
+        chapter: {
+          index: chapter.index,
+          title: chapter.title,
+        },
+        currentMemory: buildAgentMemoryContext(memory),
+        chapterContent: chapterContent.slice(0, 24000),
+        outputShape: {
+          chapterDigest: {
+            chapterIndex: chapter.index,
+            chapterTitle: chapter.title,
+            digest: 'string',
+            keyEvents: ['string'],
+          },
+          summary: {
+            current: 'string',
+            recentChanges: ['string'],
+            openQuestions: ['string'],
+          },
+          worldFacts: [{
+            category: '基础规则|势力制度|历史传说|技术/魔法|社会文化|地理环境|组织体系|未确认信息',
+            title: 'string',
+            content: 'string',
+            confidence: '已知|推断|未知',
+            importance: 'high|medium|low',
+            evidence: [{ chapterIndex: chapter.index, chapterTitle: chapter.title, note: 'string' }],
+          }],
+          characters: [{
+            name: 'string',
+            aliases: ['string'],
+            importance: 'high|medium|low',
+            currentStatus: 'string',
+            faction: 'string',
+            locationName: 'string',
+            description: 'string',
+            evidence: [{ chapterIndex: chapter.index, chapterTitle: chapter.title, note: 'string' }],
+          }],
+          relationships: [{
+            sourceName: 'string',
+            targetName: 'string',
+            targetKind: 'character|location|organization',
+            relationType: 'string',
+            direction: 'directed|undirected',
+            currentStatus: 'string',
+            description: 'string',
+            importance: 'high|medium|low',
+            evidence: [{ chapterIndex: chapter.index, chapterTitle: chapter.title, note: 'string' }],
+          }],
+          locations: [{
+            name: 'string',
+            aliases: ['string'],
+            kind: 'string',
+            scale: 'world|continent|country|region|city|district|site|building|room|unknown',
+            parentName: 'string',
+            description: 'string',
+            currentStatus: 'string',
+            importance: 'high|medium|low',
+            evidence: [{ chapterIndex: chapter.index, chapterTitle: chapter.title, note: 'string' }],
+          }],
+          mapChanges: {
+            changed: false,
+            reason: 'string',
+            affectedLocationNames: ['string'],
+            routeHints: ['string'],
+          },
+        },
+      }),
+    },
+  ]
+}
+
+function buildAiBookGeminiJsonResponseSchema() {
+  return {
+    type: 'object',
+    required: ['chapterDigest', 'summary', 'worldFacts', 'characters', 'relationships', 'locations', 'mapChanges'],
+    properties: {
+      chapterDigest: {
+        type: 'object',
+        required: ['chapterIndex', 'chapterTitle', 'digest', 'keyEvents'],
+        properties: {
+          chapterIndex: { type: 'number' },
+          chapterTitle: { type: 'string' },
+          digest: { type: 'string' },
+          keyEvents: { type: 'array', items: { type: 'string' } },
+        },
+      },
+      summary: {
+        type: 'object',
+        required: ['current', 'recentChanges', 'openQuestions'],
+        properties: {
+          current: { type: 'string' },
+          recentChanges: { type: 'array', items: { type: 'string' } },
+          openQuestions: { type: 'array', items: { type: 'string' } },
+        },
+      },
+      worldFacts: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['category', 'title', 'content', 'confidence', 'importance', 'evidence'],
+          properties: {
+            id: { type: 'string' },
+            category: { type: 'string' },
+            title: { type: 'string' },
+            content: { type: 'string' },
+            confidence: { type: 'string', enum: ['已知', '推断', '未知'] },
+            importance: { type: 'string', enum: ['high', 'medium', 'low'] },
+            evidence: { type: 'array', items: aiBookEvidenceResponseSchema() },
+          },
+        },
+      },
+      characters: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['name', 'importance', 'currentStatus', 'evidence'],
+          properties: {
+            id: { type: 'string' },
+            name: { type: 'string' },
+            aliases: { type: 'array', items: { type: 'string' } },
+            importance: { type: 'string', enum: ['high', 'medium', 'low'] },
+            currentStatus: { type: 'string' },
+            faction: { type: 'string' },
+            locationName: { type: 'string' },
+            description: { type: 'string' },
+            evidence: { type: 'array', items: aiBookEvidenceResponseSchema() },
+          },
+        },
+      },
+      relationships: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['sourceName', 'targetName', 'targetKind', 'relationType', 'direction', 'importance', 'evidence'],
+          properties: {
+            id: { type: 'string' },
+            sourceName: { type: 'string' },
+            targetName: { type: 'string' },
+            targetKind: { type: 'string', enum: ['character', 'location', 'organization'] },
+            relationType: { type: 'string' },
+            direction: { type: 'string', enum: ['directed', 'undirected'] },
+            currentStatus: { type: 'string' },
+            description: { type: 'string' },
+            importance: { type: 'string', enum: ['high', 'medium', 'low'] },
+            evidence: { type: 'array', items: aiBookEvidenceResponseSchema() },
+          },
+        },
+      },
+      locations: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['name', 'kind', 'scale', 'description', 'importance', 'evidence'],
+          properties: {
+            id: { type: 'string' },
+            name: { type: 'string' },
+            aliases: { type: 'array', items: { type: 'string' } },
+            kind: { type: 'string' },
+            scale: { type: 'string', enum: ['world', 'continent', 'country', 'region', 'city', 'district', 'site', 'building', 'room', 'unknown'] },
+            parentName: { type: 'string' },
+            description: { type: 'string' },
+            currentStatus: { type: 'string' },
+            importance: { type: 'string', enum: ['high', 'medium', 'low'] },
+            evidence: { type: 'array', items: aiBookEvidenceResponseSchema() },
+          },
+        },
+      },
+      mapChanges: {
+        type: 'object',
+        required: ['changed', 'affectedLocationNames', 'routeHints'],
+        properties: {
+          changed: { type: 'boolean' },
+          reason: { type: 'string' },
+          affectedLocationNames: { type: 'array', items: { type: 'string' } },
+          routeHints: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
+  }
+}
+
+function aiBookEvidenceResponseSchema() {
+  return {
+    type: 'object',
+    required: ['chapterIndex', 'chapterTitle', 'note'],
+    properties: {
+      chapterIndex: { type: 'number' },
+      chapterTitle: { type: 'string' },
+      quote: { type: 'string' },
+      note: { type: 'string' },
     },
   }
 }
@@ -1361,6 +1659,10 @@ function buildGeminiGenerateContentBody(body: Record<string, unknown>): Record<s
   const functionDeclarations = openAiToolsToGeminiFunctionDeclarations(body.tools)
   if (functionDeclarations.length) {
     geminiBody.tools = [{ functionDeclarations }]
+    const functionCallingConfig = buildGeminiFunctionCallingConfig(body.tools, body.tool_choice)
+    if (functionCallingConfig) {
+      geminiBody.toolConfig = { functionCallingConfig }
+    }
   }
 
   const generationConfig = buildGeminiGenerationConfig(body)
@@ -1453,7 +1755,25 @@ function buildGeminiGenerationConfig(body: Record<string, unknown>): UnknownReco
   if (typeof body.temperature === 'number') config.temperature = body.temperature
   if (typeof body.top_p === 'number') config.topP = body.top_p
   if (typeof body.max_tokens === 'number') config.maxOutputTokens = body.max_tokens
+  if (typeof body.responseMimeType === 'string') config.responseMimeType = body.responseMimeType
+  if (isRecord(body.responseSchema)) config.responseSchema = body.responseSchema
   return config
+}
+
+function buildGeminiFunctionCallingConfig(
+  tools: unknown,
+  toolChoice: unknown,
+): UnknownRecord | null {
+  if (!Array.isArray(tools) || !tools.length) return null
+  if (toolChoice !== 'auto' && toolChoice !== 'required') return null
+  const allowedFunctionNames = tools
+    .map((tool) => isRecord(tool) && isRecord(tool.function) ? readString(tool.function, 'name') : '')
+    .filter((name): name is string => Boolean(name))
+  if (!allowedFunctionNames.length) return null
+  return {
+    mode: 'ANY',
+    allowedFunctionNames,
+  }
 }
 
 function isGeminiGenerateContentTarget(baseUrl: string, path: string, fullUrl: boolean) {

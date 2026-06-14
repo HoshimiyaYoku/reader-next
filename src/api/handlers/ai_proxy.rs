@@ -271,6 +271,12 @@ fn openai_chat_body_to_gemini_generate_content(body: &Map<String, Value>) -> Val
             "tools".to_string(),
             serde_json::json!([{ "functionDeclarations": declarations }]),
         );
+        if let Some(function_calling_config) = gemini_function_calling_config(body.get("tools"), body.get("tool_choice")) {
+            result.insert(
+                "toolConfig".to_string(),
+                serde_json::json!({ "functionCallingConfig": function_calling_config }),
+            );
+        }
     }
     let generation_config = gemini_generation_config(body);
     if !generation_config.is_empty() {
@@ -367,6 +373,39 @@ fn openai_tools_to_gemini_declarations(tools: Option<&Value>) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+fn gemini_function_calling_config(
+    tools: Option<&Value>,
+    tool_choice: Option<&Value>,
+) -> Option<Value> {
+    let tools = tools?.as_array()?;
+    if tools.is_empty() {
+        return None;
+    }
+    match tool_choice.and_then(Value::as_str).map(str::trim) {
+        Some("auto") | Some("required") => {}
+        _ => return None,
+    }
+    let allowed_function_names: Vec<Value> = tools
+        .iter()
+        .filter_map(|tool| {
+            let function = tool.get("function")?.as_object()?;
+            let name = function.get("name")?.as_str()?.trim();
+            if name.is_empty() {
+                None
+            } else {
+                Some(Value::String(name.to_string()))
+            }
+        })
+        .collect();
+    if allowed_function_names.is_empty() {
+        return None;
+    }
+    Some(serde_json::json!({
+        "mode": "ANY",
+        "allowedFunctionNames": allowed_function_names,
+    }))
+}
+
 fn strip_gemini_unsupported_schema_keys(value: &Value) -> Value {
     match value {
         Value::Array(items) => Value::Array(
@@ -395,6 +434,19 @@ fn gemini_generation_config(body: &Map<String, Value>) -> Map<String, Value> {
     }
     if let Some(value) = body.get("max_tokens").filter(|v| v.is_number()) {
         config.insert("maxOutputTokens".to_string(), value.clone());
+    }
+    if let Some(value) = body
+        .get("responseMimeType")
+        .or_else(|| body.get("response_mime_type"))
+        .filter(|v| v.is_string())
+    {
+        config.insert("responseMimeType".to_string(), value.clone());
+    }
+    if let Some(value) = body.get("responseSchema").or_else(|| body.get("response_schema")) {
+        config.insert(
+            "responseSchema".to_string(),
+            strip_gemini_unsupported_schema_keys(value),
+        );
     }
     config
 }
@@ -605,7 +657,15 @@ mod tests {
                 }
             }],
             "tool_choice": "auto",
-            "temperature": 0.2
+            "temperature": 0.2,
+            "max_tokens": 4096,
+            "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "object",
+                "properties": {
+                    "chapterDigest": {"type": "object"}
+                }
+            }
         });
 
         adapt_ai_proxy_body(
@@ -644,12 +704,32 @@ mod tests {
             body.pointer("/tools/0/functionDeclarations/0/name"),
             Some(&Value::String("get_current_memory".to_string()))
         );
+        assert_eq!(
+            body.pointer("/toolConfig/functionCallingConfig/mode"),
+            Some(&Value::String("ANY".to_string()))
+        );
+        assert_eq!(
+            body.pointer("/toolConfig/functionCallingConfig/allowedFunctionNames/0"),
+            Some(&Value::String("get_current_memory".to_string()))
+        );
         assert!(body
             .pointer("/tools/0/functionDeclarations/0/parameters/additionalProperties")
             .is_none());
         assert_eq!(
             body.pointer("/generationConfig/temperature"),
             Some(&serde_json::json!(0.2))
+        );
+        assert_eq!(
+            body.pointer("/generationConfig/maxOutputTokens"),
+            Some(&serde_json::json!(4096))
+        );
+        assert_eq!(
+            body.pointer("/generationConfig/responseMimeType"),
+            Some(&Value::String("application/json".to_string()))
+        );
+        assert_eq!(
+            body.pointer("/generationConfig/responseSchema/properties/chapterDigest/type"),
+            Some(&Value::String("object".to_string()))
         );
     }
 }

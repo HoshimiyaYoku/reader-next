@@ -925,6 +925,16 @@ describe('aiBookGeneration', () => {
               expect.objectContaining({ name: 'save_memory_patch' }),
             ],
           }],
+          toolConfig: {
+            functionCallingConfig: {
+              mode: 'ANY',
+              allowedFunctionNames: [
+                'get_current_memory',
+                'get_completed_chapter',
+                'save_memory_patch',
+              ],
+            },
+          },
           generationConfig: { temperature: 0.2 },
         })
         expect(body).not.toHaveProperty('model')
@@ -1023,6 +1033,118 @@ describe('aiBookGeneration', () => {
       expect.objectContaining({ method: 'POST' }),
     )
     expect(update.memory.summary).toBe('主角抵达北境。')
+  })
+
+  it('falls back to direct JSON generation when Gemini returns empty text without tool calls', async () => {
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body))
+      if (fetchMock.mock.calls.length === 1) {
+        expect(body.body.tools).toEqual(expect.any(Array))
+        return {
+          ok: true,
+          json: async () => ({
+            candidates: [{
+              content: {
+                parts: [{ text: '' }],
+              },
+            }],
+          }),
+        }
+      }
+
+      expect(body.body.tools).toBeUndefined()
+      expect(body.body.tool_choice).toBeUndefined()
+      expect(body.body.responseMimeType).toBe('application/json')
+      expect(body.body.responseSchema).toMatchObject({
+        type: 'object',
+        required: expect.arrayContaining(['chapterDigest', 'summary', 'worldFacts']),
+        properties: {
+          chapterDigest: expect.any(Object),
+          summary: expect.any(Object),
+          worldFacts: expect.any(Object),
+          characters: expect.any(Object),
+          relationships: expect.any(Object),
+          locations: expect.any(Object),
+          mapChanges: expect.any(Object),
+        },
+      })
+      expect(JSON.stringify(body.body.messages)).toContain('direct-json-ai-book-memory-update')
+      expect(JSON.stringify(body.body.messages)).toContain('林舟进入北境学院')
+      return {
+        ok: true,
+        json: async () => ({
+          candidates: [{
+            content: {
+              parts: [{
+                text: JSON.stringify({
+                  chapterDigest: {
+                    chapterIndex: 0,
+                    chapterTitle: '第一章',
+                    digest: '林舟进入北境学院。',
+                    keyEvents: ['林舟进入北境学院'],
+                  },
+                  summary: {
+                    current: '林舟进入北境学院并得知灵脉复苏。',
+                    recentChanges: ['林舟开始调查灵脉'],
+                    openQuestions: [],
+                  },
+                  worldFacts: [{
+                    category: '技术/魔法',
+                    title: '灵脉复苏',
+                    content: '灵脉复苏会改变城市能源规则。',
+                    confidence: '已知',
+                    importance: 'high',
+                    evidence: [{ chapterIndex: 0, chapterTitle: '第一章', note: '导师沈月说明' }],
+                  }],
+                  characters: [{
+                    name: '林舟',
+                    importance: 'high',
+                    currentStatus: '进入北境学院并调查灵脉源头',
+                    evidence: [{ chapterIndex: 0, chapterTitle: '第一章', note: '章节主角行动' }],
+                  }],
+                  relationships: [],
+                  locations: [],
+                  mapChanges: { changed: false, affectedLocationNames: [], routeHints: [] },
+                }),
+              }],
+            },
+          }],
+        }),
+      }
+    })
+
+    const update = await requestAiBookMemoryUpdate({
+      config: {
+        ...readyConfig,
+        modelSource: 'server',
+      },
+      book: { name: '北境旧事', author: '佚名', bookUrl: 'book-1', origin: 'source-1' },
+      chapter: { title: '第一章', url: 'chapter-1', index: 0 },
+      chapterContent: '林舟进入北境学院，导师沈月告诉他灵脉复苏会改变城市能源规则。',
+      memory: {
+        schemaVersion: 2,
+        bookUrl: 'book-1',
+        enabled: true,
+        updatedAt: 0,
+        summary: { current: '', recentChanges: [], openQuestions: [] },
+        chapterDigests: [],
+        arcs: [],
+        worldFacts: [],
+        characters: [],
+        relationships: [],
+        locations: [],
+        mapState: { dirty: false, nodes: [], edges: [] },
+        renderArtifacts: {},
+      },
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(isAiBookMemoryV2(update.memory)).toBe(true)
+    if (!isAiBookMemoryV2(update.memory)) throw new Error('expected v2 memory')
+    expect(update.memory.summary.current).toBe('林舟进入北境学院并得知灵脉复苏。')
+    expect(update.memory.worldFacts[0]).toMatchObject({ title: '灵脉复苏' })
+    expect(update.memory.characters[0]).toMatchObject({ name: '林舟' })
   })
 
   it('uses the separated image endpoint and key for map requests', async () => {
