@@ -85,6 +85,11 @@ interface OpenAIChatResponse {
   }>
 }
 
+type AiBookModelMessage = {
+  content?: string | null
+  tool_calls?: AiBookToolCall[]
+}
+
 interface OpenAIImageResponse {
   data?: Array<{
     b64_json?: string
@@ -397,7 +402,7 @@ export async function requestAiBookMemoryUpdate({
     }
 
     const data = await response.json() as OpenAIChatResponse
-    const message = data.choices?.[0]?.message
+    const message = extractAiBookModelMessage(data)
     const toolCalls = Array.isArray(message?.tool_calls) ? message.tool_calls : []
     if (toolCalls.length) {
       messages.push({
@@ -1158,12 +1163,16 @@ function importanceRank(value: string | undefined) {
   return 0
 }
 
-function buildModelHeaders(apiKey: string) {
+function buildModelHeaders(apiKey: string, endpointUrl: string, useGeminiApiKeyHeader: boolean) {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   }
   if (apiKey.trim()) {
-    headers.Authorization = `Bearer ${apiKey.trim()}`
+    if (useGeminiApiKeyHeader && isGoogleGenerativeLanguageUrl(endpointUrl)) {
+      headers['x-goog-api-key'] = apiKey.trim()
+    } else {
+      headers.Authorization = `Bearer ${apiKey.trim()}`
+    }
   }
   return headers
 }
@@ -1194,6 +1203,7 @@ async function requestModelJson({
     })
   }
 
+  const requestBody = adaptModelRequestBody({ kind, baseUrl, fullUrl, path, body })
   const endpointUrl = fullUrl ? normalizeBaseUrl(baseUrl) : joinModelEndpointUrl(baseUrl, path)
   if (config.useBackendProxy) {
     return fetchImpl('/reader3/aiProxy', {
@@ -1208,16 +1218,255 @@ async function requestModelJson({
         kind,
         path,
         fullUrl,
-        body,
+        body: requestBody,
       }),
     })
   }
 
+  const isGeminiNative = kind === 'text' && isGeminiGenerateContentTarget(baseUrl, path, fullUrl)
   return fetchImpl(endpointUrl, {
     method: 'POST',
-    headers: buildModelHeaders(apiKey),
-    body: JSON.stringify(body),
+    headers: buildModelHeaders(apiKey, endpointUrl, isGeminiNative),
+    body: JSON.stringify(requestBody),
   })
+}
+
+function extractAiBookModelMessage(data: unknown): AiBookModelMessage {
+  if (!isRecord(data)) return {}
+
+  const choices = data.choices
+  if (Array.isArray(choices)) {
+    const firstChoice = choices.find(isRecord)
+    const message = firstChoice && isRecord(firstChoice.message) ? firstChoice.message : null
+    if (message) {
+      return {
+        content: typeof message.content === 'string' || message.content === null ? message.content : undefined,
+        tool_calls: Array.isArray(message.tool_calls) ? message.tool_calls as AiBookToolCall[] : undefined,
+      }
+    }
+  }
+
+  const candidates = data.candidates
+  const firstCandidate = Array.isArray(candidates) ? candidates.find(isRecord) : null
+  const content = firstCandidate && isRecord(firstCandidate.content) ? firstCandidate.content : null
+  const parts = content && Array.isArray(content.parts) ? content.parts : []
+  const text = parts
+    .filter(isRecord)
+    .map((part) => typeof part.text === 'string' ? part.text : '')
+    .filter(Boolean)
+    .join('\n')
+  const toolCalls = parts
+    .filter(isRecord)
+    .map((part, index) => geminiFunctionCallToOpenAiToolCall(part.functionCall, index))
+    .filter((toolCall): toolCall is AiBookToolCall => Boolean(toolCall))
+
+  const sdkFunctionCalls = Array.isArray(data.functionCalls)
+    ? data.functionCalls
+        .map((call, index) => geminiFunctionCallToOpenAiToolCall(call, index))
+        .filter((toolCall): toolCall is AiBookToolCall => Boolean(toolCall))
+    : []
+
+  return {
+    content: text || (typeof data.text === 'string' ? data.text : undefined),
+    tool_calls: toolCalls.length ? toolCalls : sdkFunctionCalls.length ? sdkFunctionCalls : undefined,
+  }
+}
+
+function geminiFunctionCallToOpenAiToolCall(value: unknown, index: number): AiBookToolCall | null {
+  if (!isRecord(value)) return null
+  const name = readString(value, 'name')
+  if (!name) return null
+  const args = isRecord(value.args) ? value.args : {}
+  return {
+    id: readString(value, 'id') || `gemini-call-${index}`,
+    type: 'function',
+    function: {
+      name,
+      arguments: JSON.stringify(args),
+    },
+  }
+}
+
+function adaptModelRequestBody({
+  kind,
+  baseUrl,
+  fullUrl,
+  path,
+  body,
+}: {
+  kind: 'text' | 'image'
+  baseUrl: string
+  fullUrl: boolean
+  path: string
+  body: Record<string, unknown>
+}) {
+  if (kind !== 'text' || !isGeminiGenerateContentTarget(baseUrl, path, fullUrl) || !Array.isArray(body.messages)) {
+    return body
+  }
+  return buildGeminiGenerateContentBody(body)
+}
+
+function buildGeminiGenerateContentBody(body: Record<string, unknown>): Record<string, unknown> {
+  const messages = Array.isArray(body.messages) ? body.messages : []
+  const systemTexts: string[] = []
+  const contents: UnknownRecord[] = []
+
+  for (const item of messages) {
+    if (!isRecord(item)) continue
+    const role = readString(item, 'role')
+    const text = messageContentToText(item.content)
+
+    if (role === 'system') {
+      if (text) systemTexts.push(text)
+      continue
+    }
+
+    if (role === 'assistant') {
+      const parts: UnknownRecord[] = []
+      if (text) parts.push({ text })
+      if (Array.isArray(item.tool_calls)) {
+        for (const toolCall of item.tool_calls) {
+          const functionCall = openAiToolCallToGeminiFunctionCall(toolCall)
+          if (functionCall) parts.push({ functionCall })
+        }
+      }
+      if (parts.length) contents.push({ role: 'model', parts })
+      continue
+    }
+
+    if (role === 'tool') {
+      contents.push({
+        role: 'user',
+        parts: [{
+          functionResponse: compactObject({
+            id: readString(item, 'tool_call_id'),
+            name: readString(item, 'name'),
+            response: toolContentToGeminiFunctionResponse(item.content),
+          }),
+        }],
+      })
+      continue
+    }
+
+    if (text) {
+      contents.push({ role: 'user', parts: [{ text }] })
+    }
+  }
+
+  const geminiBody: UnknownRecord = { contents }
+  if (systemTexts.length) {
+    geminiBody.systemInstruction = { parts: [{ text: systemTexts.join('\n') }] }
+  }
+
+  const functionDeclarations = openAiToolsToGeminiFunctionDeclarations(body.tools)
+  if (functionDeclarations.length) {
+    geminiBody.tools = [{ functionDeclarations }]
+  }
+
+  const generationConfig = buildGeminiGenerationConfig(body)
+  if (Object.keys(generationConfig).length) {
+    geminiBody.generationConfig = generationConfig
+  }
+
+  return geminiBody
+}
+
+function messageContentToText(content: unknown) {
+  if (typeof content === 'string') return content
+  if (content == null) return ''
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => isRecord(part) && typeof part.text === 'string' ? part.text : '')
+      .filter(Boolean)
+      .join('\n')
+  }
+  return JSON.stringify(content)
+}
+
+function openAiToolCallToGeminiFunctionCall(toolCall: unknown): UnknownRecord | null {
+  if (!isRecord(toolCall) || !isRecord(toolCall.function)) return null
+  const name = readString(toolCall.function, 'name')
+  if (!name) return null
+  return compactObject({
+    id: readString(toolCall, 'id'),
+    name,
+    args: parseGeminiFunctionArgs(toolCall.function.arguments),
+  })
+}
+
+function compactObject(value: UnknownRecord): UnknownRecord {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== '' && item != null))
+}
+
+function parseGeminiFunctionArgs(value: unknown): UnknownRecord {
+  if (isRecord(value)) return value
+  if (typeof value !== 'string' || !value.trim()) return {}
+  try {
+    const parsed = JSON.parse(value)
+    return isRecord(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function toolContentToGeminiFunctionResponse(content: unknown): UnknownRecord {
+  const text = messageContentToText(content).trim()
+  if (!text) return {}
+  try {
+    const parsed = JSON.parse(text)
+    return isRecord(parsed) ? parsed : { result: parsed }
+  } catch {
+    return { result: text }
+  }
+}
+
+function openAiToolsToGeminiFunctionDeclarations(tools: unknown): UnknownRecord[] {
+  if (!Array.isArray(tools)) return []
+  return tools
+    .map((tool) => {
+      if (!isRecord(tool) || !isRecord(tool.function)) return null
+      const declaration: UnknownRecord = {
+        name: readString(tool.function, 'name'),
+        description: readString(tool.function, 'description'),
+      }
+      if (isRecord(tool.function.parameters)) {
+        declaration.parameters = stripUnsupportedGeminiSchemaKeys(tool.function.parameters)
+      }
+      return declaration.name ? declaration : null
+    })
+    .filter((declaration): declaration is UnknownRecord => Boolean(declaration))
+}
+
+function stripUnsupportedGeminiSchemaKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripUnsupportedGeminiSchemaKeys)
+  if (!isRecord(value)) return value
+  const result: UnknownRecord = {}
+  for (const [key, item] of Object.entries(value)) {
+    if (key === 'additionalProperties') continue
+    result[key] = stripUnsupportedGeminiSchemaKeys(item)
+  }
+  return result
+}
+
+function buildGeminiGenerationConfig(body: Record<string, unknown>): UnknownRecord {
+  const config: UnknownRecord = {}
+  if (typeof body.temperature === 'number') config.temperature = body.temperature
+  if (typeof body.top_p === 'number') config.topP = body.top_p
+  if (typeof body.max_tokens === 'number') config.maxOutputTokens = body.max_tokens
+  return config
+}
+
+function isGeminiGenerateContentTarget(baseUrl: string, path: string, fullUrl: boolean) {
+  const target = fullUrl ? baseUrl.trim() : path.trim()
+  return /:generateContent(?:\?|$)/.test(target)
+}
+
+function isGoogleGenerativeLanguageUrl(url: string) {
+  try {
+    return new URL(url).hostname === 'generativelanguage.googleapis.com'
+  } catch {
+    return false
+  }
 }
 
 function normalizeBaseUrl(url: string) {

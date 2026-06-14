@@ -4,7 +4,9 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use serde_json::Map;
 use serde_json::Value;
+use url::Url;
 
 use crate::api::{auth::AuthContext, AppState};
 use crate::error::error::{ApiResponse, AppError};
@@ -23,11 +25,20 @@ pub async fn ai_proxy(
 ) -> Result<Response, AppError> {
     require_proxy_user(&state, &auth).await?;
     let (endpoint, kind, path, mut body) = resolve_ai_proxy_target(&state, &auth, req).await?;
+    let target_hint = if endpoint.use_full_url {
+        endpoint.base_url.as_str()
+    } else {
+        path.as_str()
+    };
     if let Some(kind) = kind {
-        apply_server_model_body_defaults(&endpoint, kind, &mut body);
+        if kind != AiModelKind::Text || !is_native_gemini_generate_content_path(target_hint) {
+            apply_server_model_body_defaults(&endpoint, kind, &mut body);
+        }
     }
+    adapt_ai_proxy_body(target_hint, kind, &mut body);
     let target = build_ai_proxy_url(&endpoint.base_url, &path, endpoint.use_full_url)
         .map_err(AppError::BadRequest)?;
+    let use_gemini_api_key_header = should_use_gemini_api_key_header(&target, &path, kind);
     let client = ai_proxy_client()?;
     let mut builder = client
         .post(target)
@@ -38,7 +49,11 @@ pub async fn ai_proxy(
         .map(str::trim)
         .filter(|v| !v.is_empty())
     {
-        builder = builder.bearer_auth(api_key);
+        if use_gemini_api_key_header {
+            builder = builder.header("x-goog-api-key", api_key);
+        } else {
+            builder = builder.bearer_auth(api_key);
+        }
     }
 
     let upstream = builder.send().await.map_err(map_ai_proxy_http_error)?;
@@ -92,7 +107,7 @@ async fn resolve_ai_proxy_target(
             voice: None,
             response_format: None,
         },
-        None,
+        req.kind,
         path,
         req.body,
     ))
@@ -169,6 +184,232 @@ fn apply_server_model_body_defaults(
             obj.insert("response_format".to_string(), Value::String(format.clone()));
         }
     }
+}
+
+fn adapt_ai_proxy_body(path: &str, kind: Option<AiModelKind>, body: &mut Value) {
+    if kind != Some(AiModelKind::Text) || !is_native_gemini_generate_content_path(path) {
+        return;
+    }
+    let Some(obj) = body.as_object() else {
+        return;
+    };
+    if !obj.get("messages").is_some_and(Value::is_array) {
+        return;
+    }
+    *body = openai_chat_body_to_gemini_generate_content(obj);
+}
+
+fn openai_chat_body_to_gemini_generate_content(body: &Map<String, Value>) -> Value {
+    let mut system_texts = Vec::new();
+    let mut contents = Vec::new();
+    if let Some(messages) = body.get("messages").and_then(Value::as_array) {
+        for message in messages {
+            let Some(message) = message.as_object() else {
+                continue;
+            };
+            let role = message
+                .get("role")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let text = message_content_to_text(message.get("content"));
+            match role {
+                "system" => {
+                    if !text.is_empty() {
+                        system_texts.push(text);
+                    }
+                }
+                "assistant" => {
+                    let mut parts = Vec::new();
+                    if !text.is_empty() {
+                        parts.push(serde_json::json!({ "text": text }));
+                    }
+                    if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+                        for tool_call in tool_calls {
+                            if let Some(function_call) = openai_tool_call_to_gemini(tool_call) {
+                                parts.push(serde_json::json!({ "functionCall": function_call }));
+                            }
+                        }
+                    }
+                    if !parts.is_empty() {
+                        contents.push(serde_json::json!({ "role": "model", "parts": parts }));
+                    }
+                }
+                "tool" => {
+                    contents.push(serde_json::json!({
+                        "role": "user",
+                        "parts": [{
+                            "functionResponse": compact_json_object(serde_json::json!({
+                                "id": message.get("tool_call_id").and_then(Value::as_str).unwrap_or_default(),
+                                "name": message.get("name").and_then(Value::as_str).unwrap_or_default(),
+                                "response": tool_content_to_gemini_response(message.get("content")),
+                            }))
+                        }]
+                    }));
+                }
+                _ => {
+                    if !text.is_empty() {
+                        contents.push(
+                            serde_json::json!({ "role": "user", "parts": [{ "text": text }] }),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    let mut result = Map::new();
+    result.insert("contents".to_string(), Value::Array(contents));
+    if !system_texts.is_empty() {
+        result.insert(
+            "systemInstruction".to_string(),
+            serde_json::json!({ "parts": [{ "text": system_texts.join("\n") }] }),
+        );
+    }
+    let declarations = openai_tools_to_gemini_declarations(body.get("tools"));
+    if !declarations.is_empty() {
+        result.insert(
+            "tools".to_string(),
+            serde_json::json!([{ "functionDeclarations": declarations }]),
+        );
+    }
+    let generation_config = gemini_generation_config(body);
+    if !generation_config.is_empty() {
+        result.insert(
+            "generationConfig".to_string(),
+            Value::Object(generation_config),
+        );
+    }
+    Value::Object(result)
+}
+
+fn message_content_to_text(content: Option<&Value>) -> String {
+    match content {
+        Some(Value::String(value)) => value.clone(),
+        Some(Value::Array(parts)) => parts
+            .iter()
+            .filter_map(|part| part.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Some(Value::Null) | None => String::new(),
+        Some(value) => value.to_string(),
+    }
+}
+
+fn openai_tool_call_to_gemini(tool_call: &Value) -> Option<Value> {
+    let function = tool_call.get("function")?.as_object()?;
+    let name = function.get("name")?.as_str()?.trim();
+    if name.is_empty() {
+        return None;
+    }
+    Some(compact_json_object(serde_json::json!({
+        "id": tool_call.get("id").and_then(Value::as_str).unwrap_or_default(),
+        "name": name,
+        "args": parse_tool_arguments_value(function.get("arguments")),
+    })))
+}
+
+fn compact_json_object(value: Value) -> Value {
+    let Value::Object(mut object) = value else {
+        return value;
+    };
+    object.retain(|_, value| !matches!(value, Value::String(text) if text.is_empty()));
+    Value::Object(object)
+}
+
+fn parse_tool_arguments_value(value: Option<&Value>) -> Value {
+    match value {
+        Some(Value::Object(_)) => value.cloned().unwrap_or_else(|| serde_json::json!({})),
+        Some(Value::String(raw)) if !raw.trim().is_empty() => {
+            serde_json::from_str(raw).unwrap_or_else(|_| serde_json::json!({}))
+        }
+        _ => serde_json::json!({}),
+    }
+}
+
+fn tool_content_to_gemini_response(content: Option<&Value>) -> Value {
+    let text = message_content_to_text(content);
+    if text.trim().is_empty() {
+        return serde_json::json!({});
+    }
+    serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({ "result": text }))
+}
+
+fn openai_tools_to_gemini_declarations(tools: Option<&Value>) -> Vec<Value> {
+    tools
+        .and_then(Value::as_array)
+        .map(|tools| {
+            tools
+                .iter()
+                .filter_map(|tool| {
+                    let function = tool.get("function")?.as_object()?;
+                    let name = function.get("name")?.as_str()?.trim();
+                    if name.is_empty() {
+                        return None;
+                    }
+                    let mut declaration = Map::new();
+                    declaration.insert("name".to_string(), Value::String(name.to_string()));
+                    if let Some(description) = function.get("description").and_then(Value::as_str) {
+                        declaration.insert(
+                            "description".to_string(),
+                            Value::String(description.to_string()),
+                        );
+                    }
+                    if let Some(parameters) = function.get("parameters") {
+                        declaration.insert(
+                            "parameters".to_string(),
+                            strip_gemini_unsupported_schema_keys(parameters),
+                        );
+                    }
+                    Some(Value::Object(declaration))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn strip_gemini_unsupported_schema_keys(value: &Value) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(strip_gemini_unsupported_schema_keys)
+                .collect(),
+        ),
+        Value::Object(obj) => Value::Object(
+            obj.iter()
+                .filter(|(key, _)| key.as_str() != "additionalProperties")
+                .map(|(key, value)| (key.clone(), strip_gemini_unsupported_schema_keys(value)))
+                .collect(),
+        ),
+        _ => value.clone(),
+    }
+}
+
+fn gemini_generation_config(body: &Map<String, Value>) -> Map<String, Value> {
+    let mut config = Map::new();
+    if let Some(value) = body.get("temperature").filter(|v| v.is_number()) {
+        config.insert("temperature".to_string(), value.clone());
+    }
+    if let Some(value) = body.get("top_p").filter(|v| v.is_number()) {
+        config.insert("topP".to_string(), value.clone());
+    }
+    if let Some(value) = body.get("max_tokens").filter(|v| v.is_number()) {
+        config.insert("maxOutputTokens".to_string(), value.clone());
+    }
+    config
+}
+
+fn is_native_gemini_generate_content_path(path: &str) -> bool {
+    path.split('?').next().is_some_and(|path| {
+        path.ends_with(":generateContent") || path.ends_with(":streamGenerateContent")
+    })
+}
+
+fn should_use_gemini_api_key_header(target: &Url, path: &str, kind: Option<AiModelKind>) -> bool {
+    kind == Some(AiModelKind::Text)
+        && (is_native_gemini_generate_content_path(path)
+            || is_native_gemini_generate_content_path(target.as_str()))
+        && target.host_str() == Some("generativelanguage.googleapis.com")
 }
 
 pub async fn ai_proxy_image(
@@ -308,6 +549,107 @@ mod tests {
         assert_eq!(
             resolve_server_ai_model_path(&endpoint("", true), AiModelKind::Text, ""),
             "",
+        );
+    }
+
+    #[test]
+    fn direct_backend_proxy_uses_gemini_api_key_header_for_google_native_path() {
+        let target = Url::parse(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
+        )
+        .unwrap();
+
+        assert!(should_use_gemini_api_key_header(
+            &target,
+            "/v1beta/models/gemini-2.5-pro:generateContent",
+            Some(AiModelKind::Text),
+        ));
+        let openai_target =
+            Url::parse("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
+                .unwrap();
+        assert!(!should_use_gemini_api_key_header(
+            &openai_target,
+            "/v1beta/openai/chat/completions",
+            Some(AiModelKind::Text),
+        ));
+        assert!(!should_use_gemini_api_key_header(
+            &target,
+            "/v1beta/models/gemini-2.5-pro:generateContent",
+            None,
+        ));
+    }
+
+    #[test]
+    fn native_gemini_text_path_converts_chat_body_to_generate_content() {
+        let mut body = serde_json::json!({
+            "model": "browser-model",
+            "messages": [
+                {"role": "system", "content": "你是资料维护 agent"},
+                {"role": "user", "content": "更新第八章"},
+                {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "get_current_memory", "arguments": "{}"}
+                    }]
+                },
+                {"role": "tool", "tool_call_id": "call-1", "name": "get_current_memory", "content": "{\"ok\":true}"}
+            ],
+            "tools": [{
+                "type": "function",
+                "function": {
+                    "name": "get_current_memory",
+                    "description": "读取当前资料",
+                    "parameters": {"type": "object", "properties": {}, "additionalProperties": false}
+                }
+            }],
+            "tool_choice": "auto",
+            "temperature": 0.2
+        });
+
+        adapt_ai_proxy_body(
+            "/v1beta/models/gemini-2.5-pro:generateContent",
+            Some(AiModelKind::Text),
+            &mut body,
+        );
+
+        assert!(body.get("model").is_none());
+        assert!(body.get("messages").is_none());
+        assert_eq!(
+            body.pointer("/systemInstruction/parts/0/text"),
+            Some(&Value::String("你是资料维护 agent".to_string()))
+        );
+        assert_eq!(
+            body.pointer("/contents/0/role"),
+            Some(&Value::String("user".to_string()))
+        );
+        assert_eq!(
+            body.pointer("/contents/0/parts/0/text"),
+            Some(&Value::String("更新第八章".to_string()))
+        );
+        assert_eq!(
+            body.pointer("/contents/1/role"),
+            Some(&Value::String("model".to_string()))
+        );
+        assert_eq!(
+            body.pointer("/contents/1/parts/0/functionCall/name"),
+            Some(&Value::String("get_current_memory".to_string()))
+        );
+        assert_eq!(
+            body.pointer("/contents/2/parts/0/functionResponse/id"),
+            Some(&Value::String("call-1".to_string()))
+        );
+        assert_eq!(
+            body.pointer("/tools/0/functionDeclarations/0/name"),
+            Some(&Value::String("get_current_memory".to_string()))
+        );
+        assert!(body
+            .pointer("/tools/0/functionDeclarations/0/parameters/additionalProperties")
+            .is_none());
+        assert_eq!(
+            body.pointer("/generationConfig/temperature"),
+            Some(&serde_json::json!(0.2))
         );
     }
 }

@@ -904,6 +904,127 @@ describe('aiBookGeneration', () => {
     )
   })
 
+  it('converts AI book text calls to native Gemini generateContent requests and parses tool calls', async () => {
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body))
+      if (fetchMock.mock.calls.length === 1) {
+        expect(body).toMatchObject({
+          systemInstruction: {
+            parts: [{ text: expect.stringContaining('你是小说阅读资料维护 agent') }],
+          },
+          contents: [
+            {
+              role: 'user',
+              parts: [{ text: expect.stringContaining('tool-calling-ai-book-memory-update') }],
+            },
+          ],
+          tools: [{
+            functionDeclarations: [
+              expect.objectContaining({ name: 'get_current_memory' }),
+              expect.objectContaining({ name: 'get_completed_chapter' }),
+              expect.objectContaining({ name: 'save_memory_patch' }),
+            ],
+          }],
+          generationConfig: { temperature: 0.2 },
+        })
+        expect(body).not.toHaveProperty('model')
+        expect(body).not.toHaveProperty('messages')
+        expect(body).not.toHaveProperty('tool_choice')
+        return {
+          ok: true,
+          json: async () => ({
+            candidates: [{
+              content: {
+                parts: [{
+                  functionCall: {
+                    id: 'gemini-call-1',
+                    name: 'get_current_memory',
+                    args: {},
+                  },
+                }],
+              },
+            }],
+          }),
+        }
+      }
+
+      expect(body.contents).toContainEqual(expect.objectContaining({
+        role: 'model',
+        parts: [{
+          functionCall: {
+            id: 'gemini-call-1',
+            name: 'get_current_memory',
+            args: {},
+          },
+        }],
+      }))
+      expect(body.contents).toContainEqual(expect.objectContaining({
+        role: 'user',
+        parts: [{
+          functionResponse: {
+            id: 'gemini-call-1',
+            name: 'get_current_memory',
+            response: expect.objectContaining({ ok: true }),
+          },
+        }],
+      }))
+      return {
+        ok: true,
+        json: async () => ({
+          candidates: [{
+            content: {
+              parts: [{
+                functionCall: {
+                  id: 'gemini-call-2',
+                  name: 'save_memory_patch',
+                  args: {
+                    memory: {
+                      summary: '主角抵达北境。',
+                      worldview: [],
+                      characters: [],
+                      relationships: [],
+                      locations: [],
+                    },
+                    shouldRegenerateMap: false,
+                  },
+                },
+              }],
+            },
+          }],
+        }),
+      }
+    })
+
+    const update = await requestAiBookMemoryUpdate({
+      config: {
+        ...readyConfig,
+        textBaseUrl: 'https://generativelanguage.googleapis.com',
+        textModel: 'gemini-2.5-pro',
+        textPath: '/v1beta/models/gemini-2.5-pro:generateContent',
+      },
+      book: { name: '山海旧事', author: '佚名', bookUrl: 'book-1', origin: 'source-1' },
+      chapter: { title: '第八章', url: 'chapter-8', index: 7 },
+      chapterContent: '主角抵达北境。',
+      memory: {
+        bookUrl: 'book-1',
+        enabled: true,
+        updatedAt: 0,
+        worldview: [],
+        characters: [],
+        relationships: [],
+        locations: [],
+      },
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(update.memory.summary).toBe('主角抵达北境。')
+  })
+
   it('uses the separated image endpoint and key for map requests', async () => {
     const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => ({
       ok: true,
