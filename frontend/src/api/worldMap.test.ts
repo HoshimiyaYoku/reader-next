@@ -43,15 +43,19 @@ describe('worldMap api', () => {
       .mockResolvedValueOnce({ data: spec })
       .mockResolvedValueOnce({ data: update })
       .mockResolvedValueOnce({ data: coordinates })
-      .mockResolvedValueOnce({ data: 'ok' })
+      .mockResolvedValueOnce({ data: spec })
 
     await expect(getWorldMapSpec('book-1')).resolves.toBe(spec)
     await expect(buildWorldMap({ book_url: 'book-1', novel_title: '测试书' })).resolves.toBe(spec)
-    await expect(saveWorldMapSpec(spec)).resolves.toBe(spec)
+    await expect(saveWorldMapSpec('book-1', spec)).resolves.toBe(spec)
     await expect(updateWorldMap({ book_url: 'book-1', end_chapter: 3 })).resolves.toBe(update)
     await expect(generateCoordinates({ book_url: 'book-1' })).resolves.toBe(coordinates)
     await expect(getReviewItems('book-1')).resolves.toEqual([])
-    await expect(resolveReviewItem({ book_url: 'book-1', item_id: 'review-1', resolution: 'accept' })).resolves.toBe('ok')
+    await expect(resolveReviewItem({ book_url: 'book-1', item_id: 'review-1', resolution: 'accept' })).resolves.toBe(spec)
+    expect(httpMock.post).toHaveBeenNthCalledWith(2, '/worldMap/save', {
+      book_url: 'book-1',
+      spec,
+    })
   })
 })
 
@@ -59,7 +63,7 @@ function createSpec(): WorldMapSpec {
   return {
     metadata: {
       novel_title: '测试书',
-      source_type: 'mock',
+      source_type: 'ai_memory',
       start_chapter: 0,
       end_chapter: 0,
       allow_later_chapter_info: false,
@@ -73,8 +77,6 @@ function createSpec(): WorldMapSpec {
     constraints: {
       hard: [],
       soft: [],
-      unknown_areas: [],
-      forbidden_inferences: [],
     },
     conflicts: [],
     review_items: [],

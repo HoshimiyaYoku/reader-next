@@ -7,7 +7,8 @@ import type {
   GenerateCoordinatesRequest,
   WorldMapCoordinates,
   WorldMapReviewItem,
-  ResolveReviewRequest
+  ResolveReviewRequest,
+  SaveWorldMapRequest
 } from '../types/worldMap'
 
 // 获取世界地图规格书
@@ -23,8 +24,9 @@ export function buildWorldMap(data: BuildWorldMapRequest) {
 }
 
 // 保存世界地图规格书
-export function saveWorldMapSpec(spec: WorldMapSpec) {
-  return http.post<WorldMapSpec>('/worldMap/save', spec).then((r) => r.data)
+export function saveWorldMapSpec(bookUrl: string, spec: WorldMapSpec) {
+  const data: SaveWorldMapRequest = { book_url: bookUrl, spec }
+  return http.post<WorldMapSpec>('/worldMap/save', data).then((r) => r.data)
 }
 
 // 增量更新世界地图
@@ -46,5 +48,5 @@ export function getReviewItems(bookUrl: string) {
 
 // 人工修正审查项
 export function resolveReviewItem(data: ResolveReviewRequest) {
-  return http.post<string>('/worldMap/resolve', data).then((r) => r.data)
+  return http.post<WorldMapSpec>('/worldMap/resolve', data).then((r) => r.data)
 }

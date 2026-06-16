@@ -1,32 +1,31 @@
-// 世界地图类型定义
+// 世界地图类型定义（与后端 WorldMapSpec wire contract 对齐：snake_case）
 
 export interface WorldMapMetadata {
-  novel_title: string
   source_type: string
+  novel_title: string
+  allow_later_chapter_info: boolean
   start_chapter: number
   end_chapter: number
-  allow_later_chapter_info: boolean
   spec_version: string
   analysis_date: string
-  notes?: string
+  notes?: string | null
+  created_at?: number
+  updated_at?: number
+  total_entities?: number
+  total_relations?: number
 }
 
 export interface WorldMapEntity {
   id: string
   canonical_name: string
   aliases: string[]
-  entity_type: string
-  sub_type?: string
-  faction_id?: string
-  geographic_features?: string
-  description?: string
-  first_appearance_chapter?: number
-  related_regions: string[]
-  has_explicit_spatial_relations: boolean
-  has_explicit_distance_relations: boolean
-  evidence_level: EvidenceLevel
+  entity_type: EntityType
+  subtype?: string | null
+  first_chapter: number
   evidence: Evidence
-  notes?: string
+  description?: string | null
+  faction_id?: string | null
+  related_entity_ids: string[]
 }
 
 export interface WorldMapRelation {
@@ -34,95 +33,67 @@ export interface WorldMapRelation {
   from_id: string
   to_id: string
   relation_type: RelationType
-  direction?: Direction
-  is_directional: boolean
-  is_reversible: boolean
+  direction?: Direction | null
+  bidirectional: boolean
   evidence: Evidence
-  first_appearance_chapter?: number
-  notes?: string
+  constraint_type: ConstraintType
 }
 
 export interface WorldMapRoute {
   id: string
-  start_id: string
-  end_id: string
-  transport_method?: string
-  duration?: string
-  distance?: string
-  waypoints: string[]
-  obstacles: string[]
-  is_regular_route: boolean
-  is_dangerous: boolean
+  from_id: string
+  to_id: string
+  transport_mode?: string | null
+  distance?: number | null
+  time?: string | null
+  via: string[]
+  blocks: string[]
   is_trade_route: boolean
   evidence: Evidence
-  notes?: string
 }
 
 export interface WorldMapFaction {
   id: string
   name: string
   faction_type: string
-  core_regions: string[]
-  controlled_regions: string[]
+  core_entities: string[]
+  controlled_entities: string[]
+  influence_entities: string[]
   borders: string[]
-  influence_zones: string[]
-  important_cities: string[]
-  transport_hubs: string[]
-  borders_with_other_factions: string[]
-  conflicts_with: string[]
   evidence: Evidence
-  uncertain_regions: string[]
 }
 
 export interface WorldMapConstraints {
   hard: Constraint[]
   soft: Constraint[]
-  unknown_areas: UnknownArea[]
-  forbidden_inferences: ForbiddenInference[]
 }
 
 export interface Constraint {
   id: string
-  description: string
-  involved_entities: string[]
   constraint_type: string
+  entities: string[]
+  description: string
   evidence: Evidence
-  impact_on_map?: string
-}
-
-export interface UnknownArea {
-  id: string
-  subject: string
-  unknown_content: string
-  why_unknown: string
-  allow_speculation: boolean
-  required_evidence?: string
-}
-
-export interface ForbiddenInference {
-  id: string
-  forbidden_content: string
-  easy_to_misinterpret_reason: string
-  correct_handling: string
+  priority: number
 }
 
 export interface WorldMapConflict {
   id: string
-  involved_entities: string[]
-  conflict_info_a: string
-  conflict_info_b: string
+  entities: string[]
+  info_a: string
+  info_b: string
   evidence_a: Evidence
   evidence_b: Evidence
-  conflict_type: string
-  impact_scope: string
-  current_handling: ConflictHandling
-  allow_coordinate_draft: boolean
+  resolution_hint: ResolutionHint
+  reason: string
+  status: ConflictStatus
 }
 
 export interface WorldMapCoordinates {
+  status: CoordinateStatus
+  reason?: string | null
   placed: PlacedEntity[]
   unplaced: UnplacedEntity[]
-  status: CoordinateStatus
 }
 
 export interface PlacedEntity {
@@ -143,8 +114,8 @@ export interface WorldMapReviewItem {
   id: string
   item_type: ReviewItemType
   severity: ReviewSeverity
-  issue: string
   involved_entities: string[]
+  issue: string
   ai_suggestion?: string
   evidence: Evidence
   confidence: number
@@ -161,6 +132,9 @@ export interface WorldMapStatistics {
   total_soft_constraints: number
   total_conflicts: number
   total_review_items: number
+  total_issues?: number
+  auto_resolved?: number
+  need_human?: number
   automation_rate: number
   coordinate_coverage_rate: number
 }
@@ -173,32 +147,39 @@ export interface WorldMapSpec {
   factions: WorldMapFaction[]
   constraints: WorldMapConstraints
   conflicts: WorldMapConflict[]
-  coordinates?: WorldMapCoordinates
+  coordinates?: WorldMapCoordinates | null
   review_items: WorldMapReviewItem[]
   statistics: WorldMapStatistics
 }
 
 export interface Evidence {
-  chapter?: number
-  quote_or_summary: string
-  source_context?: string
-  evidence_level: EvidenceLevel
+  level: EvidenceLevel
+  chapter: number
+  quote: string
+  context?: string | null
 }
 
-// Enums
-export type EvidenceLevel = 'A' | 'B' | 'C' | 'D' | 'Conflict' | 'Unknown'
-export type RelationType = 'Directional' | 'Adjacent' | 'Contains' | 'Blocks' | 'Path'
-export type Direction = 'North' | 'South' | 'East' | 'West' | 'Northeast' | 'Northwest' | 'Southeast' | 'Southwest'
+export type EntityType = 'settlement' | 'region' | 'terrain' | 'water' | 'transit' | 'fantasy'
+export type EvidenceLevel = 'A' | 'B' | 'C' | 'Unknown' | 'Conflict'
+export type RelationType = 'direction' | 'nearby' | 'contains' | 'blocks' | 'route'
+export type Direction = 'north' | 'south' | 'east' | 'west' | 'northeast' | 'northwest' | 'southeast' | 'southwest'
+export type ConstraintType = 'hard' | 'soft'
+export type ResolutionHint = 'PreferA' | 'PreferB' | 'IgnoreBoth' | 'Unresolvable'
+export type ConflictStatus = 'Resolved' | 'Unresolved'
 export type CoordinateConfidence = 'Fixed' | 'Relative' | 'Tentative' | 'Forbidden' | 'Unresolved'
 export type CoordinateStatus = 'Feasible' | 'Partial' | 'Blocked'
-export type ConflictHandling = 'Unresolved' | 'PreferA' | 'PreferB' | 'Merge' | 'NeedHuman'
-export type ReviewItemType = 'Conflict' | 'LowConfidence' | 'MissingRelation' | 'Ambiguity' | 'Inconsistency'
-export type ReviewSeverity = 'Critical' | 'High' | 'Medium' | 'Low'
+export type ReviewItemType = 'Conflict' | 'UncertainPosition' | 'CriticalError'
+export type ReviewSeverity = 'High' | 'Medium' | 'Low'
 
 // API Request/Response types
 export interface BuildWorldMapRequest {
   book_url: string
   novel_title: string
+}
+
+export interface SaveWorldMapRequest {
+  book_url: string
+  spec: WorldMapSpec
 }
 
 export interface UpdateWorldMapRequest {
@@ -219,6 +200,6 @@ export interface GenerateCoordinatesRequest {
 export interface ResolveReviewRequest {
   book_url: string
   item_id: string
-  resolution: string
+  resolution: 'accept' | 'skip' | string
   comment?: string
 }

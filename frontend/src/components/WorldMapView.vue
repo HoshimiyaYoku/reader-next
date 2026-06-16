@@ -1,64 +1,52 @@
 <template>
   <div class="world-map-view">
-    <!-- 工具栏 -->
     <div class="map-toolbar">
       <div class="toolbar-left">
-        <el-button
-          type="primary"
-          :loading="loading"
-          @click="handleBuildMap"
-          v-if="!spec"
-        >
+        <button v-if="!spec" class="btn btn-primary" :disabled="loading" @click="handleBuildMap">
           构建地图
-        </el-button>
-        <el-button
-          :loading="loading"
-          @click="handleGenerateCoordinates"
-          v-if="spec && !spec.coordinates"
-        >
+        </button>
+        <button v-if="spec && !spec.coordinates" class="btn" :disabled="loading" @click="handleGenerateCoordinates">
           生成坐标
-        </el-button>
-        <el-button-group v-if="spec">
-          <el-button
-            :type="sidebarTab === 'entities' ? 'primary' : ''"
+        </button>
+
+        <div v-if="spec" class="tab-switch">
+          <button
+            class="tab-btn"
+            :class="{ active: sidebarTab === 'entities' }"
             @click="setSidebarTab('entities')"
           >
             实体
-          </el-button>
-          <el-button
-            :type="sidebarTab === 'review' ? 'primary' : ''"
+          </button>
+          <button
+            class="tab-btn"
+            :class="{ active: sidebarTab === 'review' }"
             @click="setSidebarTab('review')"
           >
-            审查 <el-badge :value="reviewItems.length" v-if="reviewItems.length > 0" />
-          </el-button>
-        </el-button-group>
+            审查
+            <span v-if="reviewItems.length" class="tab-count">{{ reviewItems.length }}</span>
+          </button>
+        </div>
       </div>
-      
-      <div class="toolbar-stats" v-if="spec">
-        <el-tag type="success">
-          自动化率: {{ (automationRate * 100).toFixed(0) }}%
-        </el-tag>
-        <el-tag type="info">
-          坐标覆盖: {{ (coordinateCoverage * 100).toFixed(0) }}%
-        </el-tag>
+
+      <div v-if="spec" class="toolbar-stats">
+        <span class="stat-badge success">自动化率 {{ formatRate(automationRate) }}</span>
+        <span class="stat-badge info">坐标覆盖 {{ formatRate(coordinateCoverage) }}</span>
       </div>
     </div>
 
-    <!-- 主体内容 -->
-    <div class="map-body" v-if="spec">
+    <div v-if="spec" class="map-body">
       <div class="map-main">
         <WorldMapCanvas v-if="spec.coordinates" />
-        <el-empty v-else description="尚未生成坐标，点击上方按钮生成" />
+        <div v-else class="empty-state inline">尚未生成坐标，点击上方按钮生成</div>
       </div>
 
       <div class="map-sidebar">
         <MapEntityPanel v-if="sidebarTab === 'entities'" />
-        <MapReviewPanel v-else-if="sidebarTab === 'review'" />
+        <MapReviewPanel v-else :book-url="bookUrl" />
       </div>
     </div>
 
-    <!-- 空状态 -->
-    <el-empty v-else description="暂无地图数据，点击构建地图开始" />
+    <div v-else class="empty-state">暂无地图数据，点击构建地图开始</div>
   </div>
 </template>
 
@@ -78,18 +66,13 @@ const props = defineProps<{
 
 const worldMapStore = useWorldMapStore()
 const appStore = useAppStore()
-const {
-  spec,
-  loading,
-  sidebarTab,
-  reviewItems,
-  automationRate,
-  coordinateCoverage
-} = storeToRefs(worldMapStore)
-
+const { spec, loading, sidebarTab, reviewItems, automationRate, coordinateCoverage } = storeToRefs(worldMapStore)
 const { setSidebarTab } = worldMapStore
 
-// 构建地图
+function formatRate(rate: number) {
+  return `${Math.round(rate * 100)}%`
+}
+
 async function handleBuildMap() {
   try {
     await worldMapStore.buildMap(props.bookUrl, props.bookName)
@@ -99,7 +82,6 @@ async function handleBuildMap() {
   }
 }
 
-// 生成坐标
 async function handleGenerateCoordinates() {
   try {
     await worldMapStore.generateMapCoordinates(props.bookUrl)
@@ -109,12 +91,10 @@ async function handleGenerateCoordinates() {
   }
 }
 
-// 加载地图
 onMounted(async () => {
   try {
     await worldMapStore.loadSpec(props.bookUrl)
-  } catch (error) {
-    // 地图不存在是正常情况
+  } catch {
     console.log('暂无地图数据')
   }
 })
@@ -125,6 +105,7 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   height: 100%;
+  background: #fff;
 }
 
 .map-toolbar {
@@ -132,35 +113,101 @@ onMounted(async () => {
   justify-content: space-between;
   align-items: center;
   padding: 16px;
-  border-bottom: 1px solid var(--el-border-color);
-  background: #fff;
+  border-bottom: 1px solid var(--el-border-color, #e5e7eb);
+  gap: 16px;
 }
 
 .toolbar-left {
   display: flex;
-  gap: 12px;
   align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.tab-switch {
+  display: inline-flex;
+  border: 1px solid var(--el-border-color, #d1d5db);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.tab-btn,
+.btn {
+  border: 0;
+  background: #f9fafb;
+  color: #111827;
+  padding: 8px 14px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.tab-btn.active,
+.btn-primary {
+  background: #2563eb;
+  color: #fff;
+}
+
+.tab-btn + .tab-btn,
+.btn + .btn {
+  border-left: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.tab-count {
+  margin-left: 6px;
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.2);
+  padding: 1px 6px;
+  border-radius: 999px;
 }
 
 .toolbar-stats {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
+
+.stat-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.stat-badge.success { background: #ecfdf5; color: #047857; }
+.stat-badge.info { background: #eff6ff; color: #1d4ed8; }
 
 .map-body {
   flex: 1;
   display: flex;
   overflow: hidden;
+  min-height: 0;
 }
 
 .map-main {
   flex: 1;
   overflow: hidden;
+  min-width: 0;
 }
 
 .map-sidebar {
-  width: 320px;
-  border-left: 1px solid var(--el-border-color);
+  width: 340px;
+  border-left: 1px solid var(--el-border-color, #e5e7eb);
   overflow: hidden;
+  min-width: 300px;
+}
+
+.empty-state {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6b7280;
+  background: #f9fafb;
+  font-size: 14px;
+}
+
+.empty-state.inline {
+  height: 100%;
 }
 </style>

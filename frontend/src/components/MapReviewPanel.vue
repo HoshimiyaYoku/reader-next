@@ -2,14 +2,12 @@
   <div class="review-panel">
     <div class="review-header">
       <h3>审查清单</h3>
-      <el-tag :type="reviewItems.length > 0 ? 'warning' : 'success'">
+      <span class="count-badge" :class="reviewItems.length ? 'warning' : 'success'">
         {{ reviewItems.length }} 项待审查
-      </el-tag>
+      </span>
     </div>
 
-    <div v-if="reviewItems.length === 0" class="empty-state">
-      <el-empty description="暂无需要审查的项目" />
-    </div>
+    <div v-if="reviewItems.length === 0" class="empty-state">暂无需要审查的项目</div>
 
     <div v-else class="review-list">
       <div
@@ -19,80 +17,47 @@
         :class="`severity-${item.severity.toLowerCase()}`"
       >
         <div class="item-header">
-          <el-tag
-            :type="getSeverityType(item.severity)"
-            size="small"
-          >
+          <span class="pill" :class="`severity-pill-${item.severity.toLowerCase()}`">
             {{ getSeverityLabel(item.severity) }}
-          </el-tag>
-          <el-tag size="small" class="ml-2">
-            {{ getItemTypeLabel(item.item_type) }}
-          </el-tag>
-          <span class="confidence">
-            置信度: {{ (item.confidence * 100).toFixed(0) }}%
           </span>
+          <span class="pill">{{ getItemTypeLabel(item.item_type) }}</span>
+          <span class="confidence">置信度 {{ (item.confidence * 100).toFixed(0) }}%</span>
         </div>
 
         <div class="item-body">
           <p class="issue">{{ item.issue }}</p>
-          
-          <div v-if="item.involved_entities.length > 0" class="involved-entities">
-            <span class="label">涉及实体:</span>
-            <el-tag
-              v-for="entityId in item.involved_entities"
-              :key="entityId"
-              size="small"
-              class="entity-tag"
-            >
+
+          <div v-if="item.involved_entities.length" class="row">
+            <span class="label">涉及实体</span>
+            <span v-for="entityId in item.involved_entities" :key="entityId" class="entity-tag">
               {{ getEntityName(entityId) }}
-            </el-tag>
+            </span>
           </div>
 
-          <div v-if="item.ai_suggestion" class="ai-suggestion">
-            <span class="label">AI 建议:</span>
+          <div v-if="item.ai_suggestion" class="suggestion">
+            <span class="label">AI 建议</span>
             <p>{{ item.ai_suggestion }}</p>
           </div>
 
           <div class="evidence">
-            <span class="label">证据:</span>
-            <p class="evidence-text">
-              {{ item.evidence.quote_or_summary }}
-              <span v-if="item.evidence.chapter" class="chapter-ref">
-                (第 {{ item.evidence.chapter }} 章)
-              </span>
+            <span class="label">证据</span>
+            <p>
+              {{ item.evidence.quote }}
+              <span v-if="item.evidence.chapter" class="chapter-ref">（第 {{ item.evidence.chapter }} 章）</span>
             </p>
           </div>
         </div>
 
         <div class="item-actions">
-          <el-button
-            size="small"
-            type="success"
-            @click="handleAccept(item)"
-          >
-            采纳
-          </el-button>
-          <el-button
-            size="small"
-            @click="handleEdit(item)"
-          >
-            修正
-          </el-button>
-          <el-button
-            size="small"
-            type="info"
-            @click="handleSkip(item)"
-          >
-            跳过
-          </el-button>
+          <button class="btn success" :disabled="loading" @click="handleAccept(item)">采纳</button>
+          <button class="btn" :disabled="loading" @click="handleEdit">修正</button>
+          <button class="btn muted" :disabled="loading" @click="handleSkip(item)">跳过</button>
         </div>
       </div>
     </div>
 
-    <div v-if="reviewItems.length > 0" class="review-footer">
-      <el-text size="small" type="info">
-        预计审查时间: {{ estimatedTime }} 分钟
-      </el-text>
+    <div v-if="reviewItems.length" class="review-footer">
+      预计审查时间：{{ estimatedTime }} 分钟
     </div>
   </div>
 </template>
@@ -102,90 +67,61 @@ import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useAppStore } from '../stores/app'
 import { useWorldMapStore } from '../stores/worldMapStore'
-import type { WorldMapReviewItem, ReviewSeverity, ReviewItemType } from '../types/worldMap'
+import type { ReviewItemType, ReviewSeverity, WorldMapReviewItem } from '../types/worldMap'
+
+const props = defineProps<{
+  bookUrl: string
+}>()
 
 const worldMapStore = useWorldMapStore()
 const appStore = useAppStore()
-const { reviewItems, spec } = storeToRefs(worldMapStore)
+const { reviewItems, spec, loading } = storeToRefs(worldMapStore)
 
-// 按严重程度排序
 const sortedItems = computed(() => {
-  const severityOrder: Record<string, number> = { Critical: 0, High: 1, Medium: 2, Low: 3 }
-  return [...reviewItems.value].sort((a, b) => {
-    return severityOrder[a.severity as string] - severityOrder[b.severity as string]
-  })
+  const severityOrder: Record<ReviewSeverity, number> = { High: 0, Medium: 1, Low: 2 }
+  return [...reviewItems.value].sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity])
 })
 
-// 预计审查时间
 const estimatedTime = computed(() => {
-  return reviewItems.value.reduce((sum: number, item: any) => sum + item.estimated_review_time_minutes, 0)
+  return reviewItems.value.reduce((sum, item) => sum + item.estimated_review_time_minutes, 0)
 })
 
-// 获取实体名称
 function getEntityName(entityId: string): string {
-  const entity = spec.value?.entities.find((e: any) => e.id === entityId)
-  return entity?.canonical_name || entityId
+  return spec.value?.entities.find((entity) => entity.id === entityId)?.canonical_name || entityId
 }
 
-// 获取严重程度样式
-function getSeverityType(severity: ReviewSeverity): string {
-  const typeMap: Record<string, string> = {
-    Critical: 'danger',
-    High: 'warning',
-    Medium: 'info',
-    Low: 'info'
-  }
-  return typeMap[severity]
-}
-
-// 获取严重程度标签
 function getSeverityLabel(severity: ReviewSeverity): string {
-  const labelMap: Record<string, string> = {
-    Critical: '严重',
-    High: '高',
-    Medium: '中',
-    Low: '低'
-  }
-  return labelMap[severity]
+  const labels: Record<ReviewSeverity, string> = { High: '高', Medium: '中', Low: '低' }
+  return labels[severity]
 }
 
-// 获取项目类型标签
 function getItemTypeLabel(type: ReviewItemType): string {
-  const labelMap: Record<string, string> = {
+  const labels: Record<ReviewItemType, string> = {
     Conflict: '冲突',
-    LowConfidence: '低置信度',
-    MissingRelation: '缺失关系',
-    Ambiguity: '歧义',
-    Inconsistency: '不一致'
+    UncertainPosition: '位置不确定',
+    CriticalError: '严重错误',
   }
-  return labelMap[type]
+  return labels[type]
 }
 
-// 处理采纳
 async function handleAccept(item: WorldMapReviewItem) {
   try {
-    // TODO: 获取 bookUrl
-    const bookUrl = spec.value?.metadata.novel_title || ''
-    await worldMapStore.resolveItem(bookUrl, item.id, 'accept')
+    await worldMapStore.resolveItem(props.bookUrl, item.id, 'accept')
     appStore.showToast('已采纳 AI 建议')
-  } catch (error) {
+  } catch {
     appStore.showToast('操作失败', 'error')
   }
 }
 
-// 处理修正
-function handleEdit(_item: WorldMapReviewItem) {
+function handleEdit() {
   appStore.showToast('手动修正功能开发中', 'warning')
-  // TODO: 打开编辑对话框
 }
 
-// 处理跳过
 async function handleSkip(item: WorldMapReviewItem) {
   try {
-    const bookUrl = spec.value?.metadata.novel_title || ''
-    await worldMapStore.resolveItem(bookUrl, item.id, 'skip')
+    await worldMapStore.resolveItem(props.bookUrl, item.id, 'skip')
     appStore.showToast('已跳过此项', 'warning')
-  } catch (error) {
+  } catch {
     appStore.showToast('操作失败', 'error')
   }
 }
@@ -204,7 +140,7 @@ async function handleSkip(item: WorldMapReviewItem) {
   justify-content: space-between;
   align-items: center;
   padding: 16px;
-  border-bottom: 1px solid var(--el-border-color);
+  border-bottom: 1px solid var(--el-border-color, #e5e7eb);
 }
 
 .review-header h3 {
@@ -212,11 +148,25 @@ async function handleSkip(item: WorldMapReviewItem) {
   font-size: 16px;
 }
 
+.count-badge,
+.pill,
+.entity-tag {
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 12px;
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.count-badge.warning { background: #fffbeb; color: #b45309; }
+.count-badge.success { background: #ecfdf5; color: #047857; }
+
 .empty-state {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
+  color: #6b7280;
 }
 
 .review-list {
@@ -226,89 +176,70 @@ async function handleSkip(item: WorldMapReviewItem) {
 }
 
 .review-item {
-  border: 1px solid var(--el-border-color);
-  border-radius: 4px;
+  border: 1px solid var(--el-border-color, #e5e7eb);
+  border-radius: 10px;
   padding: 16px;
   margin-bottom: 16px;
-  transition: all 0.2s;
 }
 
-.review-item:hover {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
-.review-item.severity-critical {
-  border-left: 4px solid #f56c6c;
-}
-
-.review-item.severity-high {
-  border-left: 4px solid #e6a23c;
-}
-
-.review-item.severity-medium {
-  border-left: 4px solid #409eff;
-}
-
-.review-item.severity-low {
-  border-left: 4px solid #909399;
-}
+.review-item.severity-high { border-left: 4px solid #f59e0b; }
+.review-item.severity-medium { border-left: 4px solid #2563eb; }
+.review-item.severity-low { border-left: 4px solid #6b7280; }
 
 .item-header {
   display: flex;
   align-items: center;
+  gap: 8px;
   margin-bottom: 12px;
 }
+
+.severity-pill-high { background: #fffbeb; color: #b45309; }
+.severity-pill-medium { background: #eff6ff; color: #1d4ed8; }
+.severity-pill-low { background: #f3f4f6; color: #4b5563; }
 
 .confidence {
   margin-left: auto;
   font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-
-.item-body {
-  margin-bottom: 12px;
+  color: #6b7280;
 }
 
 .issue {
-  font-weight: 500;
-  margin-bottom: 8px;
-  color: var(--el-text-color-primary);
+  font-weight: 600;
+  margin: 0 0 10px;
+  color: #111827;
 }
 
-.involved-entities,
-.ai-suggestion,
+.row,
+.suggestion,
 .evidence {
-  margin-bottom: 8px;
+  margin-bottom: 10px;
+  font-size: 13px;
 }
 
 .label {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
+  display: inline-block;
+  color: #6b7280;
   margin-right: 8px;
+  min-width: 52px;
 }
 
 .entity-tag {
+  display: inline-flex;
   margin-right: 4px;
   margin-bottom: 4px;
 }
 
-.ai-suggestion p {
-  margin: 4px 0;
+.suggestion p,
+.evidence p {
+  margin: 6px 0 0;
   padding: 8px;
-  background: #f0f9ff;
-  border-left: 3px solid #409eff;
-  font-size: 13px;
-}
-
-.evidence-text {
-  margin: 4px 0;
-  font-size: 13px;
-  color: var(--el-text-color-regular);
+  border-left: 3px solid #2563eb;
+  background: #eff6ff;
+  line-height: 1.45;
 }
 
 .chapter-ref {
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
+  color: #6b7280;
 }
 
 .item-actions {
@@ -316,9 +247,33 @@ async function handleSkip(item: WorldMapReviewItem) {
   gap: 8px;
 }
 
+.btn {
+  border: 1px solid #d1d5db;
+  background: #fff;
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.btn.success {
+  border-color: #10b981;
+  color: #047857;
+  background: #ecfdf5;
+}
+
+.btn.muted {
+  color: #6b7280;
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .review-footer {
   padding: 12px 16px;
-  border-top: 1px solid var(--el-border-color);
-  text-align: center;
+  border-top: 1px solid var(--el-border-color, #e5e7eb);
+  color: #6b7280;
+  font-size: 12px;
 }
 </style>

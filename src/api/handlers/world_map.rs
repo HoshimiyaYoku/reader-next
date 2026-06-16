@@ -23,6 +23,12 @@ pub struct BuildWorldMapRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct SaveWorldMapRequest {
+    pub book_url: String,
+    pub spec: WorldMapSpec,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct UpdateWorldMapRequest {
     pub book_url: String,
     pub end_chapter: i32,
@@ -68,7 +74,7 @@ pub async fn get_world_map_spec(
     Ok(Json(ApiResponse::ok(spec)))
 }
 
-/// 构建地图规格书（从 mock 数据）
+/// 构建地图规格书（从已有 AI资料 locations）
 pub async fn build_world_map(
     State(state): State<AppState>,
     auth: AuthContext,
@@ -77,9 +83,23 @@ pub async fn build_world_map(
     let user_ns = resolve_user_ns(&state, &auth).await?;
 
     let service = WorldMapBuilderService::new(&state.config.storage_dir);
+    let memory = state
+        .ai_book_service
+        .get_value(&user_ns, &req.book_url)
+        .await?
+        .ok_or_else(|| AppError::BadRequest("暂无 AI资料，请先更新 AI资料".to_string()))?;
+    let novel_title = if req.novel_title.trim().is_empty() {
+        memory
+            .get("bookName")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("未命名小说")
+            .to_string()
+    } else {
+        req.novel_title
+    };
 
     let spec = service
-        .build_from_mock(&user_ns, &req.book_url, &req.novel_title)
+        .build_from_ai_memory_value(&user_ns, &req.book_url, &novel_title, &memory)
         .await?;
 
     Ok(Json(ApiResponse::ok(spec)))
@@ -89,17 +109,14 @@ pub async fn build_world_map(
 pub async fn save_world_map_spec(
     State(state): State<AppState>,
     auth: AuthContext,
-    Json(spec): Json<WorldMapSpec>,
+    Json(req): Json<SaveWorldMapRequest>,
 ) -> Result<Json<ApiResponse<WorldMapSpec>>, AppError> {
     let user_ns = resolve_user_ns(&state, &auth).await?;
 
     let service = WorldMapBuilderService::new(&state.config.storage_dir);
+    service.save(&user_ns, &req.book_url, &req.spec).await?;
 
-    // 从 spec 中提取 book_url
-    let book_url = &spec.metadata.novel_title;
-    service.save(&user_ns, book_url, &spec).await?;
-
-    Ok(Json(ApiResponse::ok(spec)))
+    Ok(Json(ApiResponse::ok(req.spec)))
 }
 
 /// 增量更新（新章节）
@@ -112,21 +129,28 @@ pub async fn update_world_map(
 
     let service = WorldMapBuilderService::new(&state.config.storage_dir);
 
-    // 加载现有 spec
-    let existing = service
-        .load(&user_ns, &req.book_url)
+    let memory = state
+        .ai_book_service
+        .get_value(&user_ns, &req.book_url)
         .await?
-        .ok_or_else(|| AppError::NotFound("世界地图规格书不存在".to_string()))?;
-
-    let old_entity_count = existing.entities.len();
-    let old_relation_count = existing.relations.len();
-
-    // TODO: 实现增量更新逻辑
-    let updated = existing;
+        .ok_or_else(|| AppError::BadRequest("暂无 AI资料，请先更新 AI资料".to_string()))?;
+    let novel_title = memory
+        .get("bookName")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("未命名小说");
+    let (updated, added_entities, added_relations) = service
+        .update_from_ai_memory_value(
+            &user_ns,
+            &req.book_url,
+            novel_title,
+            req.end_chapter,
+            &memory,
+        )
+        .await?;
 
     let response = UpdateWorldMapResponse {
-        added_entities: updated.entities.len() - old_entity_count,
-        added_relations: updated.relations.len() - old_relation_count,
+        added_entities,
+        added_relations,
         spec: updated,
     };
 
@@ -170,14 +194,16 @@ pub async fn resolve_review_item(
     State(state): State<AppState>,
     auth: AuthContext,
     Json(req): Json<ResolveReviewRequest>,
-) -> Result<Json<ApiResponse<String>>, AppError> {
-    let _user_ns = resolve_user_ns(&state, &auth).await?;
+) -> Result<Json<ApiResponse<WorldMapSpec>>, AppError> {
+    let user_ns = resolve_user_ns(&state, &auth).await?;
 
-    // TODO: 实现修正逻辑
-    Ok(Json(ApiResponse::ok(format!(
-        "已标记审查项 {} 为 {}",
-        req.item_id, req.resolution
-    ))))
+    let service = WorldMapBuilderService::new(&state.config.storage_dir);
+    let _comment = req.comment;
+    let spec = service
+        .resolve_review_item(&user_ns, &req.book_url, &req.item_id, &req.resolution)
+        .await?;
+
+    Ok(Json(ApiResponse::ok(spec)))
 }
 
 async fn resolve_user_ns(state: &AppState, auth: &AuthContext) -> Result<String, AppError> {
@@ -186,4 +212,52 @@ async fn resolve_user_ns(state: &AppState, auth: &AuthContext) -> Result<String,
         .resolve_user_ns_with_override(auth.access_token(), auth.secure_key(), auth.user_ns())
         .await
         .map_err(|_| AppError::BadRequest("NEED_LOGIN".to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_request_keeps_book_url_outside_spec_metadata() {
+        let request: SaveWorldMapRequest = serde_json::from_value(serde_json::json!({
+            "book_url": "https://example.test/book/real",
+            "spec": {
+                "metadata": {
+                    "source_type": "ai_memory",
+                    "novel_title": "山海旧事",
+                    "allow_later_chapter_info": false,
+                    "start_chapter": 0,
+                    "end_chapter": 8,
+                    "spec_version": "2.0",
+                    "analysis_date": "2026-06-16"
+                },
+                "entities": [],
+                "relations": [],
+                "routes": [],
+                "factions": [],
+                "constraints": { "hard": [], "soft": [] },
+                "conflicts": [],
+                "review_items": [],
+                "statistics": {
+                    "total_entities": 0,
+                    "total_relations": 0,
+                    "total_routes": 0,
+                    "total_factions": 0,
+                    "total_hard_constraints": 0,
+                    "total_soft_constraints": 0,
+                    "total_conflicts": 0,
+                    "total_review_items": 0,
+                    "total_issues": 0,
+                    "auto_resolved": 0,
+                    "need_human": 0,
+                    "automation_rate": 1.0,
+                    "coordinate_coverage_rate": 0.0
+                }
+            }
+        })).unwrap();
+
+        assert_eq!(request.book_url, "https://example.test/book/real");
+        assert_eq!(request.spec.metadata.novel_title, "山海旧事");
+    }
 }

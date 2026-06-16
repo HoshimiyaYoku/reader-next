@@ -1,12 +1,12 @@
 <template>
   <div class="world-map-canvas">
     <div class="canvas-toolbar">
-      <el-button-group>
-        <el-button size="small" @click="zoomIn">放大</el-button>
-        <el-button size="small" @click="zoomOut">缩小</el-button>
-        <el-button size="small" @click="resetView">重置</el-button>
-      </el-button-group>
-      <el-tag class="ml-2">{{ placedCount }} / {{ totalCount }} 实体已定位</el-tag>
+      <div class="button-group">
+        <button class="btn" @click="zoomIn">放大</button>
+        <button class="btn" @click="zoomOut">缩小</button>
+        <button class="btn" @click="resetView">重置</button>
+      </div>
+      <span class="count-badge">{{ placedCount }} / {{ totalCount }} 实体已定位</span>
     </div>
 
     <div class="canvas-container" ref="containerRef">
@@ -18,7 +18,6 @@
         @mouseup="onMouseUp"
         @wheel="onWheel"
       >
-        <!-- 关系连线 -->
         <g class="relations-layer">
           <line
             v-for="rel in visibleRelations"
@@ -27,12 +26,11 @@
             :y1="getEntityY(rel.from_id)"
             :x2="getEntityX(rel.to_id)"
             :y2="getEntityY(rel.to_id)"
-            :class="['relation-line', `relation-${rel.relation_type.toLowerCase()}`]"
+            :class="['relation-line', `relation-${rel.relation_type}`]"
             :stroke-width="1"
           />
         </g>
 
-        <!-- 实体节点 -->
         <g class="entities-layer">
           <g
             v-for="entity in placedEntities"
@@ -222,9 +220,36 @@ onMounted(() => {
 
 .canvas-toolbar {
   padding: 12px;
-  border-bottom: 1px solid var(--el-border-color);
+  border-bottom: 1px solid var(--el-border-color, #e5e7eb);
   display: flex;
   align-items: center;
+  gap: 10px;
+}
+
+.button-group {
+  display: inline-flex;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.btn {
+  border: 0;
+  background: #fff;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.btn + .btn {
+  border-left: 1px solid #d1d5db;
+}
+
+.count-badge {
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 12px;
+  background: #f3f4f6;
+  color: #374151;
 }
 
 .canvas-container {
@@ -249,10 +274,12 @@ onMounted(() => {
   stroke-opacity: 0.4;
 }
 
+.relation-direction,
 .relation-directional {
   stroke: #409eff;
 }
 
+.relation-nearby,
 .relation-adjacent {
   stroke: #67c23a;
 }

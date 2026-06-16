@@ -11,7 +11,8 @@ import {
   buildWorldMap,
   generateCoordinates,
   getReviewItems,
-  resolveReviewItem
+  resolveReviewItem,
+  updateWorldMap
 } from '../api/worldMap'
 
 export const useWorldMapStore = defineStore('worldMap', () => {
@@ -53,8 +54,11 @@ export const useWorldMapStore = defineStore('worldMap', () => {
       const result = await getWorldMapSpec(bookUrl)
       if (result) {
         spec.value = result
+      } else {
+        spec.value = null
       }
     } catch (error) {
+      spec.value = null
       console.error('加载世界地图失败:', error)
       throw error
     } finally {
@@ -92,6 +96,20 @@ export const useWorldMapStore = defineStore('worldMap', () => {
     }
   }
 
+  async function updateMap(bookUrl: string, endChapter: number) {
+    loading.value = true
+    try {
+      const result = await updateWorldMap({ book_url: bookUrl, end_chapter: endChapter })
+      spec.value = result.spec
+      return result
+    } catch (error) {
+      console.error('更新世界地图失败:', error)
+      throw error
+    } finally {
+      loading.value = false
+    }
+  }
+
   async function loadReviewItems(bookUrl: string) {
     loading.value = true
     try {
@@ -117,9 +135,8 @@ export const useWorldMapStore = defineStore('worldMap', () => {
         resolution,
         comment
       })
-      // 成功后重新加载审查清单
       if (result) {
-        await loadReviewItems(bookUrl)
+        spec.value = result
       }
       return result
     } catch (error) {
@@ -161,6 +178,7 @@ export const useWorldMapStore = defineStore('worldMap', () => {
     loadSpec,
     buildMap,
     generateMapCoordinates,
+    updateMap,
     loadReviewItems,
     resolveItem,
     selectEntity,
