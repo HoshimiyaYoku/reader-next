@@ -148,125 +148,11 @@
         </section>
 
         <section v-else-if="activeTab === 'map'" class="map-panel">
-          <div class="map-toolbar">
-            <div class="map-title">
-              <h2>世界地图</h2>
-              <p>{{ displayBaseMemory?.map?.updatedAt ? formatTime(displayBaseMemory.map.updatedAt) : '未生成' }}</p>
-            </div>
-            <button class="secondary-btn" :disabled="aiStore.isBusy" @click="redrawMap">
-              {{ aiStore.phase === 'map' ? '绘制中...' : '重绘地图' }}
-            </button>
-          </div>
-
-          <div class="map-frame">
-            <img v-if="displayBaseMemory?.map?.imageUrl" :src="displayBaseMemory.map.imageUrl" alt="世界地图" />
-            <div v-else-if="relationshipGraph.nodes.length" class="graph-fallback">
-              <div class="graph-canvas">
-                <div class="graph-legend">
-                  <span class="legend-location">地点</span>
-                  <span class="legend-character">角色</span>
-                </div>
-                <svg :viewBox="`0 0 ${graphLayout.width} ${graphLayout.height}`" role="img" aria-label="人物关系图">
-                  <defs>
-                    <marker id="graph-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
-                      <path d="M 0 0 L 10 5 L 0 10 z" />
-                    </marker>
-                  </defs>
-                  <g class="graph-links">
-                    <g
-                      v-for="link in graphLayout.links"
-                      :key="`${link.source}-${link.target}-${link.label}`"
-                      class="graph-link"
-                      :class="{ highlighted: link.highlighted, dimmed: link.dimmed, located: link.label === '位于' }"
-                    >
-                      <path :d="link.path" />
-                      <g v-if="link.showLabel" class="graph-link-label">
-                        <rect
-                          :x="link.labelX - graphLabelWidth(link.label) / 2"
-                          :y="link.labelY - 13"
-                          :width="graphLabelWidth(link.label)"
-                          height="22"
-                          rx="11"
-                        />
-                        <text :x="link.labelX" :y="link.labelY + 3">{{ link.label }}</text>
-                      </g>
-                    </g>
-                  </g>
-                  <g
-                    v-for="node in graphLayout.nodes"
-                    :key="node.id"
-                    class="graph-node"
-                    :class="{
-                      active: selectedGraphNode?.id === node.id,
-                      location: node.kind === 'location',
-                      dimmed: node.dimmed,
-                      connected: node.connectedToSelected,
-                    }"
-                    @click="selectGraphNode(node.id)"
-                  >
-                    <foreignObject :x="node.x" :y="node.y" :width="node.width" :height="node.height">
-                      <div xmlns="http://www.w3.org/1999/xhtml" class="graph-node-card">
-                        <span class="node-dot"></span>
-                        <strong>{{ node.label }}</strong>
-                      </div>
-                    </foreignObject>
-                  </g>
-                </svg>
-              </div>
-              <aside v-if="selectedGraphNode" class="graph-detail">
-                <div class="graph-detail-head">
-                  <span>{{ selectedGraphNode.kind === 'location' ? '地点' : '角色' }}</span>
-                  <strong>{{ selectedGraphNode.label }}</strong>
-                </div>
-                <p>{{ selectedGraphNode.detail || '暂无说明' }}</p>
-                <div v-if="selectedGraphConnections.length" class="graph-connection-list">
-                  <span>直接关联</span>
-                  <button
-                    v-for="connection in selectedGraphConnections"
-                    :key="`${connection.id}-${connection.relation}`"
-                    @click="selectGraphNode(connection.id)"
-                  >
-                    <strong>{{ connection.label }}</strong>
-                    <small>{{ connection.relation }}</small>
-                  </button>
-                </div>
-                <small>{{ displayBaseMemory?.map?.fallbackReason || '图片地图未生成，显示关系图' }}</small>
-              </aside>
-            </div>
-            <div v-else class="map-empty">暂无地图</div>
-          </div>
-
-          <div class="location-tree">
-            <article
-              v-for="row in visibleLocationRows"
-              :key="row.location.name"
-              class="location-item tree-location"
-              :style="{ '--depth-offset': `${row.depth * 22}px` }"
-            >
-              <div class="item-title">
-                <div class="location-title-wrap">
-                  <button
-                    v-if="row.hasChildren"
-                    class="location-toggle"
-                    :aria-label="isLocationCollapsed(row.location.name) ? '展开地点' : '收起地点'"
-                    @click="toggleLocation(row.location.name)"
-                  >
-                    {{ isLocationCollapsed(row.location.name) ? '+' : '-' }}
-                  </button>
-                  <span v-else class="location-toggle ghost"></span>
-                  <h3>{{ row.location.name }}</h3>
-                </div>
-                <span v-if="row.location.kind">{{ row.location.kind }}</span>
-              </div>
-              <p>{{ row.location.description }}</p>
-              <div class="meta-line">
-                <span v-if="row.location.status">状态：{{ row.location.status }}</span>
-                <span v-if="row.location.parentName">上级：{{ row.location.parentName }}</span>
-                <span v-if="row.location.relatedCharacters?.length">相关：{{ row.location.relatedCharacters.join('、') }}</span>
-              </div>
-            </article>
-            <EmptyState v-if="!visibleLocationRows.length" text="暂无地点资料" />
-          </div>
+          <WorldMapView
+            v-if="book"
+            :book-url="book.bookUrl"
+            :book-name="book.name"
+          />
         </section>
 
         <section v-else class="settings-panel">
@@ -548,14 +434,13 @@ import type {
   AiBookCharacter,
   AiBookConfig,
   AiBookLocation,
-  AiBookMemory,
   AiBookRelationship,
   AiServerModelConfig,
   Book,
   BookChapter,
 } from '../types'
-import { buildAiBookRelationshipGraph, layoutAiBookRelationshipGraph } from '../utils/aiBookGraph'
-import { buildAiBookLocationRows, groupAiBookWorldview } from '../utils/aiBookPresentation'
+// (removed unused graph functions)
+import { groupAiBookWorldview } from '../utils/aiBookPresentation'
 import { isAiBookMemoryV2, toAiBookDisplayMemory } from '../utils/aiBookV2'
 import {
   DEFAULT_IMAGE_MODEL_PATH,
@@ -563,6 +448,7 @@ import {
   shouldAutoUseServerAiBookConfig,
 } from '../utils/aiBookConfig'
 import { collapseWhitespace, summarizeDisplayError } from '../utils/httpError'
+import WorldMapView from '../components/WorldMapView.vue'
 
 type AiTab = 'overview' | 'characters' | 'relationships' | 'map' | 'settings'
 
@@ -585,9 +471,9 @@ const book = ref<Book | null>(null)
 const chapters = ref<BookChapter[]>([])
 const configDraft = reactive<AiBookConfig>({ ...aiStore.config })
 const serverConfigDraft = reactive<AiServerModelConfig>(createEmptyServerModelConfig())
-const selectedGraphNodeId = ref('')
+// const selectedGraphNodeId = ref('')
 const characterSearch = ref('')
-const collapsedLocationIds = ref(new Set<string>())
+// const collapsedLocationIds = ref(new Set<string>())
 const collapsedWorldviewCategories = ref(new Set<string>())
 const DEFAULT_SPEECH_MODEL_PATH = '/v1/audio/speech'
 
@@ -616,32 +502,31 @@ const importantCharacters = computed(() => normalizeDisplayCharacters(displayBas
 const filteredCharacters = computed(() => filterCharacters(importantCharacters.value, characterSearch.value))
 const displayRelationships = computed(() => normalizeDisplayRelationships(displayBaseMemory.value?.relationships || []))
 const displayLocations = computed(() => normalizeDisplayLocations(displayBaseMemory.value?.locations || []))
-const visibleLocationRows = computed(() => buildAiBookLocationRows(displayLocations.value, collapsedLocationIds.value))
-const displayMemory = computed<AiBookMemory | null>(() => displayBaseMemory.value
+// const visibleLocationRows = computed(() => buildAiBookLocationRows(displayLocations.value, collapsedLocationIds.value))
+/* const displayMemory = computed<AiBookMemory | null>(() => displayBaseMemory.value
   ? {
       ...displayBaseMemory.value,
       characters: importantCharacters.value,
       relationships: displayRelationships.value,
       locations: displayLocations.value,
     }
-  : null)
-const relationshipGraph = computed(() => displayMemory.value
+  : null) */
+/* const relationshipGraph = computed(() => displayMemory.value
   ? buildAiBookRelationshipGraph(displayMemory.value)
-  : { nodes: [], links: [] })
-const activeGraphNodeId = computed(() => {
+  : { nodes: [], links: [] }) */
+/* const activeGraphNodeId = computed(() => {
   const selected = selectedGraphNodeId.value
   if (selected && relationshipGraph.value.nodes.some((node) => node.id === selected)) {
     return selected
   }
-  return relationshipGraph.value.nodes[0]?.id || ''
-})
-const graphLayout = computed(() => layoutAiBookRelationshipGraph(relationshipGraph.value, activeGraphNodeId.value))
-const selectedGraphNode = computed(() => {
+  return relationshipGraph.value.nodes[0]?.id || '\n}) */
+// const graphLayout = computed(() => layoutAiBookRelationshipGraph(relationshipGraph.value, activeGraphNodeId.value))
+/* const selectedGraphNode = computed(() => {
   return graphLayout.value.nodes.find((node) => node.id === activeGraphNodeId.value)
     || graphLayout.value.nodes[0]
     || null
-})
-const selectedGraphConnections = computed(() => {
+}) */
+/* const selectedGraphConnections = computed(() => {
   const current = selectedGraphNode.value
   if (!current) return []
   return graphLayout.value.links
@@ -652,7 +537,7 @@ const selectedGraphConnections = computed(() => {
       return other ? { id: other.id, label: other.label, relation: link.label } : null
     })
     .filter((item): item is { id: string; label: string; relation: string } => Boolean(item))
-})
+}) */
 const progressText = computed(() => {
   const index = memory.value?.processedChapterIndex
   if (index == null) return '尚未生成'
@@ -765,7 +650,7 @@ async function updateToCurrent() {
   }
 }
 
-async function redrawMap() {
+/* async function redrawMap() {
   if (!book.value) return
   const next = await aiStore.redrawMap(book.value)
   const displayNext = next ? toAiBookDisplayMemory(next) : null
@@ -774,13 +659,13 @@ async function redrawMap() {
   } else {
     appStore.showToast('图片地图不可用，已显示关系图', 'warning')
   }
-}
+} */
 
-function selectGraphNode(id: string) {
+/* function selectGraphNode(id: string) {
   selectedGraphNodeId.value = id
-}
+} */
 
-function toggleLocation(name: string) {
+/* function toggleLocation(name: string) {
   const key = normalizeKey(name)
   const next = new Set(collapsedLocationIds.value)
   if (next.has(key)) {
@@ -789,11 +674,11 @@ function toggleLocation(name: string) {
     next.add(key)
   }
   collapsedLocationIds.value = next
-}
+} */
 
-function isLocationCollapsed(name: string) {
+/* function isLocationCollapsed(name: string) {
   return collapsedLocationIds.value.has(normalizeKey(name))
-}
+} */
 
 function toggleWorldviewGroup(category: string) {
   const key = normalizeKey(category)
@@ -806,9 +691,9 @@ function toggleWorldviewGroup(category: string) {
   collapsedWorldviewCategories.value = next
 }
 
-function graphLabelWidth(label: string) {
+/* function graphLabelWidth(label: string) {
   return Math.max(44, Math.min(108, label.length * 14 + 22))
-}
+} */
 
 function saveConfig() {
   if (configDraft.modelSource === 'server' && !canUseServerModel.value) {
@@ -856,9 +741,9 @@ async function resolveChapterContent(index: number, chapter: BookChapter) {
   })
 }
 
-function formatTime(value: number) {
+/* function formatTime(value: number) {
   return new Date(value).toLocaleString()
-}
+} */
 
 function normalizeDisplayCharacters(characters: AiBookCharacter[]) {
   const byName = new Map<string, AiBookCharacter>()

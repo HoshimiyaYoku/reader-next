@@ -335,7 +335,7 @@ mod tests {
         let temp_dir = std::env::temp_dir().join("reader_world_map_test");
         let storage = WorldMapStorage::new(temp_dir.to_str().unwrap());
 
-        let mut spec = WorldMapSpec {
+        let spec = WorldMapSpec {
             metadata: WorldMapMetadata {
                 novel_title: "测试小说".to_string(),
                 start_chapter: 1,
@@ -413,7 +413,7 @@ mod tests {
         let storage = WorldMapStorage::new(temp_dir.to_str().unwrap());
 
         // 先保存基础版本
-        let mut spec = WorldMapSpec {
+        let spec = WorldMapSpec {
             metadata: WorldMapMetadata {
                 novel_title: "测试小说".to_string(),
                 start_chapter: 1,

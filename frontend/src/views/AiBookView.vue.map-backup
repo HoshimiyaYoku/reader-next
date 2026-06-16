@@ -1,0 +1,121 @@
+        <section v-else-if="activeTab === 'map'" class="map-panel">
+          <div class="map-toolbar">
+            <div class="map-title">
+              <h2>世界地图</h2>
+              <p>{{ displayBaseMemory?.map?.updatedAt ? formatTime(displayBaseMemory.map.updatedAt) : '未生成' }}</p>
+            </div>
+            <button class="secondary-btn" :disabled="aiStore.isBusy" @click="redrawMap">
+              {{ aiStore.phase === 'map' ? '绘制中...' : '重绘地图' }}
+            </button>
+          </div>
+
+          <div class="map-frame">
+            <img v-if="displayBaseMemory?.map?.imageUrl" :src="displayBaseMemory.map.imageUrl" alt="世界地图" />
+            <div v-else-if="relationshipGraph.nodes.length" class="graph-fallback">
+              <div class="graph-canvas">
+                <div class="graph-legend">
+                  <span class="legend-location">地点</span>
+                  <span class="legend-character">角色</span>
+                </div>
+                <svg :viewBox="`0 0 ${graphLayout.width} ${graphLayout.height}`" role="img" aria-label="人物关系图">
+                  <defs>
+                    <marker id="graph-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                      <path d="M 0 0 L 10 5 L 0 10 z" />
+                    </marker>
+                  </defs>
+                  <g class="graph-links">
+                    <g
+                      v-for="link in graphLayout.links"
+                      :key="`${link.source}-${link.target}-${link.label}`"
+                      class="graph-link"
+                      :class="{ highlighted: link.highlighted, dimmed: link.dimmed, located: link.label === '位于' }"
+                    >
+                      <path :d="link.path" />
+                      <g v-if="link.showLabel" class="graph-link-label">
+                        <rect
+                          :x="link.labelX - graphLabelWidth(link.label) / 2"
+                          :y="link.labelY - 13"
+                          :width="graphLabelWidth(link.label)"
+                          height="22"
+                          rx="11"
+                        />
+                        <text :x="link.labelX" :y="link.labelY + 3">{{ link.label }}</text>
+                      </g>
+                    </g>
+                  </g>
+                  <g
+                    v-for="node in graphLayout.nodes"
+                    :key="node.id"
+                    class="graph-node"
+                    :class="{
+                      active: selectedGraphNode?.id === node.id,
+                      location: node.kind === 'location',
+                      dimmed: node.dimmed,
+                      connected: node.connectedToSelected,
+                    }"
+                    @click="selectGraphNode(node.id)"
+                  >
+                    <foreignObject :x="node.x" :y="node.y" :width="node.width" :height="node.height">
+                      <div xmlns="http://www.w3.org/1999/xhtml" class="graph-node-card">
+                        <span class="node-dot"></span>
+                        <strong>{{ node.label }}</strong>
+                      </div>
+                    </foreignObject>
+                  </g>
+                </svg>
+              </div>
+              <aside v-if="selectedGraphNode" class="graph-detail">
+                <div class="graph-detail-head">
+                  <span>{{ selectedGraphNode.kind === 'location' ? '地点' : '角色' }}</span>
+                  <strong>{{ selectedGraphNode.label }}</strong>
+                </div>
+                <p>{{ selectedGraphNode.detail || '暂无说明' }}</p>
+                <div v-if="selectedGraphConnections.length" class="graph-connection-list">
+                  <span>直接关联</span>
+                  <button
+                    v-for="connection in selectedGraphConnections"
+                    :key="`${connection.id}-${connection.relation}`"
+                    @click="selectGraphNode(connection.id)"
+                  >
+                    <strong>{{ connection.label }}</strong>
+                    <small>{{ connection.relation }}</small>
+                  </button>
+                </div>
+                <small>{{ displayBaseMemory?.map?.fallbackReason || '图片地图未生成，显示关系图' }}</small>
+              </aside>
+            </div>
+            <div v-else class="map-empty">暂无地图</div>
+          </div>
+
+          <div class="location-tree">
+            <article
+              v-for="row in visibleLocationRows"
+              :key="row.location.name"
+              class="location-item tree-location"
+              :style="{ '--depth-offset': `${row.depth * 22}px` }"
+            >
+              <div class="item-title">
+                <div class="location-title-wrap">
+                  <button
+                    v-if="row.hasChildren"
+                    class="location-toggle"
+                    :aria-label="isLocationCollapsed(row.location.name) ? '展开地点' : '收起地点'"
+                    @click="toggleLocation(row.location.name)"
+                  >
+                    {{ isLocationCollapsed(row.location.name) ? '+' : '-' }}
+                  </button>
+                  <span v-else class="location-toggle ghost"></span>
+                  <h3>{{ row.location.name }}</h3>
+                </div>
+                <span v-if="row.location.kind">{{ row.location.kind }}</span>
+              </div>
+              <p>{{ row.location.description }}</p>
+              <div class="meta-line">
+                <span v-if="row.location.status">状态：{{ row.location.status }}</span>
+                <span v-if="row.location.parentName">上级：{{ row.location.parentName }}</span>
+                <span v-if="row.location.relatedCharacters?.length">相关：{{ row.location.relatedCharacters.join('、') }}</span>
+              </div>
+            </article>
+            <EmptyState v-if="!visibleLocationRows.length" text="暂无地点资料" />
+          </div>
+        </section>

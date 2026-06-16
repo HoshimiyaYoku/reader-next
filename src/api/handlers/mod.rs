@@ -10,6 +10,7 @@ mod rss;
 mod update;
 mod user;
 mod webdav;
+mod world_map;
 
 pub use ai_book::*;
 pub use ai_model::*;
@@ -37,6 +38,10 @@ pub use user::{
 pub use webdav::{
     delete_webdav_file, delete_webdav_file_list, get_webdav_file, get_webdav_file_list,
     upload_file_to_webdav, webdav_handler,
+};
+pub use world_map::{
+    build_world_map, generate_coordinates, get_review_items, get_world_map_spec,
+    resolve_review_item, save_world_map_spec, update_world_map,
 };
 
 use crate::error::error::ApiResponse;

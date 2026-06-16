@@ -1,0 +1,207 @@
+warning: unused variable: `state`
+   --> src/api/handlers/world_map.rs:188:11
+    |
+188 |     State(state): State<AppState>,
+    |           ^^^^^ help: if this is intentional, prefix it with an underscore: `_state`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `reader-rust` (lib) generated 1 warning (run `cargo fix --lib -p reader-rust` to apply 1 suggestion)
+warning: field `end_chapter` is never read
+  --> src/api/handlers/world_map.rs:28:9
+   |
+26 | pub struct UpdateWorldMapRequest {
+   |            --------------------- field in this struct
+27 |     pub book_url: String,
+28 |     pub end_chapter: i32,
+   |         ^^^^^^^^^^^
+   |
+   = note: `UpdateWorldMapRequest` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `book_url` and `comment` are never read
+  --> src/api/handlers/world_map.rs:45:9
+   |
+44 | pub struct ResolveReviewRequest {
+   |            -------------------- fields in this struct
+45 |     pub book_url: String,
+   |         ^^^^^^^^
+...
+48 |     pub comment: Option<String>,
+   |         ^^^^^^^
+   |
+   = note: `ResolveReviewRequest` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: struct `AiBookMemory` is never constructed
+ --> src/model/ai_book.rs:5:12
+  |
+5 | pub struct AiBookMemory {
+  |            ^^^^^^^^^^^^
+
+warning: struct `AiBookNote` is never constructed
+  --> src/model/ai_book.rs:25:12
+   |
+25 | pub struct AiBookNote {
+   |            ^^^^^^^^^^
+
+warning: struct `AiBookCharacter` is never constructed
+  --> src/model/ai_book.rs:33:12
+   |
+33 | pub struct AiBookCharacter {
+   |            ^^^^^^^^^^^^^^^
+
+warning: struct `AiBookRelationship` is never constructed
+  --> src/model/ai_book.rs:45:12
+   |
+45 | pub struct AiBookRelationship {
+   |            ^^^^^^^^^^^^^^^^^^
+
+warning: struct `AiBookLocation` is never constructed
+  --> src/model/ai_book.rs:55:12
+   |
+55 | pub struct AiBookLocation {
+   |            ^^^^^^^^^^^^^^
+
+warning: struct `AiBookMap` is never constructed
+  --> src/model/ai_book.rs:66:12
+   |
+66 | pub struct AiBookMap {
+   |            ^^^^^^^^^
+
+warning: struct `BookListRule` is never constructed
+ --> src/model/rule.rs:5:12
+  |
+5 | pub struct BookListRule {
+  |            ^^^^^^^^^^^^
+
+warning: function `eval_js_search_with_source` is never used
+  --> src/parser/js.rs:73:8
+   |
+73 | pub fn eval_js_search_with_source(
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `get` and `save_for_book` are never used
+  --> src/service/ai_book_service.rs:26:18
+   |
+18 | impl AiBookService {
+   | ------------------ methods in this implementation
+...
+26 |     pub async fn get(
+   |                  ^^^
+...
+77 |     pub async fn save_for_book(
+   |                  ^^^^^^^^^^^^^
+
+warning: method `clear_source_cookie` is never used
+   --> src/service/book_service.rs:119:18
+    |
+ 69 | impl BookService {
+    | ---------------- method in this implementation
+...
+119 |     pub async fn clear_source_cookie(&self, user_ns: &str, source_url: &str) {
+    |                  ^^^^^^^^^^^^^^^^^^^
+
+warning: methods `save_incremental`, `delete`, and `append_jsonl` are never used
+   --> src/service/world_map_storage.rs:143:18
+    |
+ 14 | impl WorldMapStorage {
+    | -------------------- methods in this implementation
+...
+143 |     pub async fn save_incremental(
+    |                  ^^^^^^^^^^^^^^^^
+...
+184 |     pub async fn delete(&self, user_ns: &str, book_key: &str) -> Result<bool, AppError> {
+    |                  ^^^^^^
+...
+293 |     async fn append_jsonl<T: Serialize>(
+    |              ^^^^^^^^^^^^
+
+warning: struct `WorldMapDelta` is never constructed
+   --> src/service/world_map_storage.rs:322:12
+    |
+322 | pub struct WorldMapDelta {
+    |            ^^^^^^^^^^^^^
+
+warning: methods `infer_position`, `compute_confidence`, and `infer_from_name` are never used
+   --> src/service/world_map_inference.rs:114:12
+    |
+  8 | impl WorldMapInferenceEngine {
+    | ---------------------------- methods in this implementation
+...
+114 |     pub fn infer_position(
+    |            ^^^^^^^^^^^^^^
+...
+157 |     pub fn compute_confidence(&self, evidence: &Evidence) -> f64 {
+    |            ^^^^^^^^^^^^^^^^^^
+...
+191 |     fn infer_from_name(&self, name: &str) -> Option<Direction> {
+    |        ^^^^^^^^^^^^^^^
+
+warning: fields `entities` and `relations` are never read
+   --> src/service/world_map_inference.rs:210:9
+    |
+209 | pub struct InferenceContext {
+    |            ---------------- fields in this struct
+210 |     pub entities: HashMap<String, WorldMapEntity>,
+    |         ^^^^^^^^
+211 |     pub relations: Vec<WorldMapRelation>,
+    |         ^^^^^^^^^
+
+warning: field `resolution_hint` is never read
+   --> src/service/world_map_inference.rs:231:9
+    |
+230 | pub struct ConflictResolution {
+    |            ------------------ field in this struct
+231 |     pub resolution_hint: ResolutionHint,
+    |         ^^^^^^^^^^^^^^^
+    |
+    = note: `ConflictResolution` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: struct `PositionInference` is never constructed
+   --> src/service/world_map_inference.rs:239:12
+    |
+239 | pub struct PositionInference {
+    |            ^^^^^^^^^^^^^^^^^
+
+warning: struct `ReasoningStep` is never constructed
+   --> src/service/world_map_inference.rs:248:12
+    |
+248 | pub struct ReasoningStep {
+    |            ^^^^^^^^^^^^^
+
+warning: function `direction_zh` is never used
+   --> src/service/world_map_inference.rs:256:4
+    |
+256 | fn direction_zh(direction: &Direction) -> &'static str {
+    |    ^^^^^^^^^^^^
+
+warning: method `validate_coordinates` is never used
+   --> src/service/world_map_optimizer.rs:125:12
+    |
+  8 | impl WorldMapOptimizer {
+    | ---------------------- method in this implementation
+...
+125 |     pub fn validate_coordinates(
+    |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: method `delete` is never used
+   --> src/service/world_map_builder.rs:149:18
+    |
+ 16 | impl WorldMapBuilderService {
+    | --------------------------- method in this implementation
+...
+149 |     pub async fn delete(&self, user_ns: &str, book_key: &str) -> Result<bool, AppError> {
+    |                  ^^^^^^
+
+warning: `reader-rust` (bin "reader-rust") generated 23 warnings (1 duplicate)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.35s
+     Running `target/debug/reader-rust`
+Server starting...
+DEBUG: starting bootstrap::run
+DEBUG: config loaded: addr=0.0.0.0:8080
+DEBUG: db pool initialized
+DEBUG: http client created
+DEBUG: rule engine created
+2026-06-16T08:07:27.395881Z  INFO reader_rust::app::bootstrap: listening on 0.0.0.0:8080
+DEBUG: starting axum::serve on 0.0.0.0:8080
+Error: Address already in use (os error 48)
