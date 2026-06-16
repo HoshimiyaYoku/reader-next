@@ -283,13 +283,6 @@ pub fn build_router(state: AppState) -> Router {
         .route("/reader3/updateUser", post(handlers::update_user))
         .route("/reader3/uploadFile", post(handlers::upload_file))
         .route("/reader3/deleteFile", post(handlers::delete_file))
-        .route("/reader3/worldMap", get(handlers::get_world_map_spec))
-        .route("/reader3/worldMap/build", post(handlers::build_world_map))
-        .route("/reader3/worldMap/save", post(handlers::save_world_map_spec))
-        .route("/reader3/worldMap/update", post(handlers::update_world_map))
-        .route("/reader3/worldMap/generateCoordinates", post(handlers::generate_coordinates))
-        .route("/reader3/worldMap/reviewItems", get(handlers::get_review_items))
-        .route("/reader3/worldMap/resolve", post(handlers::resolve_review_item))
         .route("/reader3/getTxtTocRules", get(handlers::get_txt_toc_rules))
         .with_state(state.clone());
 

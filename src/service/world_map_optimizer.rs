@@ -51,42 +51,22 @@ impl WorldMapOptimizer {
             (50.0, 50.0, CoordinateConfidence::Relative),
         );
 
-        // 多轮迭代放置实体，直到无法再放置更多
-        let mut remaining_entities: Vec<_> = spec
-            .entities
-            .iter()
-            .filter(|e| e.id != anchor_id)
-            .collect();
-
-        let mut max_iterations = 10;
-        while !remaining_entities.is_empty() && max_iterations > 0 {
-            let mut placed_in_this_round = false;
-            let mut still_remaining = Vec::new();
-
-            for entity in remaining_entities {
-                if let Some(pos) = self.place_relative_to_any_placed(
-                    &entity.id,
-                    &relation_map,
-                    &placed,
-                ) {
-                    placed.insert(entity.id.clone(), pos);
-                    placed_in_this_round = true;
-                } else {
-                    still_remaining.push(entity);
-                }
-            }
-
-            remaining_entities = still_remaining;
-            max_iterations -= 1;
-
-            if !placed_in_this_round {
-                break;
-            }
-        }
-
-        // 剩余无法放置的实体
+        // 遍历所有实体
         for entity in &spec.entities {
-            if !placed.contains_key(&entity.id) {
+            if entity.id == anchor_id {
+                continue; // 锚点已放置
+            }
+
+            // 查找与已放置实体的关系
+            if let Some(pos) = self.place_relative_to_anchor(
+                &entity.id,
+                &anchor_id,
+                &relation_map,
+                &placed,
+            ) {
+                placed.insert(entity.id.clone(), pos);
+            } else {
+                // 无法放置
                 unplaced.push(UnplacedEntity {
                     entity_id: entity.id.clone(),
                     reason: "无空间关系，无法定位".to_string(),
@@ -279,28 +259,6 @@ impl WorldMapOptimizer {
                         CoordinateConfidence::Relative,
                     ));
                 }
-            }
-        }
-
-        None
-    }
-
-    /// 相对于任意已放置实体放置
-    fn place_relative_to_any_placed(
-        &self,
-        entity_id: &str,
-        relation_map: &HashMap<String, Vec<(String, RelationType, Option<Direction>)>>,
-        placed: &HashMap<String, (f64, f64, CoordinateConfidence)>,
-    ) -> Option<(f64, f64, CoordinateConfidence)> {
-        // 尝试与每个已放置的实体建立位置关系
-        for placed_id in placed.keys() {
-            if let Some(pos) = self.place_relative_to_anchor(
-                entity_id,
-                placed_id,
-                relation_map,
-                placed,
-            ) {
-                return Some(pos);
             }
         }
 

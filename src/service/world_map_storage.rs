@@ -4,7 +4,6 @@ use tokio::fs;
 
 use crate::error::error::AppError;
 use crate::model::world_map::*;
-use crate::util::hash::md5_hex;
 
 /// World Map Storage - JSONL 格式存储
 #[derive(Clone)]
@@ -25,9 +24,7 @@ impl WorldMapStorage {
         user_ns: &str,
         book_key: &str,
     ) -> Result<Option<WorldMapSpec>, AppError> {
-        let spec_dir = self
-            .existing_spec_dir(user_ns, book_key)
-            .unwrap_or_else(|| self.spec_dir(user_ns, book_key));
+        let spec_dir = self.spec_dir(user_ns, book_key);
         
         // 检查目录是否存在
         if !spec_dir.exists() {
@@ -128,14 +125,9 @@ impl WorldMapStorage {
         self.save_jsonl(&spec_dir.join("constraints/hard.jsonl"), &spec.constraints.hard).await?;
         self.save_jsonl(&spec_dir.join("constraints/soft.jsonl"), &spec.constraints.soft).await?;
 
-        // 保存坐标（如果有），清空时删除旧文件，避免 stale coordinates
-        let coordinates_path = spec_dir.join("coordinates.json");
+        // 保存坐标（如果有）
         if let Some(coords) = &spec.coordinates {
-            self.save_json(&coordinates_path, coords).await?;
-        } else if coordinates_path.exists() {
-            fs::remove_file(&coordinates_path)
-                .await
-                .map_err(|e| AppError::Internal(e.into()))?;
+            self.save_json(&spec_dir.join("coordinates.json"), coords).await?;
         }
 
         // 保存审查清单
@@ -190,9 +182,7 @@ impl WorldMapStorage {
 
     /// 删除地图规格书
     pub async fn delete(&self, user_ns: &str, book_key: &str) -> Result<bool, AppError> {
-        let spec_dir = self
-            .existing_spec_dir(user_ns, book_key)
-            .unwrap_or_else(|| self.spec_dir(user_ns, book_key));
+        let spec_dir = self.spec_dir(user_ns, book_key);
         
         if !spec_dir.exists() {
             return Ok(false);
@@ -213,34 +203,7 @@ impl WorldMapStorage {
             .join("data")
             .join(user_ns)
             .join("world-maps")
-            .join(Self::safe_book_dir(book_key))
-    }
-
-    /// 旧版本直接 join book_key；只作为读取迁移 fallback，不再写入。
-    fn legacy_spec_dir(&self, user_ns: &str, book_key: &str) -> PathBuf {
-        self.storage_dir
-            .join("data")
-            .join(user_ns)
-            .join("world-maps")
             .join(book_key)
-    }
-
-    fn existing_spec_dir(&self, user_ns: &str, book_key: &str) -> Option<PathBuf> {
-        let safe = self.spec_dir(user_ns, book_key);
-        if safe.exists() {
-            return Some(safe);
-        }
-
-        let legacy = self.legacy_spec_dir(user_ns, book_key);
-        if legacy.exists() {
-            return Some(legacy);
-        }
-
-        None
-    }
-
-    fn safe_book_dir(book_key: &str) -> String {
-        format!("book-{}", md5_hex(book_key))
     }
 
     /// 加载 JSON 文件
@@ -316,13 +279,12 @@ impl WorldMapStorage {
             lines.push(line);
         }
         
-        let mut content = lines.join("\n");
+        let content = lines.join("\n");
         if !content.is_empty() {
-            content.push('\n');
+            fs::write(path, content + "\n")
+                .await
+                .map_err(|e| AppError::Internal(e.into()))?;
         }
-        fs::write(path, content)
-            .await
-            .map_err(|e| AppError::Internal(e.into()))?;
         
         Ok(())
     }
@@ -371,19 +333,14 @@ mod tests {
     #[tokio::test]
     async fn test_save_and_load() {
         let temp_dir = std::env::temp_dir().join("reader_world_map_test");
-        let _ = std::fs::remove_dir_all(&temp_dir);
         let storage = WorldMapStorage::new(temp_dir.to_str().unwrap());
 
-        let spec = WorldMapSpec {
+        let mut spec = WorldMapSpec {
             metadata: WorldMapMetadata {
-                source_type: "ai_memory".to_string(),
                 novel_title: "测试小说".to_string(),
-                allow_later_chapter_info: false,
                 start_chapter: 1,
                 end_chapter: 10,
                 spec_version: "2.0".to_string(),
-                analysis_date: "2026-06-16".to_string(),
-                notes: None,
                 created_at: 1700000000,
                 updated_at: 1700000000,
                 total_entities: 2,
@@ -453,20 +410,15 @@ mod tests {
     #[tokio::test]
     async fn test_incremental_save() {
         let temp_dir = std::env::temp_dir().join("reader_world_map_test_incremental");
-        let _ = std::fs::remove_dir_all(&temp_dir);
         let storage = WorldMapStorage::new(temp_dir.to_str().unwrap());
 
         // 先保存基础版本
-        let spec = WorldMapSpec {
+        let mut spec = WorldMapSpec {
             metadata: WorldMapMetadata {
-                source_type: "ai_memory".to_string(),
                 novel_title: "测试小说".to_string(),
-                allow_later_chapter_info: false,
                 start_chapter: 1,
                 end_chapter: 10,
                 spec_version: "2.0".to_string(),
-                analysis_date: "2026-06-16".to_string(),
-                notes: None,
                 created_at: 1700000000,
                 updated_at: 1700000000,
                 total_entities: 1,
@@ -527,14 +479,10 @@ mod tests {
             new_relations: vec![],
             new_conflicts: vec![],
             updated_metadata: Some(WorldMapMetadata {
-                source_type: "ai_memory".to_string(),
                 novel_title: "测试小说".to_string(),
-                allow_later_chapter_info: false,
                 start_chapter: 1,
                 end_chapter: 20,
                 spec_version: "2.0".to_string(),
-                analysis_date: "2026-06-16".to_string(),
-                notes: None,
                 created_at: 1700000000,
                 updated_at: 1700001000,
                 total_entities: 2,
@@ -551,125 +499,5 @@ mod tests {
 
         // 清理
         let _ = storage.delete("test_user", "test_book_inc").await;
-    }
-
-    #[tokio::test]
-    async fn save_overwrites_empty_jsonl_and_removes_cleared_coordinates() {
-        let temp_dir = std::env::temp_dir().join("reader_world_map_test_clear_stale");
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        let storage = WorldMapStorage::new(temp_dir.to_str().unwrap());
-        let mut spec = test_spec("测试小说");
-        spec.coordinates = Some(WorldMapCoordinates {
-            status: CoordinateStatus::Feasible,
-            reason: None,
-            placed: vec![PlacedEntity {
-                entity_id: "E001".to_string(),
-                x: 50.0,
-                y: 50.0,
-                confidence: CoordinateConfidence::Relative,
-                constraints_satisfied: vec![],
-            }],
-            unplaced: vec![],
-        });
-
-        storage.save("test_user", "https://example.test/book/1", &spec).await.unwrap();
-
-        spec.entities.clear();
-        spec.relations.clear();
-        spec.coordinates = None;
-        storage.save("test_user", "https://example.test/book/1", &spec).await.unwrap();
-
-        let loaded = storage
-            .load("test_user", "https://example.test/book/1")
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(loaded.entities.is_empty());
-        assert!(loaded.relations.is_empty());
-        assert!(loaded.coordinates.is_none());
-
-        let _ = std::fs::remove_dir_all(temp_dir);
-    }
-
-    #[tokio::test]
-    async fn book_key_is_hashed_before_joining_storage_path() {
-        let temp_dir = std::env::temp_dir().join("reader_world_map_test_path_safe");
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        let storage = WorldMapStorage::new(temp_dir.to_str().unwrap());
-        let spec = test_spec("测试小说");
-        let book_url = "https://example.test/books/../evil?id=1";
-
-        storage.save("test_user", book_url, &spec).await.unwrap();
-
-        let world_maps_dir = temp_dir.join("data").join("test_user").join("world-maps");
-        let entries: Vec<_> = std::fs::read_dir(&world_maps_dir)
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
-            .collect();
-
-        assert_eq!(entries.len(), 1);
-        assert!(entries[0].starts_with("book-"));
-        assert!(!entries[0].contains('/'));
-        assert!(!world_maps_dir.join("https:").exists());
-
-        let _ = std::fs::remove_dir_all(temp_dir);
-    }
-
-    fn test_spec(title: &str) -> WorldMapSpec {
-        WorldMapSpec {
-            metadata: WorldMapMetadata {
-                source_type: "ai_memory".to_string(),
-                novel_title: title.to_string(),
-                allow_later_chapter_info: false,
-                start_chapter: 1,
-                end_chapter: 10,
-                spec_version: "2.0".to_string(),
-                analysis_date: "2026-06-16".to_string(),
-                notes: None,
-                created_at: 1700000000,
-                updated_at: 1700000000,
-                total_entities: 1,
-                total_relations: 1,
-            },
-            entities: vec![WorldMapEntity {
-                id: "E001".to_string(),
-                canonical_name: "阿尔托".to_string(),
-                aliases: vec![],
-                entity_type: EntityType::Settlement,
-                subtype: Some("city".to_string()),
-                first_chapter: 3,
-                evidence: Evidence {
-                    level: EvidenceLevel::A,
-                    chapter: 3,
-                    quote: "主角到达了阿尔托城".to_string(),
-                    context: None,
-                },
-                description: None,
-                faction_id: None,
-                related_entity_ids: vec![],
-            }],
-            relations: vec![WorldMapRelation {
-                id: "R001".to_string(),
-                from_id: "E001".to_string(),
-                to_id: "E002".to_string(),
-                relation_type: RelationType::Nearby,
-                direction: None,
-                bidirectional: false,
-                evidence: Evidence {
-                    level: EvidenceLevel::A,
-                    chapter: 5,
-                    quote: "阿尔托靠近黑暗山脉".to_string(),
-                    context: None,
-                },
-                constraint_type: ConstraintType::Hard,
-            }],
-            routes: vec![],
-            factions: vec![],
-            constraints: WorldMapConstraints::default(),
-            conflicts: vec![],
-            coordinates: None,
-            review_items: vec![],
-            statistics: WorldMapStatistics::default(),
-        }
     }
 }
