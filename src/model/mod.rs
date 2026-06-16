@@ -11,4 +11,3 @@ pub mod rss;
 pub mod rule;
 pub mod search;
 pub mod user;
-pub mod world_map;
