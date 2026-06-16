@@ -8,3 +8,4 @@ pub mod local_txt_book;
 pub mod search_relevance;
 pub mod update_service;
 pub mod user_service;
+pub mod world_map_storage;
