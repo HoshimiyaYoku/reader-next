@@ -64,11 +64,3 @@ LOG_LEVEL=debug
 LOG_LEVEL=debug
 cargo run
 ```
-
-生产环境建议:
-
-```bash
-LOG_LEVEL=info
-SERVER_PORT=80
-cargo run --release
-```

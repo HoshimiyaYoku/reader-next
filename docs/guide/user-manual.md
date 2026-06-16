@@ -40,7 +40,7 @@ Reader Next 是一个用 Rust 实现的书源阅读服务器，提供 Web 前端
 
 ### 访问系统
 
-在浏览器中输入你部署的 Reader Next 地址，例如本地开发环境：
+在浏览器中输入你的 Reader Next 地址，例如本地开发环境：
 ```
 http://localhost:5173
 ```

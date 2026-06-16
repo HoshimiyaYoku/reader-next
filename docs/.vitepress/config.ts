@@ -28,13 +28,6 @@ export default defineConfig({
             { text: '测试流程', link: '/guide/testing' }
           ]
         },
-        {
-          text: '部署',
-          items: [
-            { text: 'Docker部署', link: '/guide/docker' },
-            { text: '手动部署', link: '/guide/manual-deploy' }
-          ]
-        }
       ],
       '/api/': [
         {
