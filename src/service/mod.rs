@@ -10,3 +10,4 @@ pub mod update_service;
 pub mod user_service;
 pub mod world_map_storage;
 pub mod world_map_inference;
+pub mod world_map_optimizer;
