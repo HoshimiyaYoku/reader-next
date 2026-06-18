@@ -1,4 +1,4 @@
-use reader_rust::parser::js::eval_js;
+use reader_next::parser::js::eval_js;
 
 #[test]
 fn java_aes_base64_decode_to_string_decrypts_legado_paths() {

@@ -9,7 +9,7 @@ RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 
 # Copy pre-built binary
-COPY target/aarch64-unknown-linux-musl/release/reader-rust /app/reader-rust
+COPY target/aarch64-unknown-linux-musl/release/reader-next /app/reader-next
 
 # Copy frontend dist
 COPY frontend/dist /app/web/dist
@@ -30,4 +30,4 @@ EXPOSE 8080
 
 VOLUME ["/app/storage"]
 
-CMD ["./reader-rust"]
+CMD ["./reader-next"]

@@ -2,7 +2,7 @@
 
 Reader Next 是一个独立维护的阅读 3.0 Rust 服务端，提供书源管理、书籍搜索、章节解析、服务端书架、缓存、RSS、TTS、本地 TXT 上传和 AI 资料能力。
 
-它从 `reader-rust` 代码基础继续演进，但当前主线会优先按 `reader-next` 的使用体验和重构节奏推进。
+它从 Reader Next 代码基础继续演进，但当前主线会优先按 `reader-next` 的使用体验和重构节奏推进。
 
 ## 当前重点
 

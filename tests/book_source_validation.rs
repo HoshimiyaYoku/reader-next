@@ -1,11 +1,11 @@
 use axum::{response::Html, routing::get, Router};
-use reader_rust::crawler::http_client::HttpClient;
-use reader_rust::model::book_source::BookSource;
-use reader_rust::model::rule::SearchRule;
-use reader_rust::parser::rule_engine::RuleEngine;
-use reader_rust::service::book_service::BookService;
-use reader_rust::service::book_source_service::set_invalid_book_source_group;
-use reader_rust::storage::cache::file_cache::FileCache;
+use reader_next::crawler::http_client::HttpClient;
+use reader_next::model::book_source::BookSource;
+use reader_next::model::rule::SearchRule;
+use reader_next::parser::rule_engine::RuleEngine;
+use reader_next::service::book_service::BookService;
+use reader_next::service::book_source_service::set_invalid_book_source_group;
+use reader_next::storage::cache::file_cache::FileCache;
 use uuid::Uuid;
 
 async fn search_ok() -> Html<&'static str> {
@@ -37,7 +37,7 @@ async fn source_availability_is_valid_when_search_or_explore_has_results() {
     });
 
     let storage_dir =
-        std::env::temp_dir().join(format!("reader-rust-source-validation-{}", Uuid::new_v4()));
+        std::env::temp_dir().join(format!("reader-next-source-validation-{}", Uuid::new_v4()));
     let service = BookService::new(
         HttpClient::new(5, None).unwrap(),
         RuleEngine::new().unwrap(),

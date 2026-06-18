@@ -1,4 +1,4 @@
-use reader_rust::service::local_txt_book::{build_chapter_url, parse_txt_chapters};
+use reader_next::service::local_txt_book::{build_chapter_url, parse_txt_chapters};
 
 #[test]
 fn txt_parser_splits_common_chapter_headings() {
@@ -65,11 +65,11 @@ fn txt_chapter_urls_are_stable_by_book_url_and_index() {
 #[tokio::test]
 async fn txt_import_saves_book_index_and_content_for_server_bookshelf() {
     let storage_dir =
-        std::env::temp_dir().join(format!("reader-rust-local-txt-test-{}", std::process::id()));
+        std::env::temp_dir().join(format!("reader-next-local-txt-test-{}", std::process::id()));
     if storage_dir.exists() {
         std::fs::remove_dir_all(&storage_dir).unwrap();
     }
-    let service = reader_rust::service::local_txt_book::LocalTxtBookService::new(&storage_dir);
+    let service = reader_next::service::local_txt_book::LocalTxtBookService::new(&storage_dir);
     let bytes = "第1章 开始\n第一章内容。\n第二章 后来\n第二章内容。".as_bytes();
 
     let book = service
@@ -100,10 +100,10 @@ async fn txt_import_saves_book_index_and_content_for_server_bookshelf() {
 #[tokio::test]
 async fn txt_import_rejects_non_txt_files() {
     let storage_dir = std::env::temp_dir().join(format!(
-        "reader-rust-local-txt-reject-test-{}",
+        "reader-next-local-txt-reject-test-{}",
         std::process::id()
     ));
-    let service = reader_rust::service::local_txt_book::LocalTxtBookService::new(&storage_dir);
+    let service = reader_next::service::local_txt_book::LocalTxtBookService::new(&storage_dir);
 
     let err = service
         .import_txt_book("alice", "测试小说.md", "正文".as_bytes())
@@ -117,10 +117,10 @@ async fn txt_import_rejects_non_txt_files() {
 #[tokio::test]
 async fn txt_service_rejects_non_hash_local_txt_urls() {
     let storage_dir = std::env::temp_dir().join(format!(
-        "reader-rust-local-txt-path-test-{}",
+        "reader-next-local-txt-path-test-{}",
         std::process::id()
     ));
-    let service = reader_rust::service::local_txt_book::LocalTxtBookService::new(&storage_dir);
+    let service = reader_next::service::local_txt_book::LocalTxtBookService::new(&storage_dir);
 
     let err = service
         .get_chapter_list("alice", "local-txt:/tmp/escape")
@@ -134,13 +134,13 @@ async fn txt_service_rejects_non_hash_local_txt_urls() {
 #[tokio::test]
 async fn txt_delete_removes_imported_book_files() {
     let storage_dir = std::env::temp_dir().join(format!(
-        "reader-rust-local-txt-delete-test-{}",
+        "reader-next-local-txt-delete-test-{}",
         std::process::id()
     ));
     if storage_dir.exists() {
         std::fs::remove_dir_all(&storage_dir).unwrap();
     }
-    let service = reader_rust::service::local_txt_book::LocalTxtBookService::new(&storage_dir);
+    let service = reader_next::service::local_txt_book::LocalTxtBookService::new(&storage_dir);
     let book = service
         .import_txt_book("alice", "待删除.txt", "第一章 开始\n正文".as_bytes())
         .await
@@ -165,13 +165,13 @@ async fn txt_delete_removes_imported_book_files() {
 
 #[tokio::test]
 async fn saving_same_named_local_txt_books_keeps_distinct_book_urls() {
-    use reader_rust::crawler::http_client::HttpClient;
-    use reader_rust::parser::rule_engine::RuleEngine;
-    use reader_rust::service::book_service::BookService;
-    use reader_rust::storage::cache::file_cache::FileCache;
+    use reader_next::crawler::http_client::HttpClient;
+    use reader_next::parser::rule_engine::RuleEngine;
+    use reader_next::service::book_service::BookService;
+    use reader_next::storage::cache::file_cache::FileCache;
 
     let storage_dir = std::env::temp_dir().join(format!(
-        "reader-rust-local-txt-save-test-{}",
+        "reader-next-local-txt-save-test-{}",
         std::process::id()
     ));
     if storage_dir.exists() {
@@ -179,7 +179,7 @@ async fn saving_same_named_local_txt_books_keeps_distinct_book_urls() {
     }
 
     let local_service =
-        reader_rust::service::local_txt_book::LocalTxtBookService::new(&storage_dir);
+        reader_next::service::local_txt_book::LocalTxtBookService::new(&storage_dir);
     let book_service = BookService::new(
         HttpClient::new(5, None).unwrap(),
         RuleEngine::new().unwrap(),

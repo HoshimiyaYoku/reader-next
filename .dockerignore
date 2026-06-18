@@ -1,8 +1,8 @@
 # Build artifacts
 target/
 **/target/
-!target/x86_64-unknown-linux-musl/release/reader-rust
-!target/aarch64-unknown-linux-musl/release/reader-rust
+!target/x86_64-unknown-linux-musl/release/reader-next
+!target/aarch64-unknown-linux-musl/release/reader-next
 # Dependencies
 web/node_modules/
 

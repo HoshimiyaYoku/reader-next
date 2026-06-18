@@ -33,7 +33,7 @@ features:
 
 ## Reader Next
 
-Reader Next 从 `reader-rust` 代码基础继续演进，当前主线会优先服务自用体验、稳定阅读流程和后续大重构。
+Reader Next 从 Reader Next 代码基础继续演进，当前主线会优先服务自用体验、稳定阅读流程和后续大重构。
 
 这个仓库不是 GitHub fork，但本地仍保留 `upstream` 远端，方便以后按需同步原项目更新。
 

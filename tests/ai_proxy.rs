@@ -1,4 +1,4 @@
-use reader_rust::model::ai_proxy::{
+use reader_next::model::ai_proxy::{
     ai_proxy_timeout, build_ai_proxy_url, format_ai_proxy_upstream_error,
     validate_ai_proxy_image_url,
 };

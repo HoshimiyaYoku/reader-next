@@ -1,5 +1,5 @@
 [package]
-name = "reader-rust"
+name = "reader-next"
 version = "1.0.6"
 edition = "2021"
 

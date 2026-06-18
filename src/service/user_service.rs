@@ -831,7 +831,7 @@ mod tests {
 
     async fn create_user_service() -> (UserService, PathBuf) {
         let temp_dir =
-            std::env::temp_dir().join(format!("reader-rust-user-service-{}", random_string(8)));
+            std::env::temp_dir().join(format!("reader-next-user-service-{}", random_string(8)));
         let cfg = AppConfig {
             secure: true,
             storage_dir: temp_dir.to_string_lossy().to_string(),

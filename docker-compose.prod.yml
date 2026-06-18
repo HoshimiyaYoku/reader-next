@@ -3,8 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.prod
-    image: reader-rust:prod
-    container_name: reader-rust-prod
+    image: reader-next:prod
+    container_name: reader-next-prod
     restart: unless-stopped
     env_file:
       - .env.prod

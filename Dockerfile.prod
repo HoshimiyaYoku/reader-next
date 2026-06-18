@@ -21,7 +21,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata curl \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=backend-builder /app/target/release/reader-rust /app/reader-rust
+COPY --from=backend-builder /app/target/release/reader-next /app/reader-next
 COPY --from=frontend-builder /app/frontend/dist /app/web/dist
 RUN mkdir -p /app/storage/assets
 
@@ -36,4 +36,4 @@ ENV SERVER_HOST=0.0.0.0 \
 
 EXPOSE 8080
 VOLUME ["/app/storage"]
-CMD ["./reader-rust"]
+CMD ["./reader-next"]

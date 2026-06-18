@@ -63,7 +63,7 @@ export default defineConfig({
     ],
 
     editLink: {
-      pattern: 'https://github.com/Maple0517/reader-next/edit/master/docs/:path'
+      pattern: 'https://github.com/Maple0517/reader-next/edit/main/docs/:path'
     }
   }
 })

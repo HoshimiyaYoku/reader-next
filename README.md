@@ -2,7 +2,7 @@
 
 Reader Next 是一个独立维护的阅读 3.0 Rust 服务端项目，面向自定义书源、跨设备书架、章节缓存和 AI 辅助阅读场景。
 
-项目由 `reader-rust` 代码基础继续演进，当前主线会优先服务自用体验和后续重构，不再依赖原仓库的 issue / PR 响应节奏。
+项目由 Reader Next 代码基础继续演进，当前主线会优先服务自用体验和后续重构，不再依赖原仓库的 issue / PR 响应节奏。
 
 ## 文档
 
@@ -103,7 +103,7 @@ git switch upstream-master
 git merge --ff-only upstream/master
 ```
 
-从 `upstream-master` 挑选需要的更新，按需移植到 `master`。
+从 `upstream-master` 挑选需要的更新，按需移植到 `main`。
 
 ## 致谢
 

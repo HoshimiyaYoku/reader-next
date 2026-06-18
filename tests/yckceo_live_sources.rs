@@ -1,8 +1,8 @@
-use reader_rust::crawler::http_client::HttpClient;
-use reader_rust::model::book_source::{book_source_from_value, BookSource};
-use reader_rust::parser::rule_engine::RuleEngine;
-use reader_rust::service::book_service::BookService;
-use reader_rust::storage::cache::file_cache::FileCache;
+use reader_next::crawler::http_client::HttpClient;
+use reader_next::model::book_source::{book_source_from_value, BookSource};
+use reader_next::parser::rule_engine::RuleEngine;
+use reader_next::service::book_service::BookService;
+use reader_next::storage::cache::file_cache::FileCache;
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashSet;
@@ -28,7 +28,7 @@ async fn yckceo_live_non_webview_sources_end_to_end() {
         .expect("fetch YCKCeo index");
     assert!(!ids.is_empty(), "YCKCeo index returned no source ids");
 
-    let cache_root = env::temp_dir().join(format!("reader-rust-yckceo-{}", Uuid::new_v4()));
+    let cache_root = env::temp_dir().join(format!("reader-next-yckceo-{}", Uuid::new_v4()));
     let service = BookService::new(
         http.clone(),
         RuleEngine::new().expect("rule engine"),

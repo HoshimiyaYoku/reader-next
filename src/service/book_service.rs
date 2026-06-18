@@ -1707,7 +1707,7 @@ mod tests {
 
     fn test_book_service(name: &str) -> (BookService, PathBuf) {
         let storage_dir = std::env::temp_dir().join(format!(
-            "reader-rust-{name}-{}-{}",
+            "reader-next-{name}-{}-{}",
             std::process::id(),
             crate::util::time::now_ts()
         ));

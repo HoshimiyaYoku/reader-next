@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-DOCKER_REPO="${DOCKER_REPO:-docker.io/givenge/reader-rust}"
+DOCKER_REPO="${DOCKER_REPO:-docker.io/maple0517/reader-next}"
 BUMP_MODE="patch"
 INPUT_VERSION=""
 
@@ -16,7 +16,7 @@ Usage:
 Behavior:
   - If version is provided: release that exact version.
   - If version is omitted: auto-bump latest git tag with patch (+1).
-  - Default Docker repo: docker.io/givenge/reader-rust
+  - Default Docker repo: docker.io/maple0517/reader-next
     (override with DOCKER_REPO env)
 USAGE
 }
@@ -202,7 +202,7 @@ gh release create "$TAG" \
   --generate-notes
 
 echo "Release completed: $TAG"
-echo "GitHub release: https://github.com/givenge/reader-rust/releases/tag/${TAG}"
+echo "GitHub release: https://github.com/Maple0517/reader-next/releases/tag/${TAG}"
 echo "Docker tags:"
 echo "  ${DOCKER_REPO}:${TAG}-x86_64"
 echo "  ${DOCKER_REPO}:${TAG}-aarch64"

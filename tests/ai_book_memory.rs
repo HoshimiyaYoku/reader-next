@@ -1,10 +1,10 @@
-use reader_rust::model::ai_book::{AiBookMap, AiBookMemory, AiBookNote};
-use reader_rust::service::ai_book_service::AiBookService;
-use reader_rust::storage::db;
+use reader_next::model::ai_book::{AiBookMap, AiBookMemory, AiBookNote};
+use reader_next::service::ai_book_service::AiBookService;
+use reader_next::storage::db;
 
 fn temp_storage_dir(name: &str) -> String {
     let path = std::env::temp_dir().join(format!(
-        "reader-rust-ai-book-test-{}-{}",
+        "reader-next-ai-book-test-{}-{}",
         name,
         std::process::id()
     ));

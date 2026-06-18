@@ -48,8 +48,8 @@ Default behavior with no version argument:
 - If version files already match the target version, skip the release commit and tag the current commit.
 8. Push branch and tag to GitHub.
 9. Build Docker images (explicit platforms):
-- `--platform linux/amd64` -> `docker.io/givenge/reader-rust:vX.Y.Z-x86_64`
-- `--platform linux/arm64` -> `docker.io/givenge/reader-rust:vX.Y.Z-aarch64`
+- `--platform linux/amd64` -> `docker.io/maple0517/reader-next:vX.Y.Z-x86_64`
+- `--platform linux/arm64` -> `docker.io/maple0517/reader-next:vX.Y.Z-aarch64`
 10. Verify image architecture locally.
 11. Push versioned image tags.
 12. Update and push rolling tags:
@@ -59,11 +59,11 @@ Default behavior with no version argument:
 
 ## Notes
 
-- Docker repository defaults to `docker.io/givenge/reader-rust`.
+- Docker repository defaults to `docker.io/maple0517/reader-next`.
 - Override repository if needed:
 
 ```bash
-DOCKER_REPO=docker.io/yourname/reader-rust ./scripts/release.sh
+DOCKER_REPO=docker.io/yourname/reader-next ./scripts/release.sh
 ```
 
 - If release already exists or tag exists, script exits early to avoid accidental overwrite.

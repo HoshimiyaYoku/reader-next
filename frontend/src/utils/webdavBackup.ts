@@ -78,7 +78,7 @@ export async function createWebdavBackupPayload(): Promise<WebdavBackupPayload> 
   return {
     version: BACKUP_VERSION,
     createdAt: new Date().toISOString(),
-    app: 'reader-rust-frontend',
+    app: 'reader-next-frontend',
     bookshelf: {
       books,
       groups,
@@ -106,7 +106,7 @@ export function parseWebdavBackup(raw: string) {
   return {
     version: payload.version,
     createdAt: payload.createdAt || new Date().toISOString(),
-    app: payload.app || 'reader-rust-frontend',
+    app: payload.app || 'reader-next-frontend',
     bookshelf: {
       books: payload.bookshelf.books || [],
       groups: payload.bookshelf.groups || [],

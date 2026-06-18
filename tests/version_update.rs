@@ -1,4 +1,4 @@
-use reader_rust::service::update_service::{
+use reader_next::service::update_service::{
     build_update_info, is_newer_version, GithubRelease, UpdatePreferences,
 };
 
@@ -15,7 +15,7 @@ fn dismissed_latest_release_remains_update_without_reminder() {
     let release = GithubRelease {
         tag_name: "v1.0.6".to_string(),
         name: Some("v1.0.6".to_string()),
-        html_url: "https://github.com/givenge/reader-rust/releases/tag/v1.0.6".to_string(),
+        html_url: "https://github.com/Maple0517/reader-next/releases/tag/v1.0.6".to_string(),
         published_at: Some("2026-05-15T08:00:00Z".to_string()),
     };
     let preferences = UpdatePreferences {

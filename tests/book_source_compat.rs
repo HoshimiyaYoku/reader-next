@@ -1,13 +1,13 @@
 use axum::{extract::State, http::HeaderMap, response::Html, routing::get, Router};
-use reader_rust::crawler::fetcher::HttpMethod;
-use reader_rust::crawler::http_client::HttpClient;
-use reader_rust::crawler::url_analyzer::analyze_url;
-use reader_rust::model::book_source::{book_source_from_value, BookSource};
-use reader_rust::model::rule::{ContentRule, SearchRule, TocRule};
-use reader_rust::parser::rule_engine::RuleEngine;
-use reader_rust::parser::{html, jsonpath};
-use reader_rust::service::book_service::BookService;
-use reader_rust::storage::cache::file_cache::FileCache;
+use reader_next::crawler::fetcher::HttpMethod;
+use reader_next::crawler::http_client::HttpClient;
+use reader_next::crawler::url_analyzer::analyze_url;
+use reader_next::model::book_source::{book_source_from_value, BookSource};
+use reader_next::model::rule::{ContentRule, SearchRule, TocRule};
+use reader_next::parser::rule_engine::RuleEngine;
+use reader_next::parser::{html, jsonpath};
+use reader_next::service::book_service::BookService;
+use reader_next::storage::cache::file_cache::FileCache;
 use serde_json::json;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
@@ -336,7 +336,7 @@ async fn search_pipeline_uses_url_analyzer_final_url_and_login_check_js() {
     });
 
     let storage_dir =
-        std::env::temp_dir().join(format!("reader-rust-search-compat-{}", Uuid::new_v4()));
+        std::env::temp_dir().join(format!("reader-next-search-compat-{}", Uuid::new_v4()));
     let service = BookService::new(
         HttpClient::new(5, None).unwrap(),
         RuleEngine::new().unwrap(),
@@ -408,7 +408,7 @@ async fn content_pagination_stops_before_next_chapter_url() {
     });
 
     let storage_dir =
-        std::env::temp_dir().join(format!("reader-rust-content-test-{}", Uuid::new_v4()));
+        std::env::temp_dir().join(format!("reader-next-content-test-{}", Uuid::new_v4()));
     let service = BookService::new(
         HttpClient::new(5, None).unwrap(),
         RuleEngine::new().unwrap(),
@@ -450,7 +450,7 @@ fn explore_kinds_support_text_and_js_rules() {
     let service = BookService::new(
         HttpClient::new(5, None).unwrap(),
         RuleEngine::new().unwrap(),
-        FileCache::new(std::env::temp_dir().join("reader-rust-explore-kinds")),
+        FileCache::new(std::env::temp_dir().join("reader-next-explore-kinds")),
         std::env::temp_dir().to_str().unwrap(),
     );
     let text_source = BookSource {
@@ -486,7 +486,7 @@ fn explore_kinds_accept_relaxed_style_objects() {
     let service = BookService::new(
         HttpClient::new(5, None).unwrap(),
         RuleEngine::new().unwrap(),
-        FileCache::new(std::env::temp_dir().join("reader-rust-explore-kinds-relaxed")),
+        FileCache::new(std::env::temp_dir().join("reader-next-explore-kinds-relaxed")),
         std::env::temp_dir().to_str().unwrap(),
     );
     let source = BookSource {
@@ -520,7 +520,7 @@ fn explore_kinds_accept_relaxed_angle_item_objects() {
     let service = BookService::new(
         HttpClient::new(5, None).unwrap(),
         RuleEngine::new().unwrap(),
-        FileCache::new(std::env::temp_dir().join("reader-rust-explore-kinds-angle-items")),
+        FileCache::new(std::env::temp_dir().join("reader-next-explore-kinds-angle-items")),
         std::env::temp_dir().to_str().unwrap(),
     );
     let source = BookSource {

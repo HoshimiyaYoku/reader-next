@@ -1,9 +1,9 @@
 use axum::{http::HeaderMap, response::Json, routing::get, Router};
-use reader_rust::crawler::http_client::HttpClient;
-use reader_rust::model::{book_source::BookSource, rule::TocRule};
-use reader_rust::parser::rule_engine::RuleEngine;
-use reader_rust::service::book_service::BookService;
-use reader_rust::storage::cache::file_cache::FileCache;
+use reader_next::crawler::http_client::HttpClient;
+use reader_next::model::{book_source::BookSource, rule::TocRule};
+use reader_next::parser::rule_engine::RuleEngine;
+use reader_next::service::book_service::BookService;
+use reader_next::storage::cache::file_cache::FileCache;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -45,7 +45,7 @@ async fn chapter_list_requests_include_legacy_source_headers() {
     });
 
     let storage_dir =
-        std::env::temp_dir().join(format!("reader-rust-header-test-{}", Uuid::new_v4()));
+        std::env::temp_dir().join(format!("reader-next-header-test-{}", Uuid::new_v4()));
     let cache = FileCache::new(storage_dir.join("cache"));
     let service = BookService::new(
         HttpClient::new(5, None).unwrap(),
