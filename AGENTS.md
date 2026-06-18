@@ -13,13 +13,15 @@ cargo test --lib <test_name> # Single test
 ```
 
 ### Local Dev
+- Default to single-port mode: build the frontend, run the Rust server, and open `http://localhost:18080`.
+- Do not start the Vite dev server (`5173`) unless the user explicitly asks for frontend hot reload/debugging.
 - Default backend port is `18080`; check it before starting: `lsof -i :18080`.
 - If `18080` is occupied, use the next available port instead of reclaiming the process blindly.
 - Prefer explicit port override for local runs: `SERVER_PORT=18080 cargo run`.
 
 ### Frontend
 ```bash
-cd frontend && npm install && npm run dev    # Dev server
+cd frontend && npm install && npm run dev    # Hot-reload frontend only; keep proxy aligned with SERVER_PORT
 cd frontend && npm run build                 # Builds to frontend/dist/
 ```
 
@@ -70,5 +72,6 @@ JSON objects with `bookSourceUrl`, `bookSourceName`, `searchUrl`/`exploreUrl` (w
 ## Important Notes
 
 - **Frontend app**: `frontend/` is the Vue 3 + Vite frontend; production static files come from `frontend/dist/`.
+- **Default local URL**: use the Rust server URL (`http://localhost:18080`) because it serves both `/reader3/*` APIs and `frontend/dist` static files.
 - **`/storage/` is gitignored**: Contains user data and SQLite DB.
 - **No tests currently**: `cargo test` will pass but there are no test files written yet.
