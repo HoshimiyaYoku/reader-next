@@ -121,7 +121,7 @@ describe('aiBookConfig', () => {
     })
   })
 
-  it('auto-prefers server config when browser config would call the reader app itself', () => {
+  it('auto-prefers server config whenever server model is available', () => {
     const baseConfig = {
       ...DEFAULT_AI_BOOK_CONFIG,
       modelSource: 'browser' as const,
@@ -147,7 +147,7 @@ describe('aiBookConfig', () => {
       { ...baseConfig, textBaseUrl: 'http://127.0.0.1:8080' },
       true,
       'http://127.0.0.1:8081',
-    )).toBe(false)
+    )).toBe(true)
     expect(shouldAutoUseServerAiBookConfig(
       { ...baseConfig, textBaseUrl: 'http://127.0.0.1:8081' },
       false,
