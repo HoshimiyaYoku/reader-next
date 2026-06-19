@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 use crate::error::error::AppError;
 use crate::model::ai_model::{AiModelConfig, AiModelKind};
-use crate::model::ai_proxy::build_ai_proxy_url;
+use crate::model::ai_proxy::{ai_proxy_timeout, build_ai_proxy_url};
 use crate::model::chapter_summary::{ChapterSummaryConfig, ChapterSummaryRecord, GenerateChapterSummaryRequest};
 use crate::service::json_document_service::JsonDocumentService;
 use crate::util::time::now_ts;
@@ -101,7 +101,7 @@ impl ChapterSummaryService {
         user_ns: &str,
         req: GenerateChapterSummaryRequest,
         ai_config: AiModelConfig,
-        client: &Client,
+        _client: &Client,
     ) -> Result<ChapterSummaryRecord, AppError> {
         let config = self.get_config().await?;
         self.validate_generation_input(&config, &req.content)?;
@@ -127,7 +127,8 @@ impl ChapterSummaryService {
             .map_err(AppError::BadRequest)?;
         let body = build_summary_model_body(path, &endpoint.model, &config, &req);
 
-        let mut builder = client
+        let model_client = Client::builder().timeout(ai_proxy_timeout()).build()?;
+        let mut builder = model_client
             .post(target)
             .header(reqwest::header::ACCEPT, "application/json")
             .json(&body);
