@@ -125,14 +125,7 @@ impl ChapterSummaryService {
         };
         let target = build_ai_proxy_url(&endpoint.base_url, path, endpoint.use_full_url)
             .map_err(AppError::BadRequest)?;
-        let body = json!({
-            "model": endpoint.model,
-            "temperature": config.temperature,
-            "messages": [
-                { "role": "system", "content": config.prompt },
-                { "role": "user", "content": build_chapter_summary_user_prompt(&config, &req) }
-            ]
-        });
+        let body = build_summary_model_body(path, &endpoint.model, &config, &req);
 
         let mut builder = client
             .post(target)
@@ -153,7 +146,7 @@ impl ChapterSummaryService {
         }
 
         let value: Value = response.json().await?;
-        let content = extract_chat_content(&value)?;
+        let content = extract_model_content(path, &value)?;
         let parsed = parse_summary_payload(&content)?;
         let now = now_ts();
         let old = self.get_summary(user_ns, &req.book_url, &req.chapter_url).await?;
@@ -218,7 +211,43 @@ fn trim_content_for_summary(content: &str) -> String {
     format!("{}\n\n……中间内容已省略……\n\n{}", head, tail)
 }
 
-fn extract_chat_content(value: &Value) -> Result<String, AppError> {
+fn build_summary_model_body(
+    path: &str,
+    model: &str,
+    config: &ChapterSummaryConfig,
+    req: &GenerateChapterSummaryRequest,
+) -> Value {
+    let user_prompt = build_chapter_summary_user_prompt(config, req);
+    if path.ends_with("/responses") {
+        return json!({
+            "model": model,
+            "temperature": config.temperature,
+            "input": [
+                { "role": "system", "content": config.prompt },
+                { "role": "user", "content": user_prompt }
+            ]
+        });
+    }
+    json!({
+        "model": model,
+        "temperature": config.temperature,
+        "messages": [
+            { "role": "system", "content": config.prompt },
+            { "role": "user", "content": user_prompt }
+        ]
+    })
+}
+
+fn extract_model_content(path: &str, value: &Value) -> Result<String, AppError> {
+    if path.ends_with("/responses") {
+        if let Some(text) = value.get("output_text").and_then(Value::as_str) {
+            let text = text.trim();
+            if !text.is_empty() {
+                return Ok(text.to_string());
+            }
+        }
+    }
+
     value
         .pointer("/choices/0/message/content")
         .and_then(Value::as_str)
@@ -320,6 +349,29 @@ mod tests {
         assert!(forced.is_none());
 
         let _ = fs::remove_dir_all(dir).await;
+    }
+
+    #[test]
+    fn responses_endpoint_uses_responses_body_and_output_text() {
+        let config = ChapterSummaryConfig::default();
+        let req = GenerateChapterSummaryRequest {
+            book_url: "book-a".to_string(),
+            chapter_url: "chapter-1".to_string(),
+            chapter_title: Some("第一章".to_string()),
+            content: "足够长的正文".repeat(80),
+            ..Default::default()
+        };
+
+        let body = build_summary_model_body("/v1/responses", "test-model", &config, &req);
+        assert!(body.get("messages").is_none());
+        assert!(body.get("input").is_some());
+
+        let content = extract_model_content(
+            "/v1/responses",
+            &json!({ "output_text": "{\"summary\":\"ok\",\"keyPoints\":[],\"questions\":[]}" }),
+        )
+        .unwrap();
+        assert!(content.contains("\"summary\":\"ok\""));
     }
 
     #[tokio::test]
