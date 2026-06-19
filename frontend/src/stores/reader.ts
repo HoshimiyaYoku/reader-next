@@ -59,6 +59,7 @@ export interface ReadConfig {
   chineseMode: 'simplified' | 'traditional'
   specialMode: 'normal' | 'simple'
   enablePreload: boolean
+  enableChapterSummaryAuto: boolean
 }
 
 const defaultConfig: ReadConfig = {
@@ -81,6 +82,7 @@ const defaultConfig: ReadConfig = {
   chineseMode: 'simplified',
   specialMode: 'normal',
   enablePreload: false,
+  enableChapterSummaryAuto: true,
 }
 
 function loadConfig(): ReadConfig {

@@ -249,6 +249,50 @@ export interface AiSpeechModelConfig extends AiModelEndpointConfig {
   responseFormat: string
 }
 
+
+export interface ChapterSummaryConfig {
+  enabled: boolean
+  autoEnabledDefault: boolean
+  prompt: string
+  detailLevel: 'short' | 'normal' | 'detailed'
+  maxWords: number
+  temperature: number
+  minContentChars: number
+}
+
+export interface ChapterSummaryConfigResponse {
+  config: ChapterSummaryConfig
+  canUseServerModel: boolean
+  isAdmin: boolean
+}
+
+export interface ChapterSummaryRecord {
+  bookUrl: string
+  chapterUrl: string
+  chapterIndex?: number
+  chapterTitle?: string
+  summary: string
+  keyPoints: string[]
+  questions: string[]
+  promptVersion: string
+  model: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface ChapterSummaryResponse {
+  summary: ChapterSummaryRecord | null
+}
+
+export interface GenerateChapterSummaryRequest {
+  bookUrl: string
+  chapterUrl: string
+  chapterIndex?: number
+  chapterTitle?: string
+  content: string
+  force?: boolean
+}
+
 export interface AiServerModelConfig {
   text: AiModelEndpointConfig
   image: AiImageModelConfig
