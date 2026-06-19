@@ -35,20 +35,20 @@
     <!-- PC Desktop Toolbars (Always shown) -->
     <ReaderSidebar
       v-if="!isMobile"
-      :chapter-summary-auto="config.enableChapterSummaryAuto"
       @goHome="goHome"
       @scrollTop="scrollToTop"
       @scrollBottom="scrollToBottom"
-      @toggleChapterSummaryAuto="toggleChapterSummaryAuto"
     />
     <ReaderToolbar
       v-if="!isMobile"
       :is-speaking="store.isSpeaking"
       :is-paused="store.isPaused"
+      :show-chapter-summary="showChapterSummary"
       @bookmark="toggleBookmark"
       @search="toggleSearch"
       @info="openInfo"
       @ai="openAiBook"
+      @toggleChapterSummary="toggleChapterSummary"
       @tts="handleTTS"
       @prev="prevChapter"
       @next="nextChapter"
@@ -163,9 +163,9 @@
         <div v-else>
           <div class="chapter-title">{{ store.currentChapter?.title || '加载中...' }}</div>
 
-          <section class="chapter-summary-card" :class="{ expanded: chapterSummaryExpanded }">
+          <section v-if="showChapterSummary" class="chapter-summary-card" :class="{ expanded: chapterSummaryExpanded }">
             <button class="chapter-summary-header" @click="chapterSummaryExpanded = !chapterSummaryExpanded">
-              <span class="summary-kicker">AI 本章梗概</span>
+              <span class="summary-kicker">摘要</span>
               <span v-if="chapterSummaryStatus === 'loading'" class="summary-muted">生成中…</span>
               <span v-else-if="chapterSummary" class="summary-muted">{{ chapterSummaryExpanded ? '收起' : chapterSummaryPreview }}</span>
               <span v-else-if="chapterSummaryError" class="summary-muted">{{ chapterSummaryError }}</span>
@@ -434,6 +434,7 @@ const chapterSummary = ref<ChapterSummaryRecord | null>(null)
 const chapterSummaryStatus = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
 const chapterSummaryError = ref('')
 const chapterSummaryExpanded = ref(false)
+const showChapterSummary = ref(true)
 let chapterSummaryTimer: number | null = null
 let chapterSummaryRequestId = 0
 const speechTimerNow = ref(Date.now())
@@ -1726,15 +1727,14 @@ async function openInfo() {
   }
 }
 
-function toggleChapterSummaryAuto() {
-  const next = !config.value.enableChapterSummaryAuto
-  store.updateConfig('enableChapterSummaryAuto', next)
-  if (next && !chapterSummary.value && chapterSummaryStatus.value !== 'loading') {
+function toggleChapterSummary() {
+  showChapterSummary.value = !showChapterSummary.value
+  if (showChapterSummary.value && !chapterSummary.value && chapterSummaryStatus.value !== 'loading') {
     scheduleAutoChapterSummary(currentChapterSummaryIdentity.value)
-  } else if (!next) {
+  } else if (!showChapterSummary.value) {
     clearChapterSummaryTimer()
   }
-  appStore.showToast(next ? '已开启自动摘要' : '已关闭自动摘要', 'success')
+  appStore.showToast(showChapterSummary.value ? '已显示摘要' : '已隐藏摘要', 'success')
 }
 
 function openAiBook() {

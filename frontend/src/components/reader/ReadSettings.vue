@@ -58,7 +58,7 @@
       </div>
 
       <div class="setting-row setting-row-top chapter-summary-settings">
-        <label>AI 本章梗概</label>
+        <label>AI 摘要</label>
         <div class="chapter-summary-panel">
           <div class="btn-group">
             <button class="opt-btn" :class="{ active: config.enableChapterSummaryAuto }" @click="store.updateConfig('enableChapterSummaryAuto', true)">自动</button>
