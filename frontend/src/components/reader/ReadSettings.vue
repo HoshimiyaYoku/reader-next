@@ -58,7 +58,7 @@
       </div>
 
       <div class="setting-row setting-row-top chapter-summary-settings">
-        <label>AI 摘要</label>
+        <label>摘要</label>
         <div class="chapter-summary-panel">
           <div class="btn-group">
             <button class="opt-btn" :class="{ active: config.enableChapterSummaryAuto }" @click="store.updateConfig('enableChapterSummaryAuto', true)">自动</button>
@@ -703,11 +703,15 @@ onMounted(async () => {
 }
 
 .chapter-summary-advanced {
+  align-self: flex-end;
+  box-sizing: border-box;
+}
+
+.chapter-summary-advanced[open] {
   width: 100%;
   border: 1px solid rgba(128, 128, 128, 0.18);
   border-radius: 12px;
   padding: 12px;
-  box-sizing: border-box;
 }
 
 .chapter-summary-advanced summary {
@@ -715,6 +719,7 @@ onMounted(async () => {
   color: var(--color-primary, #c97f3a);
   font-size: 13px;
   font-weight: 600;
+  list-style-position: inside;
 }
 
 .chapter-summary-grid {
