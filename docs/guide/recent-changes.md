@@ -1,86 +1,48 @@
 # 近期变更
 
-当前 `master` 历史已经整理成：
+这一轮主线集中在两块：阅读页章节摘要栏，以及 AI Text provider preset 兼容。旧的本地 TXT、AI 资料和跨设备进度能力继续保留。
 
-```text
-initial import: reader-rust baseline
-后续 Reader Next 改动
-```
+## 章节摘要栏
 
-下面是 `initial import` 之后的主要变更。
+- 摘要从阅读正文里的普通块，整理为阅读页侧边栏。
+- 侧边栏视觉改成更贴合阅读器的圆角、轻边框和低干扰背景。
+- 隐藏摘要栏后会记住状态，刷新页面不会自动弹出。
+- 摘要正文 header 缩小，减少占用阅读区域。
+- 摘要正文顶部空白收紧，正文开头增加更自然的阅读排版。
+- 要点列表不再每条一个高亮框，改为同一块内容里的紧凑列表。
+- 要点间距继续压缩，减少稀疏感。
 
-## AI 地图结果保留
+## 摘要设置整理
 
-Commit: `fix: preserve generated AI map images`
+- 设置页删掉重复的“默认自动”一类开关。
+- 保留必要的功能启用、自动生成和生成参数。
+- 生成前会先保存当前设置，避免点“重新生成”还是旧配置。
+- 详细程度分为短、正常、详细，并实际写入 prompt：
+  - 短：更短摘要，少量要点。
+  - 正常：中等摘要，覆盖主线和后续需记住的信息。
+  - 详细：更接近字数上限，保留更多动机、关系和关键信息。
 
-- 修复 AI 地图生成成功后仍被降级展示为关系图的问题。
-- 保留生成图片的路径和元数据。
-- 让 AI 资料页面能稳定展示地图生成结果。
+## AI Text provider preset
 
-## 本地 TXT 服务端书架
+- 文本模型配置支持独立的接口路径。
+- 默认继续使用 `/v1/chat/completions`。
+- 兼容常见 OpenAI 风格网关路径，以及 `/v1/responses`、`/v1/messages`、Gemini `:generateContent` 等转发入口。
+- 后端代理不再把所有文本请求强制拼到固定 Chat Completions 路径。
+- AI 资料和章节摘要都复用这套文本模型配置。
 
-Commits:
+## AI 资料
 
-- `docs: design local txt book import`
-- `feat: support local txt book uploads`
-- `fix: prevent local txt adjacent chapter panic`
-- `fix: hide cache labels for local txt books`
-- `fix: harden local txt upload handling`
+- AI 资料继续按已读章节整理剧情、世界观、角色、关系和地点。
+- 图片地图生成结果会保留；图片失败时降级为关系图。
+- 设置页区分本地模型配置和后端管理员配置。
 
-主要能力：
+## 本地 TXT 和进度
 
-- 上传 `.txt` 小说并加入服务端书架。
-- 自动解析章节，生成稳定的本地书籍 URL 和章节 URL。
-- 章节正文通过后端读取，不依赖单台设备的浏览器存储。
-- 阅读进度可以跟随服务端账号在设备间同步。
-- 删除本地 TXT 书籍时清理导入文件。
-- 本地 TXT 不展示远程缓存标签，避免 UI 误导。
-- 增加后端和前端测试覆盖。
+- 本地 TXT 小说可上传并加入服务端书架。
+- 服务端解析目录和正文，进度跟随账号同步。
+- 打开书籍和恢复会话时优先使用服务端最新阅读进度。
 
-设计说明：[本地 TXT 小说服务端书架导入设计](../superpowers/specs/2026-06-08-local-txt-books-design)。
+## 文档站
 
-## AI 资料 V2 设计
-
-Commit: `docs: design ai book v2 knowledge base`
-
-目标是把 AI 资料从一次性生成结果，推进到随阅读进度增量演进的结构化知识库。
-
-设计重点：
-
-- 按章节范围更新。
-- 分离摘要、角色、地点、关系、事件和世界观。
-- 保留 `category`、`importance`、`parentId / parentName` 和地图 fallback 信息。
-- 兼容旧 AI 资料数据。
-
-设计说明：[AI资料 V2 结构化知识库设计](../superpowers/specs/2026-06-11-ai-book-v2-design)。
-
-## 阅读进度同步
-
-Commit: `fix: sync reading progress across devices`
-
-- 打开书籍前从服务端读取最新书架书籍状态。
-- 恢复上次阅读会话时优先使用服务端最新阅读进度。
-- 避免多设备之间因为本地缓存会话较旧而读偏章节。
-- 增加针对打开书籍和恢复会话的前端测试。
-
-## GitHub Pages
-
-Commit: `docs: configure reader-next pages`
-
-- 文档站 base 改为 `/reader-next/`。
-- GitHub 链接改为 `Maple0517/reader-next`。
-- Pages workflow 支持 push 自动部署和手动触发。
-
-访问地址：
-
-```text
-https://maple0517.github.io/reader-next/
-```
-
-## README
-
-Commit: `docs: refresh reader-next readme`
-
-- README 改为 Reader Next 项目入口。
-- 更新文档站、开发命令、构建说明、测试说明和上游同步说明。
-- 去掉旧仓库 Docker 镜像说明，避免误导。
+- GitHub Pages 地址：`https://maple0517.github.io/reader-next/`
+- README 和 Pages 首页已调整为当前主线：章节摘要、AI 资料、provider preset、本地 TXT 和单端口开发。

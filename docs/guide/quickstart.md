@@ -13,27 +13,33 @@ git clone https://github.com/Maple0517/reader-next.git
 cd reader-next
 ```
 
-## 启动后端
+## 推荐启动方式
 
-```bash
-cargo run
-```
-
-默认监听：
-
-```text
-0.0.0.0:8080
-```
-
-后端 API 前缀为 `/reader3`。
-
-## 启动前端
-
-另开一个终端：
+Reader Next 本地默认用单端口模式：先构建前端，再让 Rust 服务端提供页面和 API。
 
 ```bash
 cd frontend
 npm install
+npm run build
+
+cd ..
+SERVER_PORT=18080 cargo run
+```
+
+打开：
+
+```text
+http://localhost:18080
+```
+
+后端 API 前缀为 `/reader3`。
+
+## 前端热更新
+
+只有需要调试前端时才运行 Vite：
+
+```bash
+cd frontend
 npm run dev
 ```
 
@@ -43,16 +49,7 @@ Vite 默认地址：
 http://localhost:5173
 ```
 
-开发环境会把 `/reader3` 代理到本地后端。
-
-## 构建前端
-
-```bash
-cd frontend
-npm run build
-```
-
-构建产物位于 `frontend/dist/`。后端生产运行时默认从这里提供静态文件。
+开发环境会把 `/reader3` 代理到本地后端。后端端口变化时，要同步检查 Vite 代理配置。
 
 ## 运行测试
 
@@ -76,25 +73,23 @@ cp .env.example .env
 | 配置项 | 默认值 | 说明 |
 | --- | --- | --- |
 | `SERVER_HOST` | `0.0.0.0` | 服务绑定地址 |
-| `SERVER_PORT` | `8080` | 服务端口 |
+| `SERVER_PORT` | `18080` | 服务端口 |
 | `DATABASE_URL` | `sqlite:storage/reader.db?mode=rwc` | SQLite 数据库 |
 | `WEB_ROOT` | `frontend/dist` | 前端静态资源目录 |
 | `LOG_LEVEL` | `info` | 日志级别 |
 
 更多配置见 [配置指南](./configuration)。
 
-## GitHub Pages 文档
-
-文档站由 GitHub Actions 发布：
-
-```text
-https://maple0517.github.io/reader-next/
-```
-
-本地预览文档：
+## 文档站
 
 ```bash
 cd docs
 npm install
 npm run docs:dev
+```
+
+线上地址：
+
+```text
+https://maple0517.github.io/reader-next/
 ```

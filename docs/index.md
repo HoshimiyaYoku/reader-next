@@ -3,47 +3,45 @@ layout: home
 
 hero:
   name: "Reader Next"
-  text: "独立维护的阅读 3.0 Rust 服务端"
-  tagline: 自定义书源、服务端书架、本地 TXT、跨设备进度和 AI 资料的一体化阅读服务。
+  text: "带 AI 阅读辅助的阅读 3.0 服务端"
+  tagline: 自定义书源、服务端书架、本地 TXT、章节摘要、AI 资料和模型 provider preset，集中在一个 Rust + Vue 应用里。
   actions:
     - theme: brand
       text: 快速开始
       link: /guide/quickstart
     - theme: alt
+      text: 章节摘要栏
+      link: /guide/chapter-summary
+    - theme: alt
       text: 近期变更
       link: /guide/recent-changes
-    - theme: alt
-      text: 用户手册
-      link: /guide/user-manual
 
 features:
-  - icon: ⚡
-    title: Rust 服务端
-    details: 基于 axum、tokio、reqwest 和 SQLite，负责书源解析、缓存、书架和用户数据。
-  - icon: 📚
-    title: 服务端书架
-    details: 支持远程书源书籍和本地 TXT 上传，书籍可在同一服务端账号下跨设备阅读。
-  - icon: 🔁
-    title: 进度同步
-    details: 打开书籍和恢复会话时优先使用服务端最新阅读进度，减少多设备读偏。
+  - icon: 📖
+    title: 阅读主链路
+    details: 书源搜索、目录解析、章节缓存、服务端书架、跨设备进度和本地 TXT 都走同一套后端。
+  - icon: ✦
+    title: 章节摘要栏
+    details: 阅读页侧边摘要支持自动生成、手动重生成、要点合并展示、隐藏状态持久化和详细程度控制。
   - icon: 🧠
     title: AI 资料
-    details: 按已读章节整理世界观、角色、关系和地图，并保留生成结果中的图片资料。
+    details: 按已读章节整理剧情、世界观、角色、地点、关系和地图，适合长篇小说回顾。
+  - icon: ⚙️
+    title: Provider preset
+    details: 文本模型接口路径可配置，兼容 OpenAI 风格网关、Responses、Claude/Gemini 兼容转发等常见部署。
 ---
 
-## Reader Next
+## 当前定位
 
-Reader Next 从 Reader Next 代码基础继续演进，当前主线会优先服务自用体验、稳定阅读流程和后续大重构。
+Reader Next 是一个独立维护的阅读服务端。它不追求做通用平台，优先把自用阅读体验做稳：书源阅读、本地 TXT、跨设备进度、AI 资料和章节摘要都围绕“长篇阅读不丢上下文”展开。
 
-这个仓库不是 GitHub fork，但本地仍保留 `upstream` 远端，方便以后按需同步原项目更新。
+## 最近主线
 
-## 近期主线
-
-- 保留 AI 地图生成后的图片结果，避免成功生成后又退回纯关系图。
-- 新增本地 TXT 小说上传，上传后进入服务端书架并支持目录、正文、删除和缓存语义。
-- 隐藏本地 TXT 书籍不适用的远程缓存标签，减少 UI 误导。
-- 修复本地 TXT 相邻章节边界导致的阅读异常。
-- 打开书籍和恢复会话时同步服务端最新阅读进度。
-- GitHub Pages 文档站切换到 `reader-next`。
+- 摘要栏从普通卡片改成阅读页侧边栏，支持隐藏后刷新不自动弹出。
+- 要点样式收敛为同一块内容，不再每条一个高亮框。
+- 摘要生成的详细程度变成真实 prompt 约束：短、正常、详细会影响摘要长度和要点数量。
+- 设置面板删掉重复开关，生成栏只保留必要控制。
+- AI Text provider preset 支持可配置文本接口路径，减少不同模型网关的接入摩擦。
+- 本地 TXT、AI 资料和跨设备进度继续保留为主线能力。
 
 继续阅读：[近期变更](/guide/recent-changes)。

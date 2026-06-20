@@ -3,7 +3,13 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   base: '/reader-next/',
   title: 'Reader Next',
-  description: '独立维护的阅读 3.0 Rust 服务端',
+  description: '带 AI 阅读辅助的阅读 3.0 Rust 服务端',
+
+  head: [
+    ['meta', { name: 'theme-color', content: '#111827' }],
+    ['meta', { property: 'og:title', content: 'Reader Next' }],
+    ['meta', { property: 'og:description', content: '带 AI 阅读辅助的阅读 3.0 Rust 服务端' }]
+  ],
 
   themeConfig: {
     nav: [
@@ -21,10 +27,11 @@ export default defineConfig({
             { text: '简介', link: '/guide/' },
             { text: '快速开始', link: '/guide/quickstart' },
             { text: '近期变更', link: '/guide/recent-changes' },
+            { text: '章节摘要栏', link: '/guide/chapter-summary' },
             { text: '配置', link: '/guide/configuration' },
             { text: '功能特性', link: '/guide/features' },
             { text: '用户手册', link: '/guide/user-manual' },
-            { text: 'AI资料', link: '/guide/ai-book' },
+            { text: 'AI 资料', link: '/guide/ai-book' },
             { text: '测试流程', link: '/guide/testing' }
           ]
         },

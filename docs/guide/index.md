@@ -1,17 +1,15 @@
 # 简介
 
-Reader Next 是一个独立维护的阅读 3.0 Rust 服务端，提供书源管理、书籍搜索、章节解析、服务端书架、缓存、RSS、TTS、本地 TXT 上传和 AI 资料能力。
-
-它从 Reader Next 代码基础继续演进，但当前主线会优先按 `reader-next` 的使用体验和重构节奏推进。
+Reader Next 是一个独立维护的阅读 3.0 Rust 服务端，前端使用 Vue 3。它把书源阅读、服务端书架、本地 TXT、跨设备进度和 AI 阅读辅助放在同一个应用里。
 
 ## 当前重点
 
-- **新版前端**：`frontend/`，Vue 3 + Vite + TypeScript + Pinia。
-- **服务端书架**：远程书源书籍和上传的本地 TXT 都进入统一书架。
-- **跨设备进度**：打开书籍和恢复会话时同步服务端最新阅读进度。
-- **本地 TXT**：支持上传、解析目录、阅读正文、删除导入文件。
-- **AI 资料**：围绕已读章节整理摘要、世界观、角色、关系和地图。
-- **文档站**：GitHub Pages 发布到 `https://maple0517.github.io/reader-next/`。
+- **阅读体验**：阅读页、目录、设置、TTS、章节缓存和进度恢复。
+- **服务端书架**：远程书源书籍和本地 TXT 使用统一书架。
+- **章节摘要栏**：在阅读页侧边显示本章摘要和要点，支持自动生成与手动重生成。
+- **AI 资料**：按已读章节维护剧情、世界观、角色、关系和地图资料。
+- **Provider preset**：文本模型接口路径可配置，便于接入不同 OpenAI 兼容网关。
+- **单端口开发**：默认 `18080`，Rust 服务端直接提供前端静态文件和 API。
 
 ## 架构概览
 
@@ -27,7 +25,7 @@ Vue 3 前端
 ## 主要目录
 
 - `src/api/`：HTTP handlers 和路由。
-- `src/service/`：业务逻辑。
+- `src/service/`：书源、书架、AI、章节摘要等业务逻辑。
 - `src/parser/`：规则解析引擎。
 - `src/crawler/`：HTTP 抓取。
 - `src/storage/`：SQLite 和文件缓存。
@@ -37,7 +35,7 @@ Vue 3 前端
 ## 下一步
 
 - [快速开始](./quickstart)
-- [近期变更](./recent-changes)
-- [功能特性](./features)
+- [章节摘要栏](./chapter-summary)
 - [AI 资料](./ai-book)
+- [近期变更](./recent-changes)
 - [API 文档](../api/)
