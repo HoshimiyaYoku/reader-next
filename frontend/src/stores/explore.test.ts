@@ -3,7 +3,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { useExploreStore } from './explore'
 import { useSourceStore } from './source'
 import { getBookSources } from '../api/source'
-import { exploreBook } from '../api/explore'
+import { exploreBook, getExploreKinds } from '../api/explore'
 import type { BookSource } from '../types'
 
 vi.mock('../api/source', () => ({
@@ -12,17 +12,21 @@ vi.mock('../api/source', () => ({
 
 vi.mock('../api/explore', () => ({
   exploreBook: vi.fn(),
+  getExploreKinds: vi.fn(),
 }))
 
 const getBookSourcesMock = vi.mocked(getBookSources)
 const exploreBookMock = vi.mocked(exploreBook)
+const getExploreKindsMock = vi.mocked(getExploreKinds)
 
 describe('explore store source sync', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     getBookSourcesMock.mockReset()
     exploreBookMock.mockReset()
+    getExploreKindsMock.mockReset()
     exploreBookMock.mockResolvedValue([])
+    getExploreKindsMock.mockRejectedValue(new Error('backend parser unavailable'))
   })
 
   it('repairs a stale active source when explore sources are already loaded', async () => {
@@ -36,6 +40,19 @@ describe('explore store source sync', () => {
     expect(store.activeSourceUrl).toBe('https://m.cuoceng.com')
     expect(store.categories.map((category) => category.title)).toEqual(['书 库', '排 行'])
     expect(store.activeCategoryUrl).toBe('/book/category/catalog.html')
+  })
+
+  it('uses backend parsed explore kinds for js exploreUrl sources', async () => {
+    const sourceStore = useSourceStore()
+    sourceStore.sources = [sourceWithJsExplore()]
+    getExploreKindsMock.mockResolvedValue([{ title: '玄幻', url: '/xuanhuan' }])
+    const store = useExploreStore()
+
+    await store.init()
+
+    expect(getExploreKindsMock).toHaveBeenCalledWith({ bookSourceUrl: 'https://js.example' })
+    expect(store.categories).toEqual([{ title: '玄幻', url: '/xuanhuan' }])
+    expect(store.activeCategoryUrl).toBe('/xuanhuan')
   })
 })
 
@@ -56,5 +73,14 @@ function sourceWithExplore(): BookSource {
         url: '/book/ranking.html',
       },
     ]),
+  }
+}
+
+function sourceWithJsExplore(): BookSource {
+  return {
+    bookSourceName: 'js source',
+    bookSourceUrl: 'https://js.example',
+    enabledExplore: true,
+    exploreUrl: '@js:JSON.stringify([{title:"玄幻",url:"/xuanhuan"}])',
   }
 }

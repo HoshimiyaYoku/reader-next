@@ -1,5 +1,6 @@
 import http from './http'
 import type { SearchBook } from '../types'
+import type { ExploreCategory } from '../utils/exploreCategories'
 
 export interface ExploreBookParams {
   bookSourceUrl: string
@@ -13,4 +14,17 @@ export interface ExploreBookParams {
  */
 export function exploreBook(params: ExploreBookParams) {
   return http.post<SearchBook[]>('/exploreBook', params).then((r) => r.data)
+}
+
+export function getExploreKinds(params: { bookSourceUrl: string }) {
+  return http.post<{ title?: unknown; url?: unknown }[]>('/getExploreKinds', params).then((r) =>
+    r.data
+      .map(
+        (item): ExploreCategory => ({
+          title: String(item.title || '').trim(),
+          url: String(item.url || '').trim(),
+        }),
+      )
+      .filter((item) => item.title),
+  )
 }

@@ -24,12 +24,14 @@ export function parseExploreCategories(rule?: string | null): ExploreCategory[] 
   }
 
   return trimmedRule
-    .split(/\n|<br>/i)
+    .split(/&&|\n|<br>/i)
     .map((line) => line.trim())
     .filter(Boolean)
     .flatMap((line) => {
-      if (!line.includes('::')) return []
-      const [title, url] = line.split('::').map((part) => part.trim())
+      const separatorIndex = line.indexOf('::')
+      if (separatorIndex === -1) return []
+      const title = line.slice(0, separatorIndex).trim()
+      const url = line.slice(separatorIndex + 2).trim()
       return title ? [{ title, url: url || '' }] : []
     })
 }

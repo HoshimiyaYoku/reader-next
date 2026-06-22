@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
-import { exploreBook } from '../api/explore'
+import { exploreBook, getExploreKinds } from '../api/explore'
 import { useSourceStore } from './source'
 import type { SearchBook, BookSource } from '../types'
 import {
@@ -20,6 +20,8 @@ export const useExploreStore = defineStore('explore', () => {
   const page = ref(1)
   const hasMore = ref(true)
   const error = ref<string | null>(null)
+  const categories = ref<ExploreCategory[]>([])
+  let categoryLoadId = 0
 
   // 筛选出启用了 explore 的书源
   const exploreSources = computed(() => {
@@ -31,15 +33,11 @@ export const useExploreStore = defineStore('explore', () => {
     return sourceStore.sources.find((s: BookSource) => s.bookSourceUrl === activeSourceUrl.value)
   })
 
-  // 解析当前书源的 exploreUrl 分类
-  const categories = computed<ExploreCategory[]>(() => {
-    return parseExploreCategories(currentSource.value?.exploreUrl)
-  })
-
-  function ensureActiveSource() {
+  async function ensureActiveSource() {
     if (exploreSources.value.length === 0) {
       activeSourceUrl.value = ''
       activeCategoryUrl.value = ''
+      categories.value = []
       books.value = []
       hasMore.value = false
       return
@@ -47,8 +45,12 @@ export const useExploreStore = defineStore('explore', () => {
 
     const activeSourceStillValid = exploreSources.value.some((source) => source.bookSourceUrl === activeSourceUrl.value)
     if (!activeSourceUrl.value || !activeSourceStillValid) {
-      setSource(exploreSources.value[0].bookSourceUrl)
+      await setSource(exploreSources.value[0].bookSourceUrl)
       return
+    }
+
+    if (categories.value.length === 0 && currentSource.value) {
+      await loadCategories(currentSource.value)
     }
 
     if (!categories.value.some((category) => category.url === activeCategoryUrl.value)) {
@@ -59,11 +61,40 @@ export const useExploreStore = defineStore('explore', () => {
     }
   }
 
-  function setSource(url: string) {
+  async function loadCategories(source: BookSource) {
+    const loadId = ++categoryLoadId
+    let next: ExploreCategory[]
+    try {
+      next = await getExploreKinds({ bookSourceUrl: source.bookSourceUrl })
+    } catch {
+      next = parseExploreCategories(source.exploreUrl)
+    }
+    if (loadId === categoryLoadId && activeSourceUrl.value === source.bookSourceUrl) {
+      categories.value = next
+    }
+  }
+
+  async function setSource(url: string) {
     const sourceChanged = activeSourceUrl.value !== url
     if (sourceChanged) {
       activeSourceUrl.value = url
+      activeCategoryUrl.value = ''
+      categories.value = []
+      books.value = []
+      hasMore.value = false
     }
+
+    const source = currentSource.value
+    if (!source) {
+      categories.value = []
+      activeCategoryUrl.value = ''
+      books.value = []
+      hasMore.value = false
+      return
+    }
+
+    await loadCategories(source)
+    if (activeSourceUrl.value !== source.bookSourceUrl) return
 
     const firstCategoryUrl = getInitialExploreCategoryUrl(categories.value)
     if (!firstCategoryUrl) {
@@ -84,7 +115,7 @@ export const useExploreStore = defineStore('explore', () => {
     if (!nextUrl) return
     if (activeCategoryUrl.value !== nextUrl) {
       activeCategoryUrl.value = nextUrl
-      resetAndFetch()
+      void resetAndFetch()
     }
   }
 
@@ -127,11 +158,11 @@ export const useExploreStore = defineStore('explore', () => {
     if (sourceStore.sources.length === 0) {
       await sourceStore.fetchSources()
     }
-    ensureActiveSource()
+    await ensureActiveSource()
   }
 
   watch(exploreSources, () => {
-    ensureActiveSource()
+    void ensureActiveSource()
   })
 
   return {
