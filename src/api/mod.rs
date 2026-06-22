@@ -7,8 +7,8 @@ use crate::service::{
     ai_book_service::AiBookService, ai_model_service::AiModelService,
     book_group_service::BookGroupService, book_service::BookService,
     book_source_service::BookSourceService, chapter_summary_service::ChapterSummaryService,
-    json_document_service::JsonDocumentService,
-    local_txt_book::LocalTxtBookService, update_service::UpdateService, user_service::UserService,
+    json_document_service::JsonDocumentService, local_txt_book::LocalTxtBookService,
+    update_service::UpdateService, user_service::UserService,
 };
 use std::sync::Arc;
 

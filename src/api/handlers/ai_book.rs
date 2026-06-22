@@ -27,7 +27,9 @@ pub async fn get_ai_book_memory(
     let book_url = required_book_url(req.book_url)?;
     ensure_shelf_book(&state, &user_ns, &book_url).await?;
     let memory = state.ai_book_service.get_value(&user_ns, &book_url).await?;
-    Ok(Json(ApiResponse::ok(serde_json::to_value(memory).unwrap_or_default())))
+    Ok(Json(ApiResponse::ok(
+        serde_json::to_value(memory).unwrap_or_default(),
+    )))
 }
 
 pub async fn save_ai_book_memory(
@@ -124,11 +126,7 @@ fn set_json_string_if_empty(value: &mut Value, key: &str, next: String) -> Resul
     let object = value
         .as_object_mut()
         .ok_or_else(|| AppError::BadRequest("AI memory must be a JSON object".to_string()))?;
-    let current = object
-        .get(key)
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim();
+    let current = object.get(key).and_then(Value::as_str).unwrap_or("").trim();
     if current.is_empty() {
         object.insert(key.to_string(), Value::String(next));
     }
