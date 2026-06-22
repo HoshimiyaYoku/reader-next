@@ -2,6 +2,29 @@
 
 This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
+## Local Private Context
+
+- Before any VPS/deployment work, also read the local-only file included below if it exists.
+- Keep real VPS host, username, SSH password or private-key notes in `AGENTS.local.md`; do **not** commit those values.
+- `AGENTS.local.md` is intentionally ignored by git. If a value is missing, ask the user instead of guessing.
+- Do not print secrets, private keys, or passphrases in final answers, logs, PR bodies, or commits.
+
+@/Users/maple/Documents/reader/AGENTS.local.md
+
+## Development Workflow
+
+1. Develop on the local MacBook Air in `/Users/maple/Documents/reader`.
+2. For non-trivial development tasks, use Superpowers first, use CodeGraph before code exploration/edits, and follow RTK guidance from `/Users/maple/.codex/RTK.md`.
+   - If CodeGraph is not initialized, run `codegraph init && codegraph index` before architecture/symbol analysis.
+   - Prefer CodeGraph for symbol lookup, call graphs, feature tracing, and impact checks; use `rg` only for raw text or confirmation.
+3. Run the narrowest relevant local checks before pushing. Common checks:
+   - Backend: `cargo test` or a focused `cargo test <name>`
+   - Frontend: `cd frontend && npm test` / `npm run build` as relevant
+   - Formatting/sanity: `git diff --check`
+4. Commit focused changes locally, then push to GitHub.
+5. Deployment is GitHub-driven: pushing/merging to `main` automatically triggers the existing GitHub Actions deploy workflow. Do not duplicate GitHub Actions secret details here.
+6. After push, verify the GitHub Actions run and, when needed, verify the live VPS service directly.
+
 ## Commands
 
 ### Rust Backend
@@ -74,4 +97,4 @@ JSON objects with `bookSourceUrl`, `bookSourceName`, `searchUrl`/`exploreUrl` (w
 - **Frontend app**: `frontend/` is the Vue 3 + Vite frontend; production static files come from `frontend/dist/`.
 - **Default local URL**: use the Rust server URL (`http://localhost:18080`) because it serves both `/reader3/*` APIs and `frontend/dist` static files.
 - **`/storage/` is gitignored**: Contains user data and SQLite DB.
-- **No tests currently**: `cargo test` will pass but there are no test files written yet.
+- **Tests exist**: prefer focused tests first, then broader `cargo test` / frontend checks when relevant.

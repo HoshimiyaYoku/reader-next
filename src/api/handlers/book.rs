@@ -646,7 +646,6 @@ fn compact_global_text(value: &str) -> String {
         .flat_map(char::to_lowercase)
         .collect()
 }
-
 fn take_search_book_multi_sse_batch(
     query: &str,
     books: Vec<SearchBook>,
