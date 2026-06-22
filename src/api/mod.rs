@@ -4,10 +4,10 @@ pub mod router;
 
 use crate::app::config::AppConfig;
 use crate::service::{
-    ai_book_service::AiBookService, ai_model_service::AiModelService,
-    book_group_service::BookGroupService, book_service::BookService,
-    book_source_service::BookSourceService, chapter_summary_service::ChapterSummaryService,
-    json_document_service::JsonDocumentService,
+    ai_book_catchup_service::AiBookCatchupService, ai_book_service::AiBookService,
+    ai_model_service::AiModelService, book_group_service::BookGroupService,
+    book_service::BookService, book_source_service::BookSourceService,
+    chapter_summary_service::ChapterSummaryService, json_document_service::JsonDocumentService,
     local_txt_book::LocalTxtBookService, update_service::UpdateService, user_service::UserService,
 };
 use std::sync::Arc;
@@ -22,6 +22,7 @@ pub struct AppState {
     pub local_txt_book_service: Arc<LocalTxtBookService>,
     pub json_document_service: Arc<JsonDocumentService>,
     pub ai_book_service: Arc<AiBookService>,
+    pub ai_book_catchup_service: Arc<AiBookCatchupService>,
     pub ai_model_service: Arc<AiModelService>,
     pub chapter_summary_service: Arc<ChapterSummaryService>,
     pub update_service: Arc<UpdateService>,

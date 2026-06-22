@@ -26,11 +26,25 @@
             <span></span>
             自动更新
           </label>
-          <button class="primary-btn" :disabled="aiStore.isBusy" @click="updateToCurrent">
-            {{ aiStore.phase === 'text' ? '更新中...' : '更新到当前进度' }}
+          <button class="primary-btn" :disabled="catchupActionDisabled" @click="updateToCurrent">
+            {{ catchupActionLabel }}
           </button>
         </div>
       </header>
+
+      <div v-if="catchupStatus" class="catchup-strip" :class="`is-${catchupStatus.status}`">
+        <div class="catchup-head">
+          <div class="catchup-main">
+            <strong>补齐任务 · {{ catchupStatusLabel }}</strong>
+            <span>{{ catchupProgressSummary }}</span>
+          </div>
+          <small>{{ catchupUpdatedAtText }}</small>
+        </div>
+        <div class="catchup-progress-track" role="progressbar" :aria-valuenow="catchupProgressPercent" aria-valuemin="0" aria-valuemax="100">
+          <div class="catchup-progress-bar" :style="{ width: `${catchupProgressPercent}%` }"></div>
+        </div>
+        <p>{{ catchupDetailText }}</p>
+      </div>
 
       <div v-if="statusNotice" class="status-strip" :class="{ error: statusNotice.isError }">
         <div class="status-main">
@@ -82,6 +96,16 @@
                       <span v-if="note.confidence">{{ note.confidence }}</span>
                     </div>
                     <p>{{ note.content }}</p>
+                    <details v-if="hasEvidence(note.evidence)" class="evidence-block">
+                      <summary>来源</summary>
+                      <ul>
+                        <li v-for="item in visibleEvidence(note.evidence)" :key="evidenceKey(item)">
+                          <strong>{{ evidenceChapterLabel(item) }}</strong>
+                          <span>{{ item.note }}</span>
+                          <blockquote v-if="item.quote">{{ item.quote }}</blockquote>
+                        </li>
+                      </ul>
+                    </details>
                   </article>
                 </div>
               </section>
@@ -131,6 +155,16 @@
               <span v-if="character.lastSeenChapter">最近：{{ character.lastSeenChapter }}</span>
               <span v-if="character.aliases?.length">别名：{{ character.aliases.join('、') }}</span>
             </div>
+            <details v-if="hasEvidence(character.evidence)" class="evidence-block">
+              <summary>来源</summary>
+              <ul>
+                <li v-for="item in visibleEvidence(character.evidence)" :key="evidenceKey(item)">
+                  <strong>{{ evidenceChapterLabel(item) }}</strong>
+                  <span>{{ item.note }}</span>
+                  <blockquote v-if="item.quote">{{ item.quote }}</blockquote>
+                </li>
+              </ul>
+            </details>
           </article>
           <EmptyState v-if="!filteredCharacters.length" :text="importantCharacters.length ? '没有匹配的角色' : '暂无重要角色资料'" />
         </section>
@@ -143,6 +177,16 @@
               <strong>{{ relationship.target }}</strong>
             </div>
             <p>{{ relationship.description || relationship.status || '暂无说明' }}</p>
+            <details v-if="hasEvidence(relationship.evidence)" class="evidence-block">
+              <summary>来源</summary>
+              <ul>
+                <li v-for="item in visibleEvidence(relationship.evidence)" :key="evidenceKey(item)">
+                  <strong>{{ evidenceChapterLabel(item) }}</strong>
+                  <span>{{ item.note }}</span>
+                  <blockquote v-if="item.quote">{{ item.quote }}</blockquote>
+                </li>
+              </ul>
+            </details>
           </article>
           <EmptyState v-if="!displayRelationships.length" text="暂无重要人物关系" />
         </section>
@@ -151,7 +195,8 @@
           <div class="map-toolbar">
             <div class="map-title">
               <h2>世界地图</h2>
-              <p>{{ displayBaseMemory?.map?.updatedAt ? formatTime(displayBaseMemory.map.updatedAt) : '未生成' }}</p>
+              <p>{{ mapStatusText }}</p>
+              <p v-if="displayBaseMemory?.mapDirty" class="map-dirty-hint">地点有新变化，点击重绘地图手动生成。</p>
             </div>
             <button class="secondary-btn" :disabled="aiStore.isBusy" @click="redrawMap">
               {{ aiStore.phase === 'map' ? '绘制中...' : '重绘地图' }}
@@ -264,6 +309,16 @@
                 <span v-if="row.location.parentName">上级：{{ row.location.parentName }}</span>
                 <span v-if="row.location.relatedCharacters?.length">相关：{{ row.location.relatedCharacters.join('、') }}</span>
               </div>
+              <details v-if="hasEvidence(row.location.evidence)" class="evidence-block">
+                <summary>来源</summary>
+                <ul>
+                  <li v-for="item in visibleEvidence(row.location.evidence)" :key="evidenceKey(item)">
+                    <strong>{{ evidenceChapterLabel(item) }}</strong>
+                    <span>{{ item.note }}</span>
+                    <blockquote v-if="item.quote">{{ item.quote }}</blockquote>
+                  </li>
+                </ul>
+              </details>
             </article>
             <EmptyState v-if="!visibleLocationRows.length" text="暂无地点资料" />
           </div>
@@ -293,6 +348,11 @@
             <p class="settings-hint">
               后端配置由管理员保存到服务器；只有开启 AI 模型权限的账号才能使用。自己配置仍只保存在当前浏览器。
             </p>
+            <div class="runtime-card">
+              <span>当前实际使用</span>
+              <strong>{{ activeTextRuntime.sourceLabel }} · {{ activeTextRuntime.model }}</strong>
+              <small>{{ activeTextRuntime.path }}</small>
+            </div>
           </article>
 
           <div v-if="configDraft.modelSource === 'server'" class="settings-cards">
@@ -578,19 +638,20 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineComponent, h, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, defineComponent, h, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { getAiBookCatchupStatus, pauseAiBookCatchup, startAiBookCatchup } from '../api/aiBook'
 import { saveAiModelConfig } from '../api/aiModel'
 import { getBookContent, getChapterList, getShelfBook } from '../api/bookshelf'
 import { useAiBookStore } from '../stores/aiBook'
 import { useAppStore } from '../stores/app'
 import { useReaderStore } from '../stores/reader'
 import type {
-  AiBookCharacter,
   AiBookConfig,
-  AiBookLocation,
+  AiBookCatchupStatus,
+  AiBookCatchupTaskStatus,
+  AiBookEvidence,
   AiBookMemory,
-  AiBookRelationship,
   AiServerModelConfig,
   Book,
   BookChapter,
@@ -600,11 +661,18 @@ import type {
 } from '../types'
 import { buildAiBookRelationshipGraph, layoutAiBookRelationshipGraph } from '../utils/aiBookGraph'
 import { buildAiBookLocationRows, groupAiBookWorldview } from '../utils/aiBookPresentation'
+import {
+  filterDisplayCharacters,
+  normalizeDisplayCharacters,
+  normalizeDisplayLocations,
+  normalizeDisplayRelationships,
+} from '../utils/aiBookSelectors'
 import { isAiBookMemoryV2, toAiBookDisplayMemory } from '../utils/aiBookV2'
 import {
   DEFAULT_IMAGE_MODEL_PATH,
   DEFAULT_SPEECH_MODEL_PATH,
   DEFAULT_TEXT_MODEL_PATH,
+  describeAiBookTextRuntime,
   mediaPresetFromPath,
   shouldAutoUseServerAiBookConfig,
   textPathForPreset,
@@ -626,18 +694,26 @@ const router = useRouter()
 const aiStore = useAiBookStore()
 const appStore = useAppStore()
 const readerStore = useReaderStore()
+const catchupPollingStatuses = new Set<AiBookCatchupTaskStatus>(['running', 'pausing'])
+const catchupTerminalStatuses = new Set<AiBookCatchupTaskStatus>(['paused', 'completed', 'failed'])
 
 const loading = ref(true)
 const activeTab = ref<AiTab>('overview')
 const adminModelPanelRef = ref<HTMLElement | null>(null)
 const book = ref<Book | null>(null)
 const chapters = ref<BookChapter[]>([])
+const catchupStatus = ref<AiBookCatchupStatus | null>(null)
+const catchupActionPending = ref(false)
 const configDraft = reactive<AiBookConfig>({ ...aiStore.config })
 const serverConfigDraft = reactive<AiServerModelConfig>(createEmptyServerModelConfig())
 const selectedGraphNodeId = ref('')
 const characterSearch = ref('')
 const collapsedLocationIds = ref(new Set<string>())
 const collapsedWorldviewCategories = ref(new Set<string>())
+let catchupPollTimer: number | null = null
+let catchupPollInFlight = false
+let lastCatchupReloadKey = ''
+let catchupDisposed = false
 
 const tabs: Array<{ key: AiTab; label: string }> = [
   { key: 'overview', label: '总览' },
@@ -659,12 +735,17 @@ const serverConfig = computed(() => aiStore.serverModelConfig?.config || null)
 const serverTextReady = computed(() => Boolean(serverConfig.value?.text.enabled && serverConfig.value.text.baseUrl && serverConfig.value.text.model))
 const serverImageReady = computed(() => Boolean(serverConfig.value?.image.enabled && serverConfig.value.image.baseUrl && serverConfig.value.image.model))
 const serverSpeechReady = computed(() => Boolean(serverConfig.value?.speech.enabled && serverConfig.value.speech.baseUrl && serverConfig.value.speech.model))
+const activeTextRuntime = computed(() => describeAiBookTextRuntime(aiStore.config, serverConfig.value))
 const worldviewGroups = computed(() => groupAiBookWorldview(displayBaseMemory.value?.worldview || [], collapsedWorldviewCategories.value))
 const importantCharacters = computed(() => normalizeDisplayCharacters(displayBaseMemory.value?.characters || []))
-const filteredCharacters = computed(() => filterCharacters(importantCharacters.value, characterSearch.value))
+const filteredCharacters = computed(() => filterDisplayCharacters(importantCharacters.value, characterSearch.value))
 const displayRelationships = computed(() => normalizeDisplayRelationships(displayBaseMemory.value?.relationships || []))
 const displayLocations = computed(() => normalizeDisplayLocations(displayBaseMemory.value?.locations || []))
 const visibleLocationRows = computed(() => buildAiBookLocationRows(displayLocations.value, collapsedLocationIds.value))
+const mapStatusText = computed(() => {
+  if (displayBaseMemory.value?.mapDirty) return '待手动重绘'
+  return displayBaseMemory.value?.map?.updatedAt ? formatTime(displayBaseMemory.value.map.updatedAt) : '未生成'
+})
 const displayMemory = computed<AiBookMemory | null>(() => displayBaseMemory.value
   ? {
       ...displayBaseMemory.value,
@@ -732,6 +813,49 @@ const progressText = computed(() => {
   if (index == null) return '尚未生成'
   return `已更新至第 ${index + 1} 章`
 })
+const isCatchupRunning = computed(() => catchupStatus.value ? catchupPollingStatuses.has(catchupStatus.value.status) : false)
+const catchupActionDisabled = computed(() => catchupActionPending.value || aiStore.isBusy || catchupStatus.value?.status === 'pausing')
+const catchupActionLabel = computed(() => {
+  if (aiStore.phase === 'text') return '更新中...'
+  if (catchupStatus.value?.status === 'pausing') return '暂停中...'
+  if (isCatchupRunning.value) return '暂停补齐'
+  return '补齐到当前进度'
+})
+const catchupStatusLabel = computed(() => catchupStatus.value ? describeCatchupStatus(catchupStatus.value.status) : '')
+const catchupProgressPercent = computed(() => {
+  const total = Math.max(catchupStatus.value?.totalChapters || 0, 0)
+  const completed = Math.max(catchupStatus.value?.completedChapters || 0, 0)
+  if (!total) return catchupStatus.value?.status === 'completed' ? 100 : 0
+  return Math.max(0, Math.min(100, Math.round((completed / total) * 100)))
+})
+const catchupProgressSummary = computed(() => {
+  if (!catchupStatus.value) return ''
+  const total = Math.max(catchupStatus.value.totalChapters || 0, 0)
+  const completed = Math.max(catchupStatus.value.completedChapters || 0, 0)
+  const target = typeof catchupStatus.value.targetChapterIndex === 'number'
+    ? `目标第 ${catchupStatus.value.targetChapterIndex + 1} 章`
+    : ''
+  if (!total) return target || '等待任务开始'
+  return `${Math.min(completed, total)}/${total}${target ? ` · ${target}` : ''}`
+})
+const catchupDetailText = computed(() => {
+  if (!catchupStatus.value) return ''
+  if (catchupStatus.value.status === 'failed') {
+    return catchupStatus.value.error || '补齐任务失败'
+  }
+  const current = formatCatchupChapter(catchupStatus.value.currentChapterIndex, catchupStatus.value.currentChapterTitle)
+  const processed = formatCatchupChapter(catchupStatus.value.processedChapterIndex, catchupStatus.value.processedChapterTitle)
+  if (catchupStatus.value.status === 'running' && current) return `当前正在处理 ${current}`
+  if (catchupStatus.value.status === 'pausing' && current) return `暂停请求已发送，当前仍在处理 ${current}`
+  if (catchupStatus.value.status === 'completed') return processed ? `已完成，最新补齐到 ${processed}` : '已完成'
+  if (catchupStatus.value.status === 'paused') return processed ? `已暂停，最新补齐到 ${processed}` : '任务已暂停'
+  if (processed) return `已补齐到 ${processed}`
+  return '将从当前已保存进度继续补齐'
+})
+const catchupUpdatedAtText = computed(() => {
+  if (!catchupStatus.value?.updatedAt) return ''
+  return `更新于 ${formatTime(catchupStatus.value.updatedAt)}`
+})
 const statusNotice = computed(() => {
   const source = aiStore.statusText || memory.value?.lastError || ''
   if (!source.trim()) return null
@@ -777,6 +901,7 @@ watch(
 )
 
 onMounted(async () => {
+  catchupDisposed = false
   await appStore.fetchUserInfo()
   aiStore.refreshConfig()
   await aiStore.loadServerModelConfig({ force: true })
@@ -799,12 +924,18 @@ onMounted(async () => {
       bookUrl: book.value.bookUrl,
       bookSourceUrl: book.value.origin,
     }).catch(() => [])
+    await refreshCatchupStatus({ silent: true })
   } catch (error) {
     appStore.showToast((error as Error).message || 'AI资料加载失败', 'error')
     router.replace('/')
   } finally {
     loading.value = false
   }
+})
+
+onUnmounted(() => {
+  catchupDisposed = true
+  stopCatchupPolling()
 })
 
 watch(
@@ -836,13 +967,72 @@ async function toggleEnabled(event: Event) {
 }
 
 async function updateToCurrent() {
+  if (isCatchupRunning.value) {
+    await pauseCatchupTask()
+    return
+  }
+  await startCatchupTask()
+}
+
+async function startCatchupTask() {
+  if (!book.value || !memory.value) return
+  catchupActionPending.value = true
+  try {
+    const status = await startAiBookCatchup({
+      bookUrl: book.value.bookUrl,
+      targetChapterIndex: resolveCurrentIndex(),
+    })
+    await applyCatchupStatus(status, { reloadOnTerminal: true })
+    if (status.status === 'completed') {
+      appStore.showToast('当前进度已更新', 'success')
+    } else if (status.status === 'failed') {
+      appStore.showToast(status.error || '补齐任务启动后失败', 'error')
+    } else if (status.status === 'paused') {
+      appStore.showToast('补齐任务已暂停', 'success')
+    } else {
+      appStore.showToast('已启动补齐任务', 'success')
+    }
+    return
+  } catch (error) {
+    if (!shouldFallbackToLocalCatchup(error)) {
+      appStore.showToast((error as Error).message || '补齐任务启动失败', 'error')
+      return
+    }
+    appStore.showToast('后端补齐任务不可用，改为前端逐章更新', 'warning')
+    await updateToCurrentFallback()
+    return
+  } finally {
+    if (!aiStore.isBusy) {
+      catchupActionPending.value = false
+    }
+  }
+}
+
+async function pauseCatchupTask() {
+  if (!book.value) return
+  catchupActionPending.value = true
+  try {
+    const status = await pauseAiBookCatchup(book.value.bookUrl)
+    await applyCatchupStatus(status, { reloadOnTerminal: true })
+    appStore.showToast(status.status === 'paused' ? '补齐任务已暂停' : '已请求暂停补齐任务', 'success')
+  } catch (error) {
+    appStore.showToast((error as Error).message || '补齐任务暂停失败', 'error')
+  } finally {
+    catchupActionPending.value = false
+  }
+}
+
+async function updateToCurrentFallback() {
   if (!book.value || !memory.value) return
   const targetIndex = resolveCurrentIndex()
   if (!chapters.value.length) {
     appStore.showToast('目录未加载，无法更新', 'warning')
     return
   }
-  const startIndex = Math.max(0, (memory.value.processedChapterIndex ?? -1) + 1)
+  const retryIndex = typeof memory.value.lastErrorChapterIndex === 'number'
+    ? memory.value.lastErrorChapterIndex
+    : undefined
+  const startIndex = Math.max(0, retryIndex ?? ((memory.value.processedChapterIndex ?? -1) + 1))
   if (startIndex > targetIndex) {
     appStore.showToast('当前进度已更新', 'success')
     return
@@ -860,11 +1050,14 @@ async function updateToCurrent() {
         chapterContent,
         current: currentMemory,
         chapters: chapters.value,
+        throwOnError: true,
       })
     }
     appStore.showToast('AI资料已更新', 'success')
   } catch (error) {
     appStore.showToast((error as Error).message || 'AI资料更新失败', 'error')
+  } finally {
+    catchupActionPending.value = false
   }
 }
 
@@ -959,117 +1152,115 @@ async function resolveChapterContent(index: number, chapter: BookChapter) {
   })
 }
 
-function formatTime(value: number) {
+function formatTime(value: number | string) {
   return new Date(value).toLocaleString()
 }
 
-function normalizeDisplayCharacters(characters: AiBookCharacter[]) {
-  const byName = new Map<string, AiBookCharacter>()
-  for (const character of characters) {
-    if (!character.name || isLowImportance(character.importance)) continue
-    const key = normalizeKey(character.name)
-    const existing = byName.get(key)
-    byName.set(key, existing ? mergeDisplayCharacter(existing, character) : character)
+function describeCatchupStatus(status: AiBookCatchupTaskStatus) {
+  switch (status) {
+    case 'running':
+      return '运行中'
+    case 'pausing':
+      return '暂停中'
+    case 'paused':
+      return '已暂停'
+    case 'completed':
+      return '已完成'
+    case 'failed':
+      return '失败'
+    default:
+      return '未开始'
   }
-  return [...byName.values()]
 }
 
-function filterCharacters(characters: AiBookCharacter[], query: string) {
-  const normalizedQuery = normalizeSearch(query)
-  if (!normalizedQuery) return characters
-  return characters.filter((character) => normalizeSearch([
-    character.name,
-    character.aliases?.join(' '),
-    character.status,
-    character.faction,
-    character.location,
-    character.description,
-  ].filter(Boolean).join(' ')).includes(normalizedQuery))
+function formatCatchupChapter(index?: number, title?: string) {
+  if (typeof index !== 'number' && !title) return ''
+  const parts = []
+  if (typeof index === 'number') parts.push(`第 ${index + 1} 章`)
+  if (title) parts.push(title)
+  return parts.join(' · ')
 }
 
-function normalizeDisplayRelationships(relationships: AiBookRelationship[]) {
-  const byPair = new Map<string, AiBookRelationship>()
-  for (const relationship of relationships) {
-    if (
-      !relationship.source
-      || !relationship.target
-      || !relationship.relation
-      || normalizeKey(relationship.source) === normalizeKey(relationship.target)
-      || isLowImportance(relationship.importance)
-      || isLowValueRelationship(relationship)
-    ) {
-      continue
+function stopCatchupPolling() {
+  if (catchupPollTimer != null) {
+    window.clearTimeout(catchupPollTimer)
+    catchupPollTimer = null
+  }
+}
+
+function scheduleCatchupPoll() {
+  stopCatchupPolling()
+  if (catchupDisposed) return
+  if (!catchupStatus.value || !catchupPollingStatuses.has(catchupStatus.value.status)) return
+  catchupPollTimer = window.setTimeout(() => {
+    void refreshCatchupStatus({ silent: true })
+  }, 2000)
+}
+
+async function reloadAiBookAfterCatchup(status: AiBookCatchupStatus) {
+  if (catchupDisposed) return
+  if (!book.value || !catchupTerminalStatuses.has(status.status)) return
+  const key = `${status.status}:${status.updatedAt}`
+  if (lastCatchupReloadKey === key) return
+  lastCatchupReloadKey = key
+  await aiStore.load(book.value)
+}
+
+async function applyCatchupStatus(status: AiBookCatchupStatus, options: { reloadOnTerminal: boolean }) {
+  if (catchupDisposed) return
+  catchupStatus.value = status
+  if (catchupPollingStatuses.has(status.status)) {
+    scheduleCatchupPoll()
+    return
+  }
+  stopCatchupPolling()
+  if (options.reloadOnTerminal) {
+    await reloadAiBookAfterCatchup(status)
+  }
+}
+
+async function refreshCatchupStatus(options: { silent: boolean }) {
+  if (catchupDisposed || !book.value || catchupPollInFlight) return catchupStatus.value
+  catchupPollInFlight = true
+  try {
+    const status = await getAiBookCatchupStatus(book.value.bookUrl)
+    if (catchupDisposed) return catchupStatus.value
+    await applyCatchupStatus(status, { reloadOnTerminal: true })
+    return status
+  } catch (error) {
+    if (catchupDisposed) return catchupStatus.value
+    if (!options.silent) {
+      appStore.showToast((error as Error).message || '补齐任务状态获取失败', 'error')
     }
-    const key = relationshipKey(relationship.source, relationship.target, relationship.relation)
-    const existing = byPair.get(key)
-    byPair.set(key, existing ? mergeDisplayRelationship(existing, relationship) : relationship)
-  }
-  return [...byPair.values()]
-}
-
-function normalizeDisplayLocations(locations: AiBookLocation[]) {
-  const byName = new Map<string, AiBookLocation>()
-  for (const location of locations) {
-    if (!location.name || isLowImportance(location.importance)) continue
-    const parentName = location.parentName && normalizeKey(location.parentName) !== normalizeKey(location.name)
-      ? location.parentName
-      : undefined
-    const normalized = { ...location, parentName }
-    const key = normalizeKey(location.name)
-    const existing = byName.get(key)
-    byName.set(key, existing ? mergeDisplayLocation(existing, normalized) : normalized)
-  }
-  return [...byName.values()]
-}
-
-function mergeDisplayCharacter(current: AiBookCharacter, next: AiBookCharacter): AiBookCharacter {
-  return {
-    ...current,
-    aliases: uniqueStrings([...(current.aliases || []), ...(next.aliases || [])]),
-    status: richerString(current.status, next.status),
-    faction: current.faction || next.faction,
-    location: current.location || next.location,
-    description: richerString(current.description, next.description),
-    lastSeenChapter: current.lastSeenChapter || next.lastSeenChapter,
-    importance: preferImportance(current.importance, next.importance),
+    if (isCatchupRunning.value) {
+      scheduleCatchupPoll()
+    }
+    return catchupStatus.value
+  } finally {
+    catchupPollInFlight = false
   }
 }
 
-function mergeDisplayRelationship(current: AiBookRelationship, next: AiBookRelationship): AiBookRelationship {
-  return {
-    ...current,
-    status: richerString(current.status, next.status),
-    description: richerString(current.description, next.description),
-    importance: preferImportance(current.importance, next.importance),
-  }
+function shouldFallbackToLocalCatchup(error: unknown) {
+  const message = ((error as Error)?.message || '').toLowerCase()
+  return message.includes('404')
+    || message.includes('405')
 }
 
-function mergeDisplayLocation(current: AiBookLocation, next: AiBookLocation): AiBookLocation {
-  return {
-    ...current,
-    kind: current.kind || next.kind,
-    parentName: current.parentName || next.parentName,
-    description: richerString(current.description, next.description),
-    status: richerString(current.status, next.status),
-    relatedCharacters: uniqueStrings([...(current.relatedCharacters || []), ...(next.relatedCharacters || [])]),
-    firstSeenChapter: current.firstSeenChapter || next.firstSeenChapter,
-    importance: preferImportance(current.importance, next.importance),
-  }
+function hasEvidence(evidence: AiBookEvidence[] | undefined) {
+  return Boolean(evidence?.length)
 }
 
-function relationshipKey(source: string, target: string, relation: string) {
-  return `${[normalizeKey(source), normalizeKey(target)].sort().join('::')}::${normalizeKey(relation)}`
+function visibleEvidence(evidence: AiBookEvidence[] | undefined) {
+  return (evidence || []).slice(-3).reverse()
 }
 
-function isLowValueRelationship(relationship: AiBookRelationship) {
-  if (importanceRank(relationship.importance) >= 2) return false
-  const relation = normalizeKey(relationship.relation)
-  if (!['认识', '见过', '路过', '同村', '同校', '位于', '相关'].includes(relation)) return false
-  return normalizeKey(relationship.description || relationship.status || '').length < 18
+function evidenceKey(evidence: AiBookEvidence) {
+  return `${evidence.chapterIndex}-${evidence.chapterTitle}-${evidence.note}-${evidence.quote || ''}`
 }
 
-function normalizeSearch(value: string) {
-  return value.trim().toLowerCase().replace(/\s+/g, '')
+function evidenceChapterLabel(evidence: AiBookEvidence) {
+  return evidence.chapterTitle || `第 ${evidence.chapterIndex + 1} 章`
 }
 
 function normalizeKey(value: string | undefined) {
@@ -1078,43 +1269,6 @@ function normalizeKey(value: string | undefined) {
     .toLowerCase()
     .replace(/[·•・]/g, '.')
     .replace(/\s+/g, '')
-}
-
-function isLowImportance(value: string | undefined) {
-  const key = normalizeKey(value)
-  if (!key) return false
-  return ['low', '低', '低重要性', '不重要', '路人', '背景', 'minor', 'background', 'oneoff', '一次性']
-    .some((term) => key.includes(term))
-}
-
-function importanceRank(value: string | undefined) {
-  const key = normalizeKey(value)
-  if (key.includes('high') || key.includes('高')) return 3
-  if (key.includes('medium') || key.includes('中')) return 2
-  if (isLowImportance(value)) return 1
-  return 0
-}
-
-function richerString(current: string | undefined, next: string | undefined) {
-  if (!current) return next || ''
-  if (!next) return current
-  return next.length > current.length ? next : current
-}
-
-function preferImportance(current: string | undefined, next: string | undefined) {
-  return importanceRank(next) > importanceRank(current) ? next : current || next
-}
-
-function uniqueStrings(values: string[]) {
-  const seen = new Set<string>()
-  const result: string[] = []
-  for (const value of values) {
-    const key = normalizeKey(value)
-    if (!key || seen.has(key)) continue
-    seen.add(key)
-    result.push(value)
-  }
-  return result
 }
 
 function createEmptyServerModelConfig(): AiServerModelConfig {
@@ -1328,6 +1482,77 @@ function normalizeModelPath(path: string | undefined, fallback: string) {
 
 .enable-switch input:checked + span::after {
   transform: translateX(16px);
+}
+
+.catchup-strip {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(68, 140, 255, 0.08);
+  border: 1px solid rgba(68, 140, 255, 0.16);
+  display: grid;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.catchup-strip.is-completed {
+  background: rgba(58, 181, 115, 0.1);
+  border-color: rgba(58, 181, 115, 0.18);
+}
+
+.catchup-strip.is-failed {
+  background: rgba(209, 75, 75, 0.1);
+  border-color: rgba(209, 75, 75, 0.18);
+}
+
+.catchup-strip.is-paused,
+.catchup-strip.is-pausing {
+  background: rgba(201, 127, 58, 0.1);
+  border-color: rgba(201, 127, 58, 0.18);
+}
+
+.catchup-head,
+.catchup-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.catchup-main {
+  min-width: 0;
+}
+
+.catchup-main strong,
+.catchup-main span,
+.catchup-head small,
+.catchup-strip p {
+  color: var(--color-text-secondary);
+}
+
+.catchup-main span,
+.catchup-head small,
+.catchup-strip p {
+  font-size: 13px;
+}
+
+.catchup-strip p {
+  margin: 0;
+}
+
+.catchup-progress-track {
+  position: relative;
+  overflow: hidden;
+  border-radius: 999px;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.catchup-progress-bar {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-primary);
+  transition: width var(--duration-fast);
 }
 
 .status-strip {
@@ -1597,6 +1822,43 @@ function normalizeModelPath(path: string | undefined, fallback: string) {
   margin-top: 10px;
 }
 
+.evidence-block {
+  margin-top: 10px;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+}
+
+.evidence-block summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--color-primary);
+  font-weight: 700;
+}
+
+.evidence-block ul {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding-left: 16px;
+}
+
+.evidence-block li {
+  line-height: 1.55;
+}
+
+.evidence-block strong {
+  display: block;
+  color: var(--color-text-secondary);
+  font-weight: 700;
+}
+
+.evidence-block blockquote {
+  margin: 4px 0 0;
+  padding-left: 8px;
+  border-left: 2px solid var(--color-border);
+  color: var(--color-text-muted);
+}
+
 .panel-toolbar {
   display: flex;
   align-items: center;
@@ -1671,6 +1933,11 @@ function normalizeModelPath(path: string | undefined, fallback: string) {
 .map-title p {
   margin: 0;
   white-space: nowrap;
+}
+
+.map-dirty-hint {
+  color: var(--color-primary);
+  font-weight: 600;
 }
 
 .map-frame {
@@ -2057,6 +2324,27 @@ marker#graph-arrow path {
   line-height: 1.6;
 }
 
+.runtime-card {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-light);
+  border-radius: 8px;
+  background: var(--color-bg-sunken);
+}
+
+.runtime-card span,
+.runtime-card small {
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+}
+
+.runtime-card strong {
+  color: var(--color-text);
+  font-size: 13px;
+}
+
 .admin-model-panel {
   display: grid;
   gap: 14px;
@@ -2210,6 +2498,12 @@ marker#graph-arrow path {
 @media (max-width: 768px) {
   .ai-shell {
     padding: 16px;
+  }
+
+  .catchup-head,
+  .catchup-main {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .ai-header,

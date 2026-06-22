@@ -81,6 +81,10 @@ pub fn build_router(state: AppState) -> Router {
             get(handlers::explore_book).post(handlers::explore_book),
         )
         .route(
+            "/reader3/exploreBookGlobal",
+            post(handlers::explore_book_global),
+        )
+        .route(
             "/reader3/searchBookMulti",
             get(handlers::search_book_multi).post(handlers::search_book_multi),
         )
@@ -216,6 +220,18 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/reader3/deleteAiBookMemory",
             post(handlers::delete_ai_book_memory),
+        )
+        .route(
+            "/reader3/aiBookCatchup/start",
+            post(handlers::start_ai_book_catchup),
+        )
+        .route(
+            "/reader3/aiBookCatchup/status",
+            get(handlers::get_ai_book_catchup_status).post(handlers::get_ai_book_catchup_status),
+        )
+        .route(
+            "/reader3/aiBookCatchup/pause",
+            post(handlers::pause_ai_book_catchup),
         )
         .route(
             "/reader3/getAiModelConfig",

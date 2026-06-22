@@ -21,7 +21,9 @@ pub async fn get_chapter_summary(
         .chapter_summary_service
         .get_summary(&user_ns, &query.book_url, &query.chapter_url)
         .await?;
-    Ok(Json(ApiResponse::ok(serde_json::json!({ "summary": summary }))))
+    Ok(Json(ApiResponse::ok(
+        serde_json::json!({ "summary": summary }),
+    )))
 }
 
 pub async fn generate_chapter_summary(
@@ -31,7 +33,9 @@ pub async fn generate_chapter_summary(
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
     let user_ns = resolve_user_ns(&state, &auth).await?;
     if req.book_url.trim().is_empty() || req.chapter_url.trim().is_empty() {
-        return Err(AppError::BadRequest("bookUrl and chapterUrl required".to_string()));
+        return Err(AppError::BadRequest(
+            "bookUrl and chapterUrl required".to_string(),
+        ));
     }
     let can_use = state
         .user_service
@@ -52,7 +56,9 @@ pub async fn generate_chapter_summary(
         .chapter_summary_service
         .generate_summary(&user_ns, req, ai_config, &client)
         .await?;
-    Ok(Json(ApiResponse::ok(serde_json::json!({ "summary": summary }))))
+    Ok(Json(ApiResponse::ok(
+        serde_json::json!({ "summary": summary }),
+    )))
 }
 
 pub async fn get_chapter_summary_config(
@@ -88,7 +94,10 @@ pub async fn save_chapter_summary_config(
             Value::String("NEED_SECURE_KEY".to_string()),
         )));
     }
-    let config = state.chapter_summary_service.save_config(req.config).await?;
+    let config = state
+        .chapter_summary_service
+        .save_config(req.config)
+        .await?;
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "config": config,
         "canUseServerModel": true,

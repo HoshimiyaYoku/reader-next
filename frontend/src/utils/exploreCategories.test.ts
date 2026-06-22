@@ -61,4 +61,16 @@ describe('exploreCategories', () => {
     ])
     expect(getInitialExploreCategoryUrl(categories)).toBe('/book/category/catalog.html')
   })
+
+  it('parses && separated text categories', () => {
+    const categories = parseExploreCategories(
+      '玄幻魔法::/sort/1/{{page}}.html&&武侠修真::/sort/2/{{page}}.html&&都市言情::/sort/3/{{page}}.html'
+    )
+
+    expect(categories).toEqual([
+      { title: '玄幻魔法', url: '/sort/1/{{page}}.html' },
+      { title: '武侠修真', url: '/sort/2/{{page}}.html' },
+      { title: '都市言情', url: '/sort/3/{{page}}.html' },
+    ])
+  })
 })

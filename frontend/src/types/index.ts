@@ -321,6 +321,7 @@ export interface AiBookNote {
   category?: string
   confidence?: string
   importance?: string
+  evidence?: AiBookEvidence[]
 }
 
 export interface AiBookCharacter {
@@ -332,6 +333,7 @@ export interface AiBookCharacter {
   description?: string
   lastSeenChapter?: string
   importance?: string
+  evidence?: AiBookEvidence[]
 }
 
 export interface AiBookRelationship {
@@ -341,6 +343,7 @@ export interface AiBookRelationship {
   status?: string
   description?: string
   importance?: string
+  evidence?: AiBookEvidence[]
 }
 
 export interface AiBookLocation {
@@ -352,6 +355,7 @@ export interface AiBookLocation {
   relatedCharacters?: string[]
   firstSeenChapter?: string
   importance?: string
+  evidence?: AiBookEvidence[]
 }
 
 export interface AiBookMap {
@@ -379,12 +383,31 @@ export interface AiBookMemory {
   map?: AiBookMap | null
   mapDirty?: boolean
   lastError?: string
+  lastErrorChapterIndex?: number
+  lastErrorChapterTitle?: string
 }
 
 export interface AiBookModelUpdate {
   memory: AiBookAnyMemory
   shouldRegenerateMap: boolean
   mapPrompt?: string
+}
+
+export type AiBookCatchupTaskStatus = 'idle' | 'running' | 'pausing' | 'paused' | 'completed' | 'failed'
+
+export interface AiBookCatchupStatus {
+  status: AiBookCatchupTaskStatus
+  bookUrl: string
+  startChapterIndex?: number
+  targetChapterIndex?: number
+  currentChapterIndex?: number
+  currentChapterTitle?: string
+  processedChapterIndex?: number
+  processedChapterTitle?: string
+  totalChapters: number
+  completedChapters: number
+  updatedAt: number | string
+  error?: string
 }
 
 export type AiBookImportance = 'high' | 'medium' | 'low'
@@ -545,6 +568,8 @@ export interface AiBookMemoryV2 {
   processedChapterTitle?: string
   updatedAt: number
   lastError?: string
+  lastErrorChapterIndex?: number
+  lastErrorChapterTitle?: string
   summary: AiBookSummaryState
   chapterDigests: AiBookChapterDigest[]
   arcs: AiBookArcSummary[]
