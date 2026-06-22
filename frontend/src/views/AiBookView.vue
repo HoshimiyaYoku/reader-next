@@ -26,11 +26,25 @@
             <span></span>
             自动更新
           </label>
-          <button class="primary-btn" :disabled="aiStore.isBusy" @click="updateToCurrent">
-            {{ aiStore.phase === 'text' ? '更新中...' : '更新到当前进度' }}
+          <button class="primary-btn" :disabled="catchupActionDisabled" @click="updateToCurrent">
+            {{ catchupActionLabel }}
           </button>
         </div>
       </header>
+
+      <div v-if="catchupStatus" class="catchup-strip" :class="`is-${catchupStatus.status}`">
+        <div class="catchup-head">
+          <div class="catchup-main">
+            <strong>补齐任务 · {{ catchupStatusLabel }}</strong>
+            <span>{{ catchupProgressSummary }}</span>
+          </div>
+          <small>{{ catchupUpdatedAtText }}</small>
+        </div>
+        <div class="catchup-progress-track" role="progressbar" :aria-valuenow="catchupProgressPercent" aria-valuemin="0" aria-valuemax="100">
+          <div class="catchup-progress-bar" :style="{ width: `${catchupProgressPercent}%` }"></div>
+        </div>
+        <p>{{ catchupDetailText }}</p>
+      </div>
 
       <div v-if="statusNotice" class="status-strip" :class="{ error: statusNotice.isError }">
         <div class="status-main">
@@ -624,8 +638,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineComponent, h, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, defineComponent, h, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { getAiBookCatchupStatus, pauseAiBookCatchup, startAiBookCatchup } from '../api/aiBook'
 import { saveAiModelConfig } from '../api/aiModel'
 import { getBookContent, getChapterList, getShelfBook } from '../api/bookshelf'
 import { useAiBookStore } from '../stores/aiBook'
@@ -633,6 +648,8 @@ import { useAppStore } from '../stores/app'
 import { useReaderStore } from '../stores/reader'
 import type {
   AiBookConfig,
+  AiBookCatchupStatus,
+  AiBookCatchupTaskStatus,
   AiBookEvidence,
   AiBookMemory,
   AiServerModelConfig,
@@ -677,18 +694,26 @@ const router = useRouter()
 const aiStore = useAiBookStore()
 const appStore = useAppStore()
 const readerStore = useReaderStore()
+const catchupPollingStatuses = new Set<AiBookCatchupTaskStatus>(['running', 'pausing'])
+const catchupTerminalStatuses = new Set<AiBookCatchupTaskStatus>(['paused', 'completed', 'failed'])
 
 const loading = ref(true)
 const activeTab = ref<AiTab>('overview')
 const adminModelPanelRef = ref<HTMLElement | null>(null)
 const book = ref<Book | null>(null)
 const chapters = ref<BookChapter[]>([])
+const catchupStatus = ref<AiBookCatchupStatus | null>(null)
+const catchupActionPending = ref(false)
 const configDraft = reactive<AiBookConfig>({ ...aiStore.config })
 const serverConfigDraft = reactive<AiServerModelConfig>(createEmptyServerModelConfig())
 const selectedGraphNodeId = ref('')
 const characterSearch = ref('')
 const collapsedLocationIds = ref(new Set<string>())
 const collapsedWorldviewCategories = ref(new Set<string>())
+let catchupPollTimer: number | null = null
+let catchupPollInFlight = false
+let lastCatchupReloadKey = ''
+let catchupDisposed = false
 
 const tabs: Array<{ key: AiTab; label: string }> = [
   { key: 'overview', label: '总览' },
@@ -788,6 +813,49 @@ const progressText = computed(() => {
   if (index == null) return '尚未生成'
   return `已更新至第 ${index + 1} 章`
 })
+const isCatchupRunning = computed(() => catchupStatus.value ? catchupPollingStatuses.has(catchupStatus.value.status) : false)
+const catchupActionDisabled = computed(() => catchupActionPending.value || aiStore.isBusy || catchupStatus.value?.status === 'pausing')
+const catchupActionLabel = computed(() => {
+  if (aiStore.phase === 'text') return '更新中...'
+  if (catchupStatus.value?.status === 'pausing') return '暂停中...'
+  if (isCatchupRunning.value) return '暂停补齐'
+  return '补齐到当前进度'
+})
+const catchupStatusLabel = computed(() => catchupStatus.value ? describeCatchupStatus(catchupStatus.value.status) : '')
+const catchupProgressPercent = computed(() => {
+  const total = Math.max(catchupStatus.value?.totalChapters || 0, 0)
+  const completed = Math.max(catchupStatus.value?.completedChapters || 0, 0)
+  if (!total) return catchupStatus.value?.status === 'completed' ? 100 : 0
+  return Math.max(0, Math.min(100, Math.round((completed / total) * 100)))
+})
+const catchupProgressSummary = computed(() => {
+  if (!catchupStatus.value) return ''
+  const total = Math.max(catchupStatus.value.totalChapters || 0, 0)
+  const completed = Math.max(catchupStatus.value.completedChapters || 0, 0)
+  const target = typeof catchupStatus.value.targetChapterIndex === 'number'
+    ? `目标第 ${catchupStatus.value.targetChapterIndex + 1} 章`
+    : ''
+  if (!total) return target || '等待任务开始'
+  return `${Math.min(completed, total)}/${total}${target ? ` · ${target}` : ''}`
+})
+const catchupDetailText = computed(() => {
+  if (!catchupStatus.value) return ''
+  if (catchupStatus.value.status === 'failed') {
+    return catchupStatus.value.error || '补齐任务失败'
+  }
+  const current = formatCatchupChapter(catchupStatus.value.currentChapterIndex, catchupStatus.value.currentChapterTitle)
+  const processed = formatCatchupChapter(catchupStatus.value.processedChapterIndex, catchupStatus.value.processedChapterTitle)
+  if (catchupStatus.value.status === 'running' && current) return `当前正在处理 ${current}`
+  if (catchupStatus.value.status === 'pausing' && current) return `暂停请求已发送，当前仍在处理 ${current}`
+  if (catchupStatus.value.status === 'completed') return processed ? `已完成，最新补齐到 ${processed}` : '已完成'
+  if (catchupStatus.value.status === 'paused') return processed ? `已暂停，最新补齐到 ${processed}` : '任务已暂停'
+  if (processed) return `已补齐到 ${processed}`
+  return '将从当前已保存进度继续补齐'
+})
+const catchupUpdatedAtText = computed(() => {
+  if (!catchupStatus.value?.updatedAt) return ''
+  return `更新于 ${formatTime(catchupStatus.value.updatedAt)}`
+})
 const statusNotice = computed(() => {
   const source = aiStore.statusText || memory.value?.lastError || ''
   if (!source.trim()) return null
@@ -833,6 +901,7 @@ watch(
 )
 
 onMounted(async () => {
+  catchupDisposed = false
   await appStore.fetchUserInfo()
   aiStore.refreshConfig()
   await aiStore.loadServerModelConfig({ force: true })
@@ -855,12 +924,18 @@ onMounted(async () => {
       bookUrl: book.value.bookUrl,
       bookSourceUrl: book.value.origin,
     }).catch(() => [])
+    await refreshCatchupStatus({ silent: true })
   } catch (error) {
     appStore.showToast((error as Error).message || 'AI资料加载失败', 'error')
     router.replace('/')
   } finally {
     loading.value = false
   }
+})
+
+onUnmounted(() => {
+  catchupDisposed = true
+  stopCatchupPolling()
 })
 
 watch(
@@ -892,6 +967,62 @@ async function toggleEnabled(event: Event) {
 }
 
 async function updateToCurrent() {
+  if (isCatchupRunning.value) {
+    await pauseCatchupTask()
+    return
+  }
+  await startCatchupTask()
+}
+
+async function startCatchupTask() {
+  if (!book.value || !memory.value) return
+  catchupActionPending.value = true
+  try {
+    const status = await startAiBookCatchup({
+      bookUrl: book.value.bookUrl,
+      targetChapterIndex: resolveCurrentIndex(),
+    })
+    await applyCatchupStatus(status, { reloadOnTerminal: true })
+    if (status.status === 'completed') {
+      appStore.showToast('当前进度已更新', 'success')
+    } else if (status.status === 'failed') {
+      appStore.showToast(status.error || '补齐任务启动后失败', 'error')
+    } else if (status.status === 'paused') {
+      appStore.showToast('补齐任务已暂停', 'success')
+    } else {
+      appStore.showToast('已启动补齐任务', 'success')
+    }
+    return
+  } catch (error) {
+    if (!shouldFallbackToLocalCatchup(error)) {
+      appStore.showToast((error as Error).message || '补齐任务启动失败', 'error')
+      return
+    }
+    appStore.showToast('后端补齐任务不可用，改为前端逐章更新', 'warning')
+    await updateToCurrentFallback()
+    return
+  } finally {
+    if (!aiStore.isBusy) {
+      catchupActionPending.value = false
+    }
+  }
+}
+
+async function pauseCatchupTask() {
+  if (!book.value) return
+  catchupActionPending.value = true
+  try {
+    const status = await pauseAiBookCatchup(book.value.bookUrl)
+    await applyCatchupStatus(status, { reloadOnTerminal: true })
+    appStore.showToast(status.status === 'paused' ? '补齐任务已暂停' : '已请求暂停补齐任务', 'success')
+  } catch (error) {
+    appStore.showToast((error as Error).message || '补齐任务暂停失败', 'error')
+  } finally {
+    catchupActionPending.value = false
+  }
+}
+
+async function updateToCurrentFallback() {
   if (!book.value || !memory.value) return
   const targetIndex = resolveCurrentIndex()
   if (!chapters.value.length) {
@@ -925,6 +1056,8 @@ async function updateToCurrent() {
     appStore.showToast('AI资料已更新', 'success')
   } catch (error) {
     appStore.showToast((error as Error).message || 'AI资料更新失败', 'error')
+  } finally {
+    catchupActionPending.value = false
   }
 }
 
@@ -1019,8 +1152,99 @@ async function resolveChapterContent(index: number, chapter: BookChapter) {
   })
 }
 
-function formatTime(value: number) {
+function formatTime(value: number | string) {
   return new Date(value).toLocaleString()
+}
+
+function describeCatchupStatus(status: AiBookCatchupTaskStatus) {
+  switch (status) {
+    case 'running':
+      return '运行中'
+    case 'pausing':
+      return '暂停中'
+    case 'paused':
+      return '已暂停'
+    case 'completed':
+      return '已完成'
+    case 'failed':
+      return '失败'
+    default:
+      return '未开始'
+  }
+}
+
+function formatCatchupChapter(index?: number, title?: string) {
+  if (typeof index !== 'number' && !title) return ''
+  const parts = []
+  if (typeof index === 'number') parts.push(`第 ${index + 1} 章`)
+  if (title) parts.push(title)
+  return parts.join(' · ')
+}
+
+function stopCatchupPolling() {
+  if (catchupPollTimer != null) {
+    window.clearTimeout(catchupPollTimer)
+    catchupPollTimer = null
+  }
+}
+
+function scheduleCatchupPoll() {
+  stopCatchupPolling()
+  if (catchupDisposed) return
+  if (!catchupStatus.value || !catchupPollingStatuses.has(catchupStatus.value.status)) return
+  catchupPollTimer = window.setTimeout(() => {
+    void refreshCatchupStatus({ silent: true })
+  }, 2000)
+}
+
+async function reloadAiBookAfterCatchup(status: AiBookCatchupStatus) {
+  if (catchupDisposed) return
+  if (!book.value || !catchupTerminalStatuses.has(status.status)) return
+  const key = `${status.status}:${status.updatedAt}`
+  if (lastCatchupReloadKey === key) return
+  lastCatchupReloadKey = key
+  await aiStore.load(book.value)
+}
+
+async function applyCatchupStatus(status: AiBookCatchupStatus, options: { reloadOnTerminal: boolean }) {
+  if (catchupDisposed) return
+  catchupStatus.value = status
+  if (catchupPollingStatuses.has(status.status)) {
+    scheduleCatchupPoll()
+    return
+  }
+  stopCatchupPolling()
+  if (options.reloadOnTerminal) {
+    await reloadAiBookAfterCatchup(status)
+  }
+}
+
+async function refreshCatchupStatus(options: { silent: boolean }) {
+  if (catchupDisposed || !book.value || catchupPollInFlight) return catchupStatus.value
+  catchupPollInFlight = true
+  try {
+    const status = await getAiBookCatchupStatus(book.value.bookUrl)
+    if (catchupDisposed) return catchupStatus.value
+    await applyCatchupStatus(status, { reloadOnTerminal: true })
+    return status
+  } catch (error) {
+    if (catchupDisposed) return catchupStatus.value
+    if (!options.silent) {
+      appStore.showToast((error as Error).message || '补齐任务状态获取失败', 'error')
+    }
+    if (isCatchupRunning.value) {
+      scheduleCatchupPoll()
+    }
+    return catchupStatus.value
+  } finally {
+    catchupPollInFlight = false
+  }
+}
+
+function shouldFallbackToLocalCatchup(error: unknown) {
+  const message = ((error as Error)?.message || '').toLowerCase()
+  return message.includes('404')
+    || message.includes('405')
 }
 
 function hasEvidence(evidence: AiBookEvidence[] | undefined) {
@@ -1258,6 +1482,77 @@ function normalizeModelPath(path: string | undefined, fallback: string) {
 
 .enable-switch input:checked + span::after {
   transform: translateX(16px);
+}
+
+.catchup-strip {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(68, 140, 255, 0.08);
+  border: 1px solid rgba(68, 140, 255, 0.16);
+  display: grid;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.catchup-strip.is-completed {
+  background: rgba(58, 181, 115, 0.1);
+  border-color: rgba(58, 181, 115, 0.18);
+}
+
+.catchup-strip.is-failed {
+  background: rgba(209, 75, 75, 0.1);
+  border-color: rgba(209, 75, 75, 0.18);
+}
+
+.catchup-strip.is-paused,
+.catchup-strip.is-pausing {
+  background: rgba(201, 127, 58, 0.1);
+  border-color: rgba(201, 127, 58, 0.18);
+}
+
+.catchup-head,
+.catchup-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.catchup-main {
+  min-width: 0;
+}
+
+.catchup-main strong,
+.catchup-main span,
+.catchup-head small,
+.catchup-strip p {
+  color: var(--color-text-secondary);
+}
+
+.catchup-main span,
+.catchup-head small,
+.catchup-strip p {
+  font-size: 13px;
+}
+
+.catchup-strip p {
+  margin: 0;
+}
+
+.catchup-progress-track {
+  position: relative;
+  overflow: hidden;
+  border-radius: 999px;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.catchup-progress-bar {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-primary);
+  transition: width var(--duration-fast);
 }
 
 .status-strip {
@@ -2203,6 +2498,12 @@ marker#graph-arrow path {
 @media (max-width: 768px) {
   .ai-shell {
     padding: 16px;
+  }
+
+  .catchup-head,
+  .catchup-main {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .ai-header,

@@ -222,6 +222,18 @@ pub fn build_router(state: AppState) -> Router {
             post(handlers::delete_ai_book_memory),
         )
         .route(
+            "/reader3/aiBookCatchup/start",
+            post(handlers::start_ai_book_catchup),
+        )
+        .route(
+            "/reader3/aiBookCatchup/status",
+            get(handlers::get_ai_book_catchup_status).post(handlers::get_ai_book_catchup_status),
+        )
+        .route(
+            "/reader3/aiBookCatchup/pause",
+            post(handlers::pause_ai_book_catchup),
+        )
+        .route(
             "/reader3/getAiModelConfig",
             get(handlers::get_ai_model_config),
         )

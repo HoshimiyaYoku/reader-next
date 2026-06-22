@@ -2789,7 +2789,7 @@ fn json_msg(msg: &str) -> String {
     serde_json::json!({"msg": msg}).to_string()
 }
 
-async fn resolve_book_source(
+pub(crate) async fn resolve_book_source(
     state: &AppState,
     user_ns: &str,
     book_source_url: Option<String>,

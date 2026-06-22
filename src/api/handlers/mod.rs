@@ -19,10 +19,10 @@ pub use book::*;
 pub use book_group::*;
 pub use book_source::login_book_source;
 pub use book_source::*;
-pub use chapter_summary::*;
 pub use bookmark::{
     delete_bookmark, delete_bookmarks, get_bookmarks, save_bookmark, save_bookmarks,
 };
+pub use chapter_summary::*;
 pub use replace_rule::{
     delete_replace_rule, delete_replace_rules, get_replace_rules, save_replace_rule,
     save_replace_rules,

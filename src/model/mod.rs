@@ -1,4 +1,5 @@
 pub mod ai_book;
+pub mod ai_book_catchup;
 pub mod ai_model;
 pub mod ai_proxy;
 pub mod book;

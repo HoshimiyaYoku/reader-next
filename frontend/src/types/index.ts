@@ -393,6 +393,23 @@ export interface AiBookModelUpdate {
   mapPrompt?: string
 }
 
+export type AiBookCatchupTaskStatus = 'idle' | 'running' | 'pausing' | 'paused' | 'completed' | 'failed'
+
+export interface AiBookCatchupStatus {
+  status: AiBookCatchupTaskStatus
+  bookUrl: string
+  startChapterIndex?: number
+  targetChapterIndex?: number
+  currentChapterIndex?: number
+  currentChapterTitle?: string
+  processedChapterIndex?: number
+  processedChapterTitle?: string
+  totalChapters: number
+  completedChapters: number
+  updatedAt: number | string
+  error?: string
+}
+
 export type AiBookImportance = 'high' | 'medium' | 'low'
 export type AiBookConfidence = '已知' | '推断' | '未知'
 export type AiBookLocationScale =
