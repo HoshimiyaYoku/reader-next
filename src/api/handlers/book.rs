@@ -1,7 +1,11 @@
 use crate::api::auth::AuthContext;
 use crate::api::AppState;
 use crate::error::error::{ApiResponse, AppError};
-use crate::model::{book::Book, book_source::BookSource, search::SearchBook};
+use crate::model::{
+    book::Book,
+    book_source::{BookSource, ExploreKind},
+    search::SearchBook,
+};
 use crate::service::local_txt_book::{is_local_txt_origin, is_local_txt_url, LOCAL_TXT_ORIGIN};
 use crate::service::search_relevance::{score_search_book, sort_and_filter_search_results};
 use crate::util::text::{normalize_source_url, repair_encoded_url};
@@ -28,6 +32,12 @@ const MAX_AVAILABLE_RESULT_LIMIT: usize = 100;
 const DEFAULT_AVAILABLE_CONCURRENT_COUNT: usize = 8;
 const MAX_AVAILABLE_CONCURRENT_COUNT: usize = 20;
 const AVAILABLE_SOURCE_SSE_RESULT_LIMIT: usize = 5;
+const DEFAULT_GLOBAL_EXPLORE_LIMIT: usize = 20;
+const MAX_GLOBAL_EXPLORE_LIMIT: usize = 100;
+const DEFAULT_GLOBAL_EXPLORE_CONCURRENT: usize = 16;
+const MAX_GLOBAL_EXPLORE_CONCURRENT: usize = 24;
+const DEFAULT_GLOBAL_EXPLORE_SCAN_LIMIT: usize = 96;
+const MAX_GLOBAL_EXPLORE_SCAN_LIMIT: usize = 120;
 
 #[derive(Debug, Deserialize)]
 pub struct SearchBookRequest {
@@ -58,6 +68,27 @@ pub struct ExploreBookRequest {
     book_source_url: Option<String>,
     #[serde(rename = "bookSource")]
     book_source: Option<BookSource>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExploreBookGlobalRequest {
+    category: Option<String>,
+    cursor: Option<usize>,
+    page: Option<i32>,
+    limit: Option<usize>,
+    #[serde(rename = "concurrentCount")]
+    concurrent_count: Option<usize>,
+    #[serde(rename = "scanLimit")]
+    scan_limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExploreBookGlobalResponse {
+    books: Vec<SearchBook>,
+    next_cursor: usize,
+    has_more: bool,
+    failed: usize,
 }
 #[derive(Debug, Deserialize)]
 pub struct BookInfoRequest {
@@ -377,6 +408,245 @@ fn merge_search_results(
     sort_and_filter_search_results(query, result)
 }
 
+#[derive(Debug, Clone)]
+struct GlobalExploreCategory {
+    key: &'static str,
+    title: &'static str,
+    keywords: &'static [&'static str],
+}
+
+#[derive(Debug, Clone)]
+struct GlobalExploreKindSelection {
+    title: String,
+    url: String,
+    score: i32,
+}
+
+#[derive(Debug, Clone)]
+struct GlobalExploreCandidate {
+    source_index: usize,
+    source: BookSource,
+    kind: GlobalExploreKindSelection,
+}
+
+#[derive(Debug, Clone)]
+struct GlobalExploreBookHit {
+    book: SearchBook,
+    category_score: i32,
+    position: usize,
+}
+
+#[derive(Debug)]
+struct GlobalExploreMergedBook {
+    book: SearchBook,
+    score: i32,
+    source_count: usize,
+    best_position: usize,
+}
+
+const GLOBAL_EXPLORE_CATEGORIES: &[GlobalExploreCategory] = &[
+    GlobalExploreCategory {
+        key: "mixed",
+        title: "综合",
+        keywords: &[],
+    },
+    GlobalExploreCategory {
+        key: "rank",
+        title: "排行",
+        keywords: &["排行", "榜", "热门", "点击", "推荐", "人气", "收藏", "月票"],
+    },
+    GlobalExploreCategory {
+        key: "new",
+        title: "新书",
+        keywords: &["新书", "最新", "入库", "更新"],
+    },
+    GlobalExploreCategory {
+        key: "finished",
+        title: "完本",
+        keywords: &["完本", "全本", "完结"],
+    },
+    GlobalExploreCategory {
+        key: "fantasy",
+        title: "玄幻",
+        keywords: &["玄幻", "奇幻", "魔法", "修仙", "仙侠"],
+    },
+    GlobalExploreCategory {
+        key: "urban",
+        title: "都市",
+        keywords: &["都市", "言情", "生活", "职场"],
+    },
+    GlobalExploreCategory {
+        key: "history",
+        title: "历史",
+        keywords: &["历史", "军事", "战争", "架空"],
+    },
+    GlobalExploreCategory {
+        key: "sci-fi",
+        title: "科幻",
+        keywords: &["科幻", "未来", "末世", "星际"],
+    },
+    GlobalExploreCategory {
+        key: "suspense",
+        title: "悬疑",
+        keywords: &["悬疑", "灵异", "推理", "侦探", "惊悚"],
+    },
+];
+
+const GLOBAL_EXPLORE_HOT_KEYWORDS: &[&str] =
+    &["排行", "榜", "热门", "点击", "推荐", "人气", "收藏", "月票"];
+const GLOBAL_EXPLORE_COLD_KEYWORDS: &[&str] = &["新书", "最新", "更新"];
+
+fn source_supports_global_explore(source: &BookSource) -> bool {
+    source.enabled.unwrap_or(true)
+        && source.enabled_explore.unwrap_or(false)
+        && source
+            .explore_url
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn select_global_explore_kind(
+    category: &str,
+    kinds: &[ExploreKind],
+) -> Option<GlobalExploreKindSelection> {
+    let category = find_global_explore_category(category);
+    kinds
+        .iter()
+        .filter_map(|kind| {
+            let url = kind.url.as_deref()?.trim();
+            if url.is_empty() {
+                return None;
+            }
+            score_global_explore_kind(category, &kind.title).map(|score| {
+                GlobalExploreKindSelection {
+                    title: kind.title.trim().to_string(),
+                    url: url.to_string(),
+                    score,
+                }
+            })
+        })
+        .max_by(|a, b| {
+            a.score
+                .cmp(&b.score)
+                .then_with(|| b.title.len().cmp(&a.title.len()))
+        })
+}
+
+fn find_global_explore_category(key_or_title: &str) -> &'static GlobalExploreCategory {
+    let normalized = compact_global_text(key_or_title);
+    GLOBAL_EXPLORE_CATEGORIES
+        .iter()
+        .find(|category| {
+            category.key == key_or_title || compact_global_text(category.title) == normalized
+        })
+        .unwrap_or(&GLOBAL_EXPLORE_CATEGORIES[0])
+}
+
+fn score_global_explore_kind(category: &GlobalExploreCategory, title: &str) -> Option<i32> {
+    let normalized = compact_global_text(title);
+    let hot_score = keyword_hits(&normalized, GLOBAL_EXPLORE_HOT_KEYWORDS) as i32;
+    if category.key == "mixed" {
+        return Some(if hot_score > 0 { 20 + hot_score * 8 } else { 1 });
+    }
+    if category.key == "rank" {
+        return (hot_score > 0).then_some(30 + hot_score * 8);
+    }
+
+    let category_hit = normalized.contains(&compact_global_text(category.title))
+        || keyword_hits(&normalized, category.keywords) > 0;
+    if !category_hit {
+        return None;
+    }
+
+    let cold_penalty = keyword_hits(&normalized, GLOBAL_EXPLORE_COLD_KEYWORDS) as i32 * 5;
+    Some(20 + hot_score * 8 - cold_penalty)
+}
+
+fn merge_global_explore_books(hits: Vec<GlobalExploreBookHit>, limit: usize) -> Vec<SearchBook> {
+    use std::collections::HashMap;
+
+    let mut merged: HashMap<String, GlobalExploreMergedBook> = HashMap::new();
+    for mut hit in hits {
+        if hit.book.name.trim().is_empty() {
+            continue;
+        }
+        let key = hit.book.merge_key();
+        let origin = hit.book.origin.clone();
+        let hit_score =
+            hit.category_score + (100usize.saturating_sub(hit.position.min(100)) as i32);
+        if let Some(existing) = merged.get_mut(&key) {
+            existing.source_count += 1;
+            existing.score += hit.category_score + 20;
+            existing.best_position = existing.best_position.min(hit.position);
+            let urls = existing
+                .book
+                .book_source_urls
+                .get_or_insert_with(|| vec![existing.book.origin.clone()]);
+            if !urls.contains(&origin) {
+                urls.push(origin);
+            }
+            if existing.book.cover_url.is_none() && hit.book.cover_url.is_some() {
+                existing.book.cover_url = hit.book.cover_url;
+            }
+            if existing.book.intro.is_none() && hit.book.intro.is_some() {
+                existing.book.intro = hit.book.intro;
+            }
+            if existing.book.kind.is_none() && hit.book.kind.is_some() {
+                existing.book.kind = hit.book.kind;
+            }
+            if existing.book.last_chapter.is_none() && hit.book.last_chapter.is_some() {
+                existing.book.last_chapter = hit.book.last_chapter;
+            }
+            if existing.book.update_time.is_none() && hit.book.update_time.is_some() {
+                existing.book.update_time = hit.book.update_time;
+            }
+            if existing.book.word_count.is_none() && hit.book.word_count.is_some() {
+                existing.book.word_count = hit.book.word_count;
+            }
+        } else {
+            hit.book.book_source_urls = Some(vec![origin]);
+            merged.insert(
+                key,
+                GlobalExploreMergedBook {
+                    book: hit.book,
+                    score: hit_score,
+                    source_count: 1,
+                    best_position: hit.position,
+                },
+            );
+        }
+    }
+
+    let mut books: Vec<_> = merged.into_values().collect();
+    books.sort_by(|a, b| {
+        b.source_count
+            .cmp(&a.source_count)
+            .then_with(|| b.score.cmp(&a.score))
+            .then_with(|| a.best_position.cmp(&b.best_position))
+            .then_with(|| a.book.name.cmp(&b.book.name))
+    });
+    books
+        .into_iter()
+        .take(limit)
+        .map(|merged| merged.book)
+        .collect()
+}
+
+fn keyword_hits(text: &str, keywords: &[&str]) -> usize {
+    keywords
+        .iter()
+        .filter(|keyword| text.contains(&compact_global_text(keyword)))
+        .count()
+}
+
+fn compact_global_text(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| !ch.is_whitespace() && !matches!(ch, '·' | '-' | '_' | '|' | '/' | '\\'))
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
 fn take_search_book_multi_sse_batch(
     query: &str,
     books: Vec<SearchBook>,
@@ -446,6 +716,114 @@ pub async fn explore_book(
         .await?;
     Ok(Json(ApiResponse::ok(
         serde_json::to_value(list).unwrap_or_default(),
+    )))
+}
+
+pub async fn explore_book_global(
+    State(state): State<AppState>,
+    auth: AuthContext,
+    Json(req): Json<ExploreBookGlobalRequest>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    let user_ns = state
+        .user_service
+        .resolve_user_ns_with_override(auth.access_token(), auth.secure_key(), auth.user_ns())
+        .await
+        .map_err(|_| AppError::BadRequest("NEED_LOGIN".to_string()))?;
+    let category = req.category.as_deref().unwrap_or("mixed");
+    let cursor = req.cursor.unwrap_or(0);
+    let page = req.page.unwrap_or(1).max(1);
+    let limit = req
+        .limit
+        .unwrap_or(DEFAULT_GLOBAL_EXPLORE_LIMIT)
+        .clamp(1, MAX_GLOBAL_EXPLORE_LIMIT);
+    let concurrent = req
+        .concurrent_count
+        .unwrap_or(DEFAULT_GLOBAL_EXPLORE_CONCURRENT)
+        .clamp(1, MAX_GLOBAL_EXPLORE_CONCURRENT);
+    let scan_limit = req
+        .scan_limit
+        .unwrap_or(DEFAULT_GLOBAL_EXPLORE_SCAN_LIMIT)
+        .clamp(concurrent, MAX_GLOBAL_EXPLORE_SCAN_LIMIT);
+
+    let sources = state.book_source_service.list(&user_ns).await?;
+    let book_service = state.book_service.clone();
+    let category = category.to_string();
+    let mut candidates = tokio::task::spawn_blocking(move || {
+        let mut candidates = Vec::new();
+        for (source_index, source) in sources.into_iter().enumerate() {
+            if !source_supports_global_explore(&source) {
+                continue;
+            }
+            let Ok(kinds) = book_service.explore_kinds(&source) else {
+                continue;
+            };
+            if let Some(kind) = select_global_explore_kind(&category, &kinds) {
+                candidates.push(GlobalExploreCandidate {
+                    source_index,
+                    source,
+                    kind,
+                });
+            }
+        }
+        candidates
+    })
+    .await
+    .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
+    candidates.sort_by(|a, b| {
+        b.kind
+            .score
+            .cmp(&a.kind.score)
+            .then_with(|| a.source_index.cmp(&b.source_index))
+    });
+
+    let stop_cursor = cursor.saturating_add(scan_limit).min(candidates.len());
+    let mut next_cursor = cursor.min(candidates.len());
+    let mut failed = 0usize;
+    let mut hits = Vec::new();
+
+    while hits.len() < limit && next_cursor < stop_cursor {
+        let batch_end = (next_cursor + concurrent).min(stop_cursor);
+        let batch = candidates[next_cursor..batch_end].to_vec();
+        next_cursor = batch_end;
+
+        let mut tasks = FuturesUnordered::new();
+        for candidate in batch {
+            let service = state.book_service.clone();
+            let user_ns = user_ns.clone();
+            tasks.push(async move {
+                let score = candidate.kind.score;
+                service
+                    .explore_book(&user_ns, &candidate.source, &candidate.kind.url, page)
+                    .await
+                    .map(|books| (books, score))
+            });
+        }
+
+        while let Some(result) = tasks.next().await {
+            match result {
+                Ok((books, category_score)) => {
+                    hits.extend(books.into_iter().enumerate().map(|(position, book)| {
+                        GlobalExploreBookHit {
+                            book,
+                            category_score,
+                            position,
+                        }
+                    }));
+                }
+                Err(_) => failed += 1,
+            }
+        }
+    }
+
+    let books = merge_global_explore_books(hits, limit);
+    Ok(Json(ApiResponse::ok(
+        serde_json::to_value(ExploreBookGlobalResponse {
+            books,
+            next_cursor,
+            has_more: next_cursor < candidates.len(),
+            failed,
+        })
+        .unwrap_or_default(),
     )))
 }
 
@@ -2767,12 +3145,12 @@ fn take_available_source_sse_matches(
 mod tests {
     use super::{
         book_matches_delete_target, build_available_book_source_response,
-        cache_count_for_shelf_display, fallback_available_book, merge_search_results,
-        should_use_available_source_cache, take_available_source_cached_matches,
-        take_available_source_sse_matches, take_search_book_multi_sse_batch,
-        GetAvailableBookSourceRequest,
+        cache_count_for_shelf_display, fallback_available_book, merge_global_explore_books,
+        merge_search_results, select_global_explore_kind, should_use_available_source_cache,
+        take_available_source_cached_matches, take_available_source_sse_matches,
+        take_search_book_multi_sse_batch, GetAvailableBookSourceRequest, GlobalExploreBookHit,
     };
-    use crate::model::{book::Book, search::SearchBook};
+    use crate::model::{book::Book, book_source::ExploreKind, search::SearchBook};
     use std::collections::HashSet;
 
     #[test]
@@ -3024,5 +3402,79 @@ mod tests {
         assert_eq!(matches[1].origin, "source-3");
         assert_eq!(matches[4].origin, "source-6");
         assert_eq!(seen.len(), 5);
+    }
+
+    #[test]
+    fn global_explore_selects_hot_category_for_requested_category() {
+        let kinds = vec![
+            explore_kind("玄幻魔法", "/xuanhuan"),
+            explore_kind("玄幻排行榜", "/xuanhuan-rank"),
+            explore_kind("都市排行", "/urban-rank"),
+        ];
+
+        let selected = select_global_explore_kind("fantasy", &kinds).expect("selected kind");
+
+        assert_eq!(selected.title, "玄幻排行榜");
+        assert_eq!(selected.url, "/xuanhuan-rank");
+    }
+
+    #[test]
+    fn global_explore_ranks_books_seen_in_more_sources_first() {
+        let ranked = merge_global_explore_books(
+            vec![
+                global_hit("单源热门", "甲", "source-a", "a", 40, 0),
+                global_hit("多源热门", "乙", "source-b", "b", 20, 1),
+                global_hit("多源热门", "乙", "source-c", "c", 20, 2),
+            ],
+            10,
+        );
+
+        assert_eq!(ranked[0].name, "多源热门");
+        assert!(ranked[0].book_source_urls.as_ref().is_some_and(|urls| {
+            urls.contains(&"source-b".to_string()) && urls.contains(&"source-c".to_string())
+        }));
+    }
+
+    #[test]
+    fn global_explore_drops_empty_book_names() {
+        let ranked = merge_global_explore_books(
+            vec![
+                global_hit("", "甲", "source-a", "a", 40, 0),
+                global_hit("正常书", "乙", "source-b", "b", 20, 1),
+            ],
+            10,
+        );
+
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].name, "正常书");
+    }
+
+    fn explore_kind(title: &str, url: &str) -> ExploreKind {
+        ExploreKind {
+            title: title.to_string(),
+            url: Some(url.to_string()),
+            style: None,
+        }
+    }
+
+    fn global_hit(
+        name: &str,
+        author: &str,
+        origin: &str,
+        book_url: &str,
+        category_score: i32,
+        position: usize,
+    ) -> GlobalExploreBookHit {
+        GlobalExploreBookHit {
+            book: SearchBook {
+                name: name.to_string(),
+                author: author.to_string(),
+                origin: origin.to_string(),
+                book_url: book_url.to_string(),
+                ..SearchBook::default()
+            },
+            category_score,
+            position,
+        }
     }
 }

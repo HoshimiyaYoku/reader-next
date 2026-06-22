@@ -6,6 +6,7 @@
         <!-- 顶部：书源切换 -->
         <div class="source-selector">
           <select :value="store.activeSourceUrl" @change="onSourceChange" v-if="store.exploreSources.length > 0">
+            <option :value="store.globalExploreSourceUrl">🌊 全局书海</option>
             <option
               v-for="src in store.exploreSources"
               :key="src.bookSourceUrl"

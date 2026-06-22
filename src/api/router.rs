@@ -81,6 +81,10 @@ pub fn build_router(state: AppState) -> Router {
             get(handlers::explore_book).post(handlers::explore_book),
         )
         .route(
+            "/reader3/exploreBookGlobal",
+            post(handlers::explore_book_global),
+        )
+        .route(
             "/reader3/searchBookMulti",
             get(handlers::search_book_multi).post(handlers::search_book_multi),
         )
