@@ -170,6 +170,21 @@ describe('aiBook store v3', () => {
     })
   })
 
+
+  it('rethrows map generation failure', async () => {
+    const book = createBook()
+    const failure = new Error('地图失败')
+    generateAiBookMapMock.mockRejectedValueOnce(failure)
+    const store = useAiBookStore()
+
+    await expect(store.generateMap({ bookUrl: book.bookUrl, sourceChapterIndex: 3, prompt: '世界地图' }))
+      .rejects
+      .toThrow('地图失败')
+
+    expect(store.phase).toBe('error')
+    expect(store.statusText).toBe('地图失败')
+  })
+
   it('allows retry after chapter generation failure', async () => {
     const book = createBook()
     const generatedResponse = createChapterResponse(book)

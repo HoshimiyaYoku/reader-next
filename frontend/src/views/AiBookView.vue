@@ -173,8 +173,6 @@
             <p>{{ character.currentStatus || character.description || '暂无状态' }}</p>
             <div class="meta-line">
               <span v-if="character.aliases.length">别名：{{ character.aliases.join('、') }}</span>
-              <span v-if="character.currentLocation">位置：{{ character.currentLocation }}</span>
-              <span v-if="character.affiliations.length">势力：{{ character.affiliations.join('、') }}</span>
               <span v-if="character.lastSeenChapter">最近：{{ character.lastSeenChapter }}</span>
             </div>
             <details v-if="hasEvidence(character.evidence)" class="evidence-block">
@@ -318,8 +316,6 @@ type DisplayCharacter = {
   importance: string
   description: string
   currentStatus: string
-  currentLocation: string
-  affiliations: string[]
   lastSeenChapter: string
   evidence: AiBookEvidence[]
 }
@@ -377,8 +373,22 @@ const tabs: Array<{ key: AiTab; label: string }> = [
   { key: 'map', label: '地图' },
 ]
 
-const memoryView = computed(() => aiStore.memoryView)
-const chapterMemory = computed(() => aiStore.chapterMemory)
+const memoryView = computed(() => {
+  const currentBook = book.value
+  const currentMemory = aiStore.memoryView
+  if (!currentBook || !currentMemory || currentMemory.bookUrl !== currentBook.bookUrl) {
+    return null
+  }
+  return currentMemory
+})
+const chapterMemory = computed(() => {
+  const currentBook = book.value
+  const currentChapter = aiStore.chapterMemory
+  if (!currentBook || !currentChapter || currentChapter.bookUrl !== currentBook.bookUrl || currentChapter.chapterIndex !== currentChapterIndex.value) {
+    return null
+  }
+  return currentChapter
+})
 const currentChapterIndex = computed(() => {
   if (readerStore.book?.bookUrl === book.value?.bookUrl) {
     return Math.max(0, readerStore.currentIndex)
@@ -404,15 +414,12 @@ const progressText = computed(() => {
 const characterNameById = computed(() => new Map((memoryView.value?.characters || []).map((item) => [item.id, item.name])))
 const locationNameById = computed(() => new Map((memoryView.value?.locations || []).map((item) => [item.id, item.name])))
 const chapterStateByName = computed(() => new Map((chapterMemory.value?.digest?.characterStates || []).map((item) => [item.name, item])))
-const chapterStateById = computed(() => new Map((chapterMemory.value?.characters || []).map((item) => [item.id, item])))
 const currentChapterSummary = computed(() => chapterMemory.value?.digest?.summary || chapterMemory.value?.lastError || '当前章节还没有摘要')
 const currentKeyPoints = computed(() => chapterMemory.value?.digest?.keyPoints || [])
 const currentCharacterStates = computed(() => chapterMemory.value?.digest?.characterStates || [])
 const currentChapterRelations = computed(() => chapterMemory.value?.digest?.characterRelations || [])
 const displayCharacters = computed<DisplayCharacter[]>(() => (memoryView.value?.characters || []).map((character) => {
   const chapterState = chapterStateByName.value.get(character.name)
-  const persistedState = chapterStateById.value.get(character.id)
-  const currentLocationId = persistedState?.id ? '' : ''
   return {
     id: character.id,
     name: character.name,
@@ -420,8 +427,6 @@ const displayCharacters = computed<DisplayCharacter[]>(() => (memoryView.value?.
     importance: character.importance || 'unknown',
     description: character.description || '',
     currentStatus: chapterState?.status || '',
-    currentLocation: chapterState?.name ? '' : (persistedState ? locationNameById.value.get((persistedState as never as { currentLocationId?: string | null }).currentLocationId || '') || '' : currentLocationId),
-    affiliations: [],
     lastSeenChapter: chapterState?.lastSeenChapterTitle || formatChapter(chapterState?.lastSeenChapterIndex ?? character.lastSeenChapterIndex ?? undefined),
     evidence: character.evidence,
   }

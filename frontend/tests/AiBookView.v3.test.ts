@@ -121,6 +121,47 @@ describe('AiBookView v3 behavior', () => {
     expect(aiStoreMock.generateMap).not.toHaveBeenCalled()
   })
 
+
+  it('hides stale memory when current book load fails after book lookup succeeds', async () => {
+    aiStoreMock.memoryView = { ...createMemoryView(), bookUrl: 'other-book', summary: { current: '旧书摘要', recentChanges: [], openQuestions: [] } }
+    getShelfBookMock.mockResolvedValueOnce(createBook())
+    aiStoreMock.load.mockRejectedValueOnce(new Error('AI资料加载失败'))
+    const wrapper = mount(AiBookView)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('AI资料加载失败')
+    expect(wrapper.text()).not.toContain('旧书摘要')
+  })
+
+  it('hides stale chapter memory when store chapter does not match current book or chapter', async () => {
+    aiStoreMock.chapterMemory = createChapterMemory({
+      bookUrl: 'other-book',
+      chapterIndex: 99,
+      chapterTitle: '旧章节',
+      digestSummary: '旧章节摘要',
+      characterStateStatus: '旧状态',
+    })
+    const wrapper = mount(AiBookView)
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('旧章节摘要')
+    expect(wrapper.text()).not.toContain('旧状态')
+    expect(wrapper.text()).toContain('当前章节还没有摘要')
+  })
+
+  it('shows map error toast when generateMap rejects', async () => {
+    aiStoreMock.generateMap.mockRejectedValueOnce(new Error('地图接口失败'))
+    const wrapper = mount(AiBookView)
+    await flushPromises()
+
+    await wrapper.get('nav.tabs button:nth-child(4)').trigger('click')
+    await flushPromises()
+    await wrapper.get('.map-head .secondary-btn').trigger('click')
+    await flushPromises()
+
+    expect(showToastMock).toHaveBeenCalledWith('地图接口失败', 'error')
+  })
+
   it('aiBook_view_calls_map_generate_action', async () => {
     const wrapper = mount(AiBookView)
     await flushPromises()
@@ -232,32 +273,42 @@ function createMemoryView(): AiBookMemoryViewModel {
   }
 }
 
-function createChapterMemory(): AiBookChapterMemoryViewModel {
+function createChapterMemory(overrides: {
+  bookUrl?: string
+  chapterIndex?: number
+  chapterTitle?: string
+  digestSummary?: string
+  characterStateStatus?: string
+} = {}): AiBookChapterMemoryViewModel {
+  const chapterIndex = overrides.chapterIndex ?? 2
+  const chapterTitle = overrides.chapterTitle ?? '第三章'
+  const digestSummary = overrides.digestSummary ?? '林舟夜探藏经阁前恢复灵力，并与苏九达成合作。'
+  const characterStateStatus = overrides.characterStateStatus ?? '灵力恢复，准备夜探藏经阁'
   return {
-    bookUrl: 'book-1',
-    chapterIndex: 2,
-    chapterTitle: '第三章',
+    bookUrl: overrides.bookUrl ?? 'book-1',
+    chapterIndex,
+    chapterTitle,
     digest: {
-      chapterIndex: 2,
-      chapterTitle: '第三章',
-      summary: '林舟夜探藏经阁前恢复灵力，并与苏九达成合作。',
+      chapterIndex,
+      chapterTitle,
+      summary: digestSummary,
       keyPoints: ['夜探藏经阁前恢复灵力', '与苏九达成合作'],
       characters: [
         {
           name: '林舟',
           aliases: ['阿舟'],
-          status: '灵力恢复，准备夜探藏经阁',
+          status: characterStateStatus,
           description: '状态稳定',
-          lastSeenChapter: '第三章',
+          lastSeenChapter: chapterTitle,
         },
       ],
       characterStates: [
         {
           name: '林舟',
-          status: '灵力恢复，准备夜探藏经阁',
+          status: characterStateStatus,
           description: '状态稳定',
-          lastSeenChapterIndex: 2,
-          lastSeenChapterTitle: '第三章',
+          lastSeenChapterIndex: chapterIndex,
+          lastSeenChapterTitle: chapterTitle,
         },
       ],
       characterRelations: [

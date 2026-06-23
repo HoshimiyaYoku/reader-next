@@ -97,10 +97,16 @@ export const useAiBookStore = defineStore('aiBook', () => {
   async function load(book: Book) {
     loading.value = true
     statusText.value = '加载 AI 资料...'
+    memoryView.value = null
+    chapterMemory.value = null
     try {
       const response = await getAiBookMemory(book.bookUrl)
       applyMemoryResponse(response.memory)
       return memoryView.value
+    } catch (error) {
+      memoryView.value = null
+      chapterMemory.value = null
+      throw error
     } finally {
       loading.value = false
       if (phase.value === 'idle') {
@@ -112,10 +118,14 @@ export const useAiBookStore = defineStore('aiBook', () => {
   async function loadChapterMemory(bookUrl: string, chapterIndex: number) {
     loading.value = true
     statusText.value = `加载第 ${chapterIndex + 1} 章 AI 资料...`
+    chapterMemory.value = null
     try {
       const response = await getAiBookChapterMemory({ bookUrl, chapterIndex })
       applyChapterResponse(response.memory, response.chapter)
       return chapterMemory.value
+    } catch (error) {
+      chapterMemory.value = null
+      throw error
     } finally {
       loading.value = false
       if (phase.value === 'idle') {
@@ -177,7 +187,7 @@ export const useAiBookStore = defineStore('aiBook', () => {
       return memoryView.value
     } catch (error) {
       setActionError((error as Error).message || '地图生成失败')
-      return memory.value
+      throw error
     }
   }
 
