@@ -4,7 +4,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::api::{auth::AuthContext, AppState};
 
@@ -611,34 +611,15 @@ async fn persist_catchup_status(
     book_url: &str,
     task: &AiBookCatchupTaskView,
 ) {
-    let mut memory = match state.ai_book_service.get_value(user_ns, book_url).await {
-        Ok(Some(memory)) => memory,
-        _ => empty_ai_book_memory(book_url),
+    let mut memory = match state.ai_book_service.get_or_create_v3(user_ns, book_url, None, None).await {
+        Ok(memory) => memory,
+        Err(_) => return,
     };
-    write_catchup_stats_to_memory(&mut memory, task);
-    let _ = state
-        .ai_book_service
-        .save_value_for_book(user_ns, book_url, memory)
-        .await;
+    write_catchup_stats_to_memory_v3(&mut memory, task);
+    let _ = state.ai_book_service.save_v3(user_ns, book_url, memory).await;
 }
 
-fn empty_ai_book_memory(book_url: &str) -> Value {
-    json!({
-        "schemaVersion": 2,
-        "bookUrl": book_url,
-        "enabled": true,
-        "summary": { "current": "", "recentChanges": [], "openQuestions": [] },
-        "chapterDigests": [],
-        "arcs": [],
-        "worldFacts": [],
-        "characters": [],
-        "relationships": [],
-        "locations": [],
-        "mapState": { "dirty": false, "nodes": [], "edges": [] },
-        "renderArtifacts": {},
-    })
-}
-
+#[cfg(test)]
 fn write_catchup_stats_to_memory(memory: &mut Value, task: &AiBookCatchupTaskView) {
     let Some(object) = memory.as_object_mut() else {
         return;
@@ -653,6 +634,14 @@ fn write_catchup_stats_to_memory(memory: &mut Value, task: &AiBookCatchupTaskVie
         "updatedAt".to_string(),
         Value::Number(task.updated_at.max(0).into()),
     );
+}
+
+fn write_catchup_stats_to_memory_v3(
+    memory: &mut crate::model::ai_book::AiBookMemoryV3,
+    task: &AiBookCatchupTaskView,
+) {
+    memory.catchup_stats = task.stats.clone();
+    memory.updated_at = task.updated_at;
 }
 
 fn parse_ai_book_catchup_start_request(
@@ -1018,6 +1007,56 @@ mod tests {
         assert_eq!(memory.get("updatedAt").and_then(Value::as_i64), Some(222));
         let saved_stats: AiBookCatchupTaskStats = serde_json::from_value(memory.get("catchupStats").cloned().unwrap()).unwrap();
         assert_eq!(saved_stats, stats);
+    }
+
+    #[tokio::test]
+    async fn persist_catchup_status_saves_stats_for_v3_memory() {
+        let (state, dir) = create_test_state().await;
+        let user_ns = "default";
+        let book_url = "book://catchup-v3";
+        seed_shelf_book(&state, user_ns, book_url).await;
+        state
+            .ai_book_service
+            .save_v3(
+                user_ns,
+                book_url,
+                create_empty_ai_book_memory_v3(
+                    book_url,
+                    Some("测试书".to_string()),
+                    Some("测试作者".to_string()),
+                ),
+            )
+            .await
+            .unwrap();
+
+        let mut stats = AiBookCatchupTaskStats::default();
+        stats.total_model_calls = 3;
+        stats.skipped_patch_chapters = 2;
+        let task = AiBookCatchupTaskView {
+            user_ns: user_ns.to_string(),
+            book_url: book_url.to_string(),
+            status: "canceling".to_string(),
+            current_stage: Some("digest".to_string()),
+            start_chapter_index: Some(1),
+            target_chapter_index: Some(3),
+            total_chapters: 3,
+            completed_chapters: 1,
+            current_chapter_index: Some(1),
+            current_chapter_title: Some("第2章".to_string()),
+            processed_chapter_index: Some(0),
+            processed_chapter_title: Some("第1章".to_string()),
+            error: None,
+            updated_at: 123,
+            stats: Some(stats.clone()),
+        };
+
+        persist_catchup_status(&state, user_ns, book_url, &task).await;
+
+        let saved = state.ai_book_service.get_or_create_v3(user_ns, book_url, None, None).await.unwrap();
+        assert_eq!(saved.catchup_stats, Some(stats));
+        assert!(saved.updated_at > 0);
+
+        let _ = tokio::fs::remove_dir_all(dir).await;
     }
 
     #[tokio::test]
