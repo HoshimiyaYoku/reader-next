@@ -40,23 +40,45 @@ V3 将 AI资料拆成明确领域对象：
 
 ## Relationship Semantics
 
-`characterRelations` 是窄表，不是万能边。
+`characterRelations` 是窄表，不是万能边。关系由固定主类、可控 subtype、极性、强度、生命周期状态和证据组成。LLM 只能提交候选；代码负责把自由文本归一到这些字段。
 
-允许的关系类型：
+允许 12 类主关系：
 
-- `family`: 亲属。
-- `mentor`: 师生、指导。
-- `peer`: 同伴、同学、队友，必须有持续互动价值。
-- `ally`: 合作、盟友。
-- `rival`: 竞争。
-- `enemy`: 敌对。
-- `debt`: 借贷、债务、经济控制。
-- `authority`: 上下级、管理、管束。
-- `protector`: 保护、庇护。
-- `manipulates`: 利用、诱导、控制。
-- `suspicious_of`: 怀疑、追踪、调查。
-- `transaction`: 明确交易关系。
-- `other_significant`: 无法归类但持续影响剧情的人物关系。
+- `family`: 亲属、收养、家族绑定。
+- `romantic`: 恋爱、婚约、暧昧伴侣。
+- `friend`: 朋友、信任对象。
+- `ally`: 同盟、临时合作、共同目标。
+- `enemy`: 敌对、仇怨、冲突阵营。
+- `rival`: 竞争、对手、排名/资源竞争。
+- `mentor_student`: 师生、指导、传授。
+- `peer`: 同学、同事、队友、同辈熟人，必须有持续互动价值。
+- `superior_subordinate`: 上下级、管理、管束、雇佣。
+- `organization_member`: 同组织、同阵营、同学校/班级中有剧情价值的成员关系。
+- `benefactor_dependent`: 资助、庇护、救助、资源依赖。
+- `unknown_significant`: 明显重要但当前无法归类的人物关系；必须带 `subtype` 和 evidence。
+
+`subtype` 是短字符串，用于记录具体语义，例如 `借贷牵连`、`债务诱导`、`怀疑跟踪`、`共同调查`、`资源交换`。`subtype` 不能替代主类，不能单独让动作进入关系表。
+
+`polarity` 描述当前倾向：
+
+- `positive`: 友好、信任、支持。
+- `negative`: 敌意、压迫、伤害。
+- `mixed`: 既合作又紧张。
+- `neutral`: 关系存在但态度中性。
+- `unknown`: 当前已读范围不足以判断。
+
+`strength` 描述阅读理解价值：
+
+- `major`: 主线或长期强影响。
+- `moderate`: 多章持续影响。
+- `minor`: 有关系但不应默认展示；仅保留到详情或可被清洗。
+
+`status` 描述生命周期：
+
+- `active`: 当前仍有效。
+- `changed`: 最近章节改变了关系性质。
+- `ended`: 当前已结束或失效。
+- `uncertain`: 已读范围内有迹象但未确认。
 
 禁止进入 `characterRelations`：
 
@@ -75,8 +97,8 @@ V3 将 AI资料拆成明确领域对象：
 | 张羽就读嵩阳高中 | `characterStates.affiliations` 或 `currentLocationId` |
 | 赵天行出现在学校大屏幕 | 通常丢弃；若持续重要，写入 `characterStates.status` |
 | 嵩阳高中包含法力教室 | `locationEdges(kind=contains)` |
-| 张羽和白真真有借贷互助 | `characterRelations(kind=debt/transaction/peer)` |
-| 苏海峰用补助计划诱导张羽签债务合同 | `characterRelations(kind=manipulates/authority/debt)` |
+| 张羽和白真真有借贷互助 | `characterRelations(kind=peer, subtype=借贷牵连, polarity=mixed)` |
+| 苏海峰用补助计划诱导张羽签债务合同 | `characterRelations(kind=superior_subordinate, subtype=债务诱导, polarity=negative)` |
 
 ## V3 Data Shape
 
@@ -115,14 +137,31 @@ interface AiBookCharacterRelationV3 {
   id: string
   sourceCharacterId: string
   targetCharacterId: string
-  kind: 'family' | 'mentor' | 'peer' | 'ally' | 'rival' | 'enemy' | 'debt' | 'authority' | 'protector' | 'manipulates' | 'suspicious_of' | 'transaction' | 'other_significant'
+  kind: 'family' | 'romantic' | 'friend' | 'ally' | 'enemy' | 'rival' | 'mentor_student' | 'peer' | 'superior_subordinate' | 'organization_member' | 'benefactor_dependent' | 'unknown_significant'
+  subtype?: string
   label: string
+  polarity: 'positive' | 'negative' | 'mixed' | 'neutral' | 'unknown'
+  strength: 'major' | 'moderate' | 'minor'
+  status: 'active' | 'changed' | 'ended' | 'uncertain'
   direction: 'directed' | 'undirected'
-  status?: string
-  description?: string
-  importance: 'high' | 'medium'
+  summary: string
+  currentDynamics: string[]
   firstSeenChapterIndex?: number
-  lastSeenChapterIndex?: number
+  lastUpdatedChapterIndex?: number
+  evidence: AiBookEvidence[]
+  history: AiBookRelationChange[]
+}
+
+interface AiBookRelationChange {
+  chapterIndex: number
+  chapterTitle: string
+  previousKind?: AiBookCharacterRelationV3['kind']
+  nextKind: AiBookCharacterRelationV3['kind']
+  previousPolarity?: AiBookCharacterRelationV3['polarity']
+  nextPolarity: AiBookCharacterRelationV3['polarity']
+  previousStatus?: AiBookCharacterRelationV3['status']
+  nextStatus: AiBookCharacterRelationV3['status']
+  note: string
   evidence: AiBookEvidence[]
 }
 
@@ -221,8 +260,11 @@ Prompt 必须明确：
    - 一次性动作：写入 `droppedFacts`。
 
 3. `mergeAiBookMemoryV3(previous, normalizedPatch)`
-   - 按稳定 id 合并。
-   - 同一人物对的相近关系合并为更高价值 label。
+   - 关系稳定 id 使用 unordered character pair；同一人物对默认只有一张当前关系卡。
+   - 新 patch 若只是细节变化，更新 `subtype/polarity/strength/status/summary/currentDynamics` 并追加 `history`。
+   - 新 patch 若把敌对变合作、朋友变敌人，更新当前 `kind/polarity/status=changed`，旧状态进入 `history`，不并列展示两条冲突关系。
+   - 新 patch 若标记关系结束，设置 `status=ended`，默认 UI 隐藏或弱化，不物理删除。
+   - 只有迁移脏边、非法 target、低价值动作、无证据候选进入 `droppedFacts`；缺席某章不代表删除。
    - evidence 去重并限制数量。
    - 更新 `chapterDigests` 和 `summary`。
 
