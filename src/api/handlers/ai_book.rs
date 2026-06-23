@@ -3,28 +3,68 @@ use axum::{
     extract::{Query, State},
     Json,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::api::{auth::AuthContext, AppState};
 
 use crate::error::error::{ApiResponse, AppError};
+use crate::model::ai_book::{AiBookChapterMemoryViewResponse, AiBookMemoryViewResponse};
 use crate::model::ai_book_catchup::{
-    AiBookCatchupCancelRequest, AiBookCatchupPauseRequest, AiBookCatchupStartRequest,
-    AiBookCatchupStatusRequest, AiBookCatchupTaskView,
+    AiBookCatchupCancelRequest, AiBookCatchupStartRequest, AiBookCatchupStatusRequest,
+    AiBookCatchupTaskView,
 };
 use crate::service::ai_book_catchup_service::{
     fetch_content_fn, save_memory_fn, CatchupBookContext, CatchupChapter,
+};
+use crate::service::ai_book_generation_service::AiBookGenerationMode;
+use crate::service::ai_book_memory_v3::{
+    select_ai_book_chapter_view_v3, select_ai_book_display_memory_v3,
 };
 use crate::service::local_txt_book::is_local_txt_origin;
 use crate::util::text::repair_encoded_url;
 
 const CATCHUP_TASK_MEMORY_KEY: &str = "catchupTask";
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct AiBookMemoryRequest {
     #[serde(rename = "bookUrl", alias = "url")]
     pub book_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookChapterMemoryRequest {
+    #[serde(rename = "bookUrl", alias = "url")]
+    pub book_url: Option<String>,
+    pub chapter_index: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookEnabledRequest {
+    #[serde(rename = "bookUrl", alias = "url")]
+    pub book_url: Option<String>,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookGenerateChapterRequest {
+    #[serde(rename = "bookUrl", alias = "url")]
+    pub book_url: Option<String>,
+    pub chapter_index: Option<i32>,
+    pub mode: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookGenerateMapRequest {
+    #[serde(rename = "bookUrl", alias = "url")]
+    pub book_url: Option<String>,
+    pub source_chapter_index: Option<i32>,
+    pub prompt: Option<String>,
 }
 
 pub async fn get_ai_book_memory(
@@ -36,44 +76,134 @@ pub async fn get_ai_book_memory(
     let user_ns = resolve_user_ns(&state, &auth).await?;
     let req = parse_ai_book_request(q, body)?;
     let book_url = required_book_url(req.book_url)?;
-    ensure_shelf_book(&state, &user_ns, &book_url).await?;
-    let memory = state.ai_book_service.get_value(&user_ns, &book_url).await?;
+    let shelf_book = ensure_shelf_book(&state, &user_ns, &book_url).await?;
+    let memory = state
+        .ai_book_service
+        .get_or_create_v3(
+            &user_ns,
+            &book_url,
+            Some(shelf_book.name.clone()),
+            Some(shelf_book.author.clone()),
+        )
+        .await?;
     Ok(Json(ApiResponse::ok(
-        serde_json::to_value(memory).unwrap_or_default(),
+        serde_json::to_value(AiBookMemoryViewResponse {
+            memory: select_ai_book_display_memory_v3(&memory),
+        })
+        .unwrap_or_default(),
     )))
 }
 
-pub async fn save_ai_book_memory(
+pub async fn get_ai_book_chapter_memory(
     State(state): State<AppState>,
     auth: AuthContext,
-    Json(mut memory): Json<Value>,
-) -> Result<Json<ApiResponse<Value>>, AppError> {
-    let user_ns = resolve_user_ns(&state, &auth).await?;
-    let book_url = required_book_url(read_json_string(&memory, "bookUrl"))?;
-    let shelf_book = ensure_shelf_book(&state, &user_ns, &book_url).await?;
-    set_json_string_if_empty(&mut memory, "bookName", shelf_book.name)?;
-    set_json_string_if_empty(&mut memory, "author", shelf_book.author)?;
-    let saved = state
-        .ai_book_service
-        .save_value_for_book(&user_ns, &book_url, memory)
-        .await?;
-    Ok(Json(ApiResponse::ok(saved)))
-}
-
-pub async fn delete_ai_book_memory(
-    State(state): State<AppState>,
-    auth: AuthContext,
-    Query(q): Query<AiBookMemoryRequest>,
+    Query(q): Query<AiBookChapterMemoryRequest>,
     body: Bytes,
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
     let user_ns = resolve_user_ns(&state, &auth).await?;
-    let req = parse_ai_book_request(q, body)?;
+    let req = parse_ai_book_chapter_request(q, body)?;
+    let book_url = required_book_url(req.book_url)?;
+    let chapter_index = required_chapter_index(req.chapter_index)?;
+    let shelf_book = ensure_shelf_book(&state, &user_ns, &book_url).await?;
+    let memory = state
+        .ai_book_service
+        .get_or_create_v3(
+            &user_ns,
+            &book_url,
+            Some(shelf_book.name.clone()),
+            Some(shelf_book.author.clone()),
+        )
+        .await?;
+    Ok(Json(ApiResponse::ok(
+        serde_json::to_value(AiBookChapterMemoryViewResponse {
+            chapter: select_ai_book_chapter_view_v3(&memory, chapter_index),
+            memory: select_ai_book_display_memory_v3(&memory),
+        })
+        .unwrap_or_default(),
+    )))
+}
+
+pub async fn reset_ai_book_memory(
+    State(state): State<AppState>,
+    auth: AuthContext,
+    Json(req): Json<AiBookMemoryRequest>,
+) -> Result<Json<ApiResponse<Value>>, AppError> {
+    let user_ns = resolve_user_ns(&state, &auth).await?;
+    let book_url = required_book_url(req.book_url)?;
+    let shelf_book = ensure_shelf_book(&state, &user_ns, &book_url).await?;
+    let memory = state
+        .ai_book_service
+        .reset_v3(
+            &user_ns,
+            &book_url,
+            Some(shelf_book.name.clone()),
+            Some(shelf_book.author.clone()),
+        )
+        .await?;
+    Ok(Json(ApiResponse::ok(
+        serde_json::to_value(AiBookMemoryViewResponse {
+            memory: select_ai_book_display_memory_v3(&memory),
+        })
+        .unwrap_or_default(),
+    )))
+}
+
+pub async fn set_ai_book_enabled(
+    State(state): State<AppState>,
+    auth: AuthContext,
+    Json(req): Json<AiBookEnabledRequest>,
+) -> Result<Json<ApiResponse<Value>>, AppError> {
+    let user_ns = resolve_user_ns(&state, &auth).await?;
     let book_url = required_book_url(req.book_url)?;
     ensure_shelf_book(&state, &user_ns, &book_url).await?;
-    let deleted = state.ai_book_service.delete(&user_ns, &book_url).await?;
+    let memory = state
+        .ai_book_service
+        .set_enabled(&user_ns, &book_url, req.enabled)
+        .await?;
     Ok(Json(ApiResponse::ok(
-        serde_json::json!({ "deleted": deleted }),
+        serde_json::to_value(AiBookMemoryViewResponse {
+            memory: select_ai_book_display_memory_v3(&memory),
+        })
+        .unwrap_or_default(),
     )))
+}
+
+pub async fn generate_ai_book_chapter_memory(
+    State(state): State<AppState>,
+    auth: AuthContext,
+    Json(req): Json<AiBookGenerateChapterRequest>,
+) -> Result<Json<ApiResponse<Value>>, AppError> {
+    let user_ns = resolve_user_ns(&state, &auth).await?;
+    let book_url = required_book_url(req.book_url)?;
+    let chapter_index = required_chapter_index(req.chapter_index)?;
+    let shelf_book = ensure_shelf_book(&state, &user_ns, &book_url).await?;
+    let response = state
+        .ai_book_generation_service
+        .generate_current_chapter(
+            &user_ns,
+            &shelf_book,
+            chapter_index,
+            parse_generation_mode(req.mode.as_deref()),
+        )
+        .await?;
+    Ok(Json(ApiResponse::ok(
+        serde_json::to_value(response).unwrap_or_default(),
+    )))
+}
+
+pub async fn generate_ai_book_map(
+    State(state): State<AppState>,
+    auth: AuthContext,
+    Json(req): Json<AiBookGenerateMapRequest>,
+) -> Result<Json<ApiResponse<Value>>, AppError> {
+    let user_ns = resolve_user_ns(&state, &auth).await?;
+    let book_url = required_book_url(req.book_url)?;
+    let _ = req.source_chapter_index;
+    let _ = req.prompt;
+    ensure_shelf_book(&state, &user_ns, &book_url).await?;
+    Err(AppError::BadRequest(
+        "AI资料地图生成功能尚未接入模型".to_string(),
+    ))
 }
 
 async fn resolve_user_ns(state: &AppState, auth: &AuthContext) -> Result<String, AppError> {
@@ -117,6 +247,13 @@ fn parse_ai_book_request(
     Ok(req)
 }
 
+fn parse_ai_book_chapter_request(
+    q: AiBookChapterMemoryRequest,
+    body: Bytes,
+) -> Result<AiBookChapterMemoryRequest, AppError> {
+    parse_catchup_request(q, body)
+}
+
 fn required_book_url(book_url: Option<String>) -> Result<String, AppError> {
     let book_url = book_url
         .filter(|v| !v.trim().is_empty())
@@ -124,24 +261,15 @@ fn required_book_url(book_url: Option<String>) -> Result<String, AppError> {
     Ok(repair_encoded_url(&book_url))
 }
 
-fn read_json_string(value: &Value, key: &str) -> Option<String> {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
+fn required_chapter_index(chapter_index: Option<i32>) -> Result<i32, AppError> {
+    chapter_index.ok_or_else(|| AppError::BadRequest("chapterIndex required".to_string()))
 }
 
-fn set_json_string_if_empty(value: &mut Value, key: &str, next: String) -> Result<(), AppError> {
-    let object = value
-        .as_object_mut()
-        .ok_or_else(|| AppError::BadRequest("AI memory must be a JSON object".to_string()))?;
-    let current = object.get(key).and_then(Value::as_str).unwrap_or("").trim();
-    if current.is_empty() {
-        object.insert(key.to_string(), Value::String(next));
+fn parse_generation_mode(raw: Option<&str>) -> AiBookGenerationMode {
+    match raw.unwrap_or_default().trim().to_ascii_lowercase().as_str() {
+        "auto" => AiBookGenerationMode::Auto,
+        _ => AiBookGenerationMode::Manual,
     }
-    Ok(())
 }
 
 pub async fn start_ai_book_catchup(
@@ -329,26 +457,6 @@ pub async fn get_ai_book_catchup_status(
     if task.status != "idle" {
         persist_catchup_status(&state, &user_ns, &book_url, &task).await;
     }
-    Ok(Json(ApiResponse::ok(
-        serde_json::to_value(task).unwrap_or_default(),
-    )))
-}
-
-pub async fn pause_ai_book_catchup(
-    State(state): State<AppState>,
-    auth: AuthContext,
-    Query(q): Query<AiBookCatchupPauseRequest>,
-    body: Bytes,
-) -> Result<Json<ApiResponse<Value>>, AppError> {
-    let user_ns = resolve_user_ns(&state, &auth).await?;
-    let req = parse_ai_book_catchup_pause_request(q, body)?;
-    let book_url = required_book_url(req.book_url)?;
-    ensure_shelf_book(&state, &user_ns, &book_url).await?;
-    let task = state
-        .ai_book_catchup_service
-        .request_pause(&user_ns, &book_url)
-        .await?;
-    persist_catchup_status(&state, &user_ns, &book_url, &task).await;
     Ok(Json(ApiResponse::ok(
         serde_json::to_value(task).unwrap_or_default(),
     )))
@@ -614,13 +722,6 @@ fn parse_ai_book_catchup_status_request(
     parse_catchup_request(q, body)
 }
 
-fn parse_ai_book_catchup_pause_request(
-    q: AiBookCatchupPauseRequest,
-    body: Bytes,
-) -> Result<AiBookCatchupPauseRequest, AppError> {
-    parse_catchup_request(q, body)
-}
-
 fn parse_ai_book_catchup_cancel_request(
     q: AiBookCatchupCancelRequest,
     body: Bytes,
@@ -682,8 +783,192 @@ fn build_catchup_start_failure_memory(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::app::config::AppConfig;
     use crate::model::ai_book_catchup::AiBookCatchupTaskStats;
+    use crate::model::book::Book;
+    use crate::service::ai_book_generation_service::AiBookGenerationService;
+    use crate::service::ai_book_memory_v3::create_empty_ai_book_memory_v3;
+    use crate::service::ai_book_service::AiBookService;
+    use crate::service::ai_model_service::AiModelService;
+    use crate::service::book_group_service::BookGroupService;
+    use crate::service::book_service::BookService;
+    use crate::service::book_source_service::BookSourceService;
+    use crate::service::chapter_summary_service::ChapterSummaryService;
+    use crate::service::json_document_service::JsonDocumentService;
+    use crate::service::local_txt_book::LocalTxtBookService;
+    use crate::service::update_service::UpdateService;
+    use crate::service::user_service::UserService;
+    use crate::storage::cache::file_cache::FileCache;
+    use crate::storage::db;
+    use crate::storage::db::repo::BookSourceRepo;
+    use crate::util::crypto::random_string;
+    use axum::extract::Query;
+    use serde_json::json;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+
+    async fn create_test_state() -> (AppState, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("reader-ai-book-handler-{}", random_string(8)));
+        std::fs::create_dir_all(&dir).unwrap();
+        let database_url = format!("sqlite:{}?mode=rwc", dir.join("reader.db").display());
+        let pool = db::init_pool(&database_url).await.unwrap();
+        let cfg = AppConfig {
+            storage_dir: dir.to_string_lossy().to_string(),
+            assets_dir: dir.join("assets").to_string_lossy().to_string(),
+            web_root: dir.join("web").to_string_lossy().to_string(),
+            database_url,
+            ..AppConfig::default()
+        };
+        let http = crate::crawler::http_client::HttpClient::new(cfg.request_timeout_secs, None).unwrap();
+        let parser = crate::parser::rule_engine::RuleEngine::new().unwrap();
+        let cache = FileCache::new(format!("{}/cache", cfg.storage_dir));
+        let book_service = Arc::new(BookService::new(http, parser, cache, &cfg.storage_dir));
+        let book_source_service = Arc::new(BookSourceService::new(
+            BookSourceRepo::new(pool.clone()),
+            &cfg.storage_dir,
+        ));
+        let local_txt_book_service = Arc::new(LocalTxtBookService::new(&cfg.storage_dir));
+        let json_document_service = Arc::new(JsonDocumentService::new(pool.clone(), &cfg.storage_dir));
+        let user_service = Arc::new(UserService::new(cfg.clone(), pool.clone()));
+        user_service.migrate_legacy_users_from_json().await.unwrap();
+        let book_group_service = Arc::new(BookGroupService::new(json_document_service.clone()));
+        let ai_book_service = Arc::new(AiBookService::new(pool.clone(), &cfg.storage_dir));
+        let ai_book_generation_service = Arc::new(AiBookGenerationService::new(
+            ai_book_service.clone(),
+            book_service.clone(),
+            book_source_service.clone(),
+            local_txt_book_service.clone(),
+        ));
+        let ai_book_catchup_service = Arc::new(crate::service::ai_book_catchup_service::AiBookCatchupService::new());
+        let ai_model_service = Arc::new(AiModelService::new(
+            json_document_service.clone(),
+            &cfg.storage_dir,
+        ));
+        let chapter_summary_service = Arc::new(ChapterSummaryService::new(json_document_service.clone()));
+        let update_service = Arc::new(
+            UpdateService::new(
+                json_document_service.clone(),
+                cfg.request_timeout_secs,
+                format!("v{}", env!("CARGO_PKG_VERSION")),
+            )
+            .unwrap(),
+        );
+        let state = AppState {
+            config: cfg,
+            book_service,
+            book_source_service,
+            user_service,
+            book_group_service,
+            local_txt_book_service,
+            json_document_service,
+            ai_book_service,
+            ai_book_generation_service,
+            ai_book_catchup_service,
+            ai_model_service,
+            chapter_summary_service,
+            update_service,
+        };
+        (state, dir)
+    }
+
+    async fn seed_shelf_book(state: &AppState, user_ns: &str, book_url: &str) {
+        state
+            .book_service
+            .save_book(
+                user_ns,
+                Book {
+                    name: "测试书".to_string(),
+                    author: "测试作者".to_string(),
+                    book_url: book_url.to_string(),
+                    origin: "local".to_string(),
+                    ..Book::default()
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn ai_book_v3_get_memory_wraps_api_response() {
+        let (state, dir) = create_test_state().await;
+        let user_ns = "default";
+        let book_url = "book://api-memory";
+        seed_shelf_book(&state, user_ns, book_url).await;
+        state
+            .ai_book_service
+            .save_v3(
+                user_ns,
+                book_url,
+                create_empty_ai_book_memory_v3(
+                    book_url,
+                    Some("接口书".to_string()),
+                    Some("接口作者".to_string()),
+                ),
+            )
+            .await
+            .unwrap();
+
+        let response = get_ai_book_memory(
+            State(state),
+            AuthContext::default(),
+            Query(AiBookMemoryRequest {
+                book_url: Some(book_url.to_string()),
+            }),
+            Bytes::new(),
+        )
+        .await
+        .unwrap();
+
+        let payload = serde_json::to_value(response.0).unwrap();
+        assert_eq!(payload["isSuccess"], json!(true));
+        assert_eq!(payload["errorMsg"], json!(""));
+        assert_eq!(payload["data"]["memory"]["bookUrl"], json!(book_url));
+        assert_eq!(payload["data"]["memory"]["bookName"], json!("接口书"));
+        assert_eq!(payload["data"]["memory"]["author"], json!("接口作者"));
+
+        let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+
+    #[tokio::test]
+    async fn ai_book_v3_reset_and_enabled_handlers_return_memory_view() {
+        let (state, dir) = create_test_state().await;
+        let user_ns = "default";
+        let book_url = "book://api-actions";
+        seed_shelf_book(&state, user_ns, book_url).await;
+
+        let enabled = set_ai_book_enabled(
+            State(state.clone()),
+            AuthContext::default(),
+            Json(AiBookEnabledRequest {
+                book_url: Some(book_url.to_string()),
+                enabled: true,
+            }),
+        )
+        .await
+        .unwrap();
+        let enabled_payload = serde_json::to_value(enabled.0).unwrap();
+        assert_eq!(enabled_payload["isSuccess"], json!(true));
+        assert_eq!(enabled_payload["data"]["memory"]["bookUrl"], json!(book_url));
+        assert_eq!(enabled_payload["data"]["memory"]["enabled"], json!(true));
+
+        let reset = reset_ai_book_memory(
+            State(state),
+            AuthContext::default(),
+            Json(AiBookMemoryRequest {
+                book_url: Some(book_url.to_string()),
+            }),
+        )
+        .await
+        .unwrap();
+        let reset_payload = serde_json::to_value(reset.0).unwrap();
+        assert_eq!(reset_payload["isSuccess"], json!(true));
+        assert_eq!(reset_payload["data"]["memory"]["bookUrl"], json!(book_url));
+        assert_eq!(reset_payload["data"]["memory"]["enabled"], json!(false));
+        assert_eq!(reset_payload["data"]["memory"]["summary"]["current"], json!(""));
+
+        let _ = tokio::fs::remove_dir_all(dir).await;
+    }
 
     #[test]
     fn start_failure_memory_records_last_error_without_advancing_processed_chapter() {

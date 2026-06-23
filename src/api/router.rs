@@ -209,32 +209,37 @@ pub fn build_router(state: AppState) -> Router {
         .route("/reader3/saveBookmarks", post(handlers::save_bookmarks))
         .route("/reader3/deleteBookmark", post(handlers::delete_bookmark))
         .route("/reader3/deleteBookmarks", post(handlers::delete_bookmarks))
+        .route("/reader3/aiBook/memory", get(handlers::get_ai_book_memory))
         .route(
-            "/reader3/getAiBookMemory",
-            get(handlers::get_ai_book_memory).post(handlers::get_ai_book_memory),
+            "/reader3/aiBook/chapterMemory",
+            get(handlers::get_ai_book_chapter_memory),
         )
         .route(
-            "/reader3/saveAiBookMemory",
-            post(handlers::save_ai_book_memory),
+            "/reader3/aiBook/memory/reset",
+            post(handlers::reset_ai_book_memory),
         )
         .route(
-            "/reader3/deleteAiBookMemory",
-            post(handlers::delete_ai_book_memory),
+            "/reader3/aiBook/enabled",
+            post(handlers::set_ai_book_enabled),
         )
         .route(
-            "/reader3/aiBookCatchup/start",
+            "/reader3/aiBook/chapterMemory/generate",
+            post(handlers::generate_ai_book_chapter_memory),
+        )
+        .route(
+            "/reader3/aiBook/map/generate",
+            post(handlers::generate_ai_book_map),
+        )
+        .route(
+            "/reader3/aiBook/catchup/start",
             post(handlers::start_ai_book_catchup),
         )
         .route(
-            "/reader3/aiBookCatchup/status",
-            get(handlers::get_ai_book_catchup_status).post(handlers::get_ai_book_catchup_status),
+            "/reader3/aiBook/catchup/status",
+            get(handlers::get_ai_book_catchup_status),
         )
         .route(
-            "/reader3/aiBookCatchup/pause",
-            post(handlers::pause_ai_book_catchup),
-        )
-        .route(
-            "/reader3/aiBookCatchup/cancel",
+            "/reader3/aiBook/catchup/cancel",
             post(handlers::cancel_ai_book_catchup),
         )
         .route(
@@ -337,4 +342,26 @@ pub fn build_router(state: AppState) -> Router {
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid::default()))
         .layer(CorsLayer::very_permissive())
+}
+
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn ai_book_v3_no_raw_save_route_registered() {
+        let source = std::fs::read_to_string(file!()).unwrap();
+        assert!(source.contains("\"/reader3/aiBook/memory\""));
+        assert!(source.contains("\"/reader3/aiBook/chapterMemory\""));
+        assert!(source.contains("\"/reader3/aiBook/memory/reset\""));
+        assert!(source.contains("\"/reader3/aiBook/enabled\""));
+        assert!(source.contains("\"/reader3/aiBook/chapterMemory/generate\""));
+        assert!(source.contains("\"/reader3/aiBook/map/generate\""));
+        assert!(source.contains("\"/reader3/aiBook/catchup/start\""));
+        assert!(source.contains("\"/reader3/aiBook/catchup/status\""));
+        assert!(source.contains("\"/reader3/aiBook/catchup/cancel\""));
+        assert!(!source.contains("\"/reader3/saveAiBookMemory\""));
+        assert!(!source.contains("\"/reader3/getAiBookMemory\""));
+        assert!(!source.contains("\"/reader3/deleteAiBookMemory\""));
+        assert!(!source.contains("\"/reader3/aiBookCatchup/pause\""));
+    }
 }
