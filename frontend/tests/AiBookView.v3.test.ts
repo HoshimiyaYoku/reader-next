@@ -98,6 +98,29 @@ describe('AiBookView v3 behavior', () => {
     })
   })
 
+
+
+  it('disables generate and map actions while ai store is busy', async () => {
+    aiStoreMock.isBusy = true
+    const wrapper = mount(AiBookView)
+    await flushPromises()
+
+    const generateButton = wrapper.get('button.primary-btn')
+    expect(generateButton.attributes('disabled')).toBeDefined()
+    await generateButton.trigger('click')
+    await flushPromises()
+    expect(aiStoreMock.generateChapterMemory).not.toHaveBeenCalled()
+
+    await wrapper.get('nav.tabs button:nth-child(4)').trigger('click')
+    await flushPromises()
+
+    const mapButton = wrapper.get('.map-head .secondary-btn')
+    expect(mapButton.attributes('disabled')).toBeDefined()
+    await mapButton.trigger('click')
+    await flushPromises()
+    expect(aiStoreMock.generateMap).not.toHaveBeenCalled()
+  })
+
   it('aiBook_view_calls_map_generate_action', async () => {
     const wrapper = mount(AiBookView)
     await flushPromises()
