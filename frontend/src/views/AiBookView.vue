@@ -238,13 +238,12 @@
                 <h2>地图</h2>
                 <p>{{ mapStatusText }}</p>
               </div>
-              <button class="secondary-btn" :disabled="aiStore.isBusy" @click="generateMapImage">
-                {{ aiStore.phase === 'map' ? '生成中...' : '生成地图' }}
+              <button class="secondary-btn" disabled>
+                暂未开放
               </button>
             </div>
             <div class="map-frame">
-              <img v-if="mapImageUrl" :src="mapImageUrl" alt="世界地图" />
-              <EmptyState v-else text="暂无地图图片" />
+              <EmptyState text="V3 切换期间，地图生成与持久化暂未接入；当前页仅保留地点资料。" />
             </div>
           </article>
 
@@ -464,12 +463,7 @@ const worldviewGroups = computed(() => {
   }
   return [...groups.entries()].map(([category, items]) => ({ category, items }))
 })
-const mapImageUrl = computed(() => memoryView.value?.map?.renderArtifacts?.imageUrl || '')
-const mapStatusText = computed(() => {
-  if (memoryView.value?.map?.state?.dirty) return '地图待重新生成'
-  if (memoryView.value?.map?.renderArtifacts?.updatedAt) return `更新于 ${formatTime(memoryView.value.map.renderArtifacts.updatedAt)}`
-  return '尚未生成地图图片'
-})
+const mapStatusText = computed(() => '地图生成功能已暂时禁用')
 const generateDisabled = computed(() => aiStore.isBusy || !book.value)
 const generateButtonLabel = computed(() => aiStore.phase === 'text' ? '生成中...' : '生成当前章节')
 const pollingStatuses = new Set<AiBookCatchupTaskStatus>(['running', 'canceling', 'pausing'])
@@ -598,19 +592,6 @@ async function generateCurrentChapter() {
     appStore.showToast('当前章节 AI资料已生成', 'success')
   } catch (error) {
     appStore.showToast((error as Error).message || '当前章节生成失败', 'error')
-  }
-}
-
-async function generateMapImage() {
-  if (!book.value) return
-  try {
-    await aiStore.generateMap({
-      bookUrl: book.value.bookUrl,
-      sourceChapterIndex: currentChapterIndex.value,
-    })
-    appStore.showToast(mapImageUrl.value ? '地图已更新' : '地图生成完成，但还没有图片', 'success')
-  } catch (error) {
-    appStore.showToast((error as Error).message || '地图生成失败', 'error')
   }
 }
 

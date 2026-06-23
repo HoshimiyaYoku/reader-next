@@ -149,20 +149,18 @@ describe('AiBookView v3 behavior', () => {
     expect(wrapper.text()).toContain('当前章节还没有摘要')
   })
 
-  it('shows map error toast when generateMap rejects', async () => {
-    aiStoreMock.generateMap.mockRejectedValueOnce(new Error('地图接口失败'))
+  it('shows disabled map notice in V3 cutover', async () => {
     const wrapper = mount(AiBookView)
     await flushPromises()
 
     await wrapper.get('nav.tabs button:nth-child(4)').trigger('click')
     await flushPromises()
-    await wrapper.get('.map-head .secondary-btn').trigger('click')
-    await flushPromises()
 
-    expect(showToastMock).toHaveBeenCalledWith('地图接口失败', 'error')
+    expect(wrapper.text()).toContain('地图生成功能已暂时禁用')
+    expect(wrapper.text()).toContain('V3 切换期间，地图生成与持久化暂未接入')
   })
 
-  it('aiBook_view_calls_map_generate_action', async () => {
+  it('disables map action during V3 cutover', async () => {
     const wrapper = mount(AiBookView)
     await flushPromises()
 
@@ -170,14 +168,11 @@ describe('AiBookView v3 behavior', () => {
     await flushPromises()
 
     const button = wrapper.get('.map-head .secondary-btn')
-    expect(button.attributes('disabled')).toBeUndefined()
+    expect(button.attributes('disabled')).toBeDefined()
     await button.trigger('click')
     await flushPromises()
 
-    expect(aiStoreMock.generateMap).toHaveBeenCalledWith({
-      bookUrl: 'book-1',
-      sourceChapterIndex: 2,
-    })
+    expect(aiStoreMock.generateMap).not.toHaveBeenCalled()
   })
 })
 

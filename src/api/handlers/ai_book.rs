@@ -212,7 +212,7 @@ pub async fn generate_ai_book_map(
     let _ = req.prompt;
     ensure_shelf_book(&state, &user_ns, &book_url).await?;
     Err(AppError::BadRequest(
-        "AI资料地图生成功能尚未接入模型".to_string(),
+        "AI资料地图功能在 V3 切换期间已禁用".to_string(),
     ))
 }
 
@@ -904,6 +904,35 @@ mod tests {
         assert_eq!(reset_payload["data"]["memory"]["bookUrl"], json!(book_url));
         assert_eq!(reset_payload["data"]["memory"]["enabled"], json!(false));
         assert_eq!(reset_payload["data"]["memory"]["summary"]["current"], json!(""));
+
+        let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+
+    #[tokio::test]
+    async fn ai_book_v3_map_generate_returns_disabled_error() {
+        let (state, dir) = create_test_state().await;
+        let user_ns = "default";
+        let book_url = "book://api-map-disabled";
+        seed_shelf_book(&state, user_ns, book_url).await;
+
+        let error = generate_ai_book_map(
+            State(state),
+            AuthContext::default(),
+            Json(AiBookGenerateMapRequest {
+                book_url: Some(book_url.to_string()),
+                source_chapter_index: Some(3),
+                prompt: Some("绘制地图".to_string()),
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        match error {
+            AppError::BadRequest(message) => {
+                assert_eq!(message, "AI资料地图功能在 V3 切换期间已禁用");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
 
         let _ = tokio::fs::remove_dir_all(dir).await;
     }

@@ -5,7 +5,6 @@ import { getAiModelConfig } from '../api/aiModel'
 import {
   cancelAiBookCatchup,
   generateAiBookChapterMemory,
-  generateAiBookMap,
   getAiBookCatchupStatus,
   getAiBookChapterMemory,
   getAiBookMemory,
@@ -31,7 +30,6 @@ vi.mock('../api/aiBook', () => ({
   resetAiBookMemory: vi.fn(),
   setAiBookEnabled: vi.fn(),
   generateAiBookChapterMemory: vi.fn(),
-  generateAiBookMap: vi.fn(),
   startAiBookCatchup: vi.fn(),
   getAiBookCatchupStatus: vi.fn(),
   cancelAiBookCatchup: vi.fn(),
@@ -43,7 +41,6 @@ const getAiBookChapterMemoryMock = vi.mocked(getAiBookChapterMemory)
 const resetAiBookMemoryMock = vi.mocked(resetAiBookMemory)
 const setAiBookEnabledMock = vi.mocked(setAiBookEnabled)
 const generateAiBookChapterMemoryMock = vi.mocked(generateAiBookChapterMemory)
-const generateAiBookMapMock = vi.mocked(generateAiBookMap)
 const startAiBookCatchupMock = vi.mocked(startAiBookCatchup)
 const getAiBookCatchupStatusMock = vi.mocked(getAiBookCatchupStatus)
 const cancelAiBookCatchupMock = vi.mocked(cancelAiBookCatchup)
@@ -58,7 +55,6 @@ describe('aiBook store v3', () => {
     resetAiBookMemoryMock.mockReset()
     setAiBookEnabledMock.mockReset()
     generateAiBookChapterMemoryMock.mockReset()
-    generateAiBookMapMock.mockReset()
     startAiBookCatchupMock.mockReset()
     getAiBookCatchupStatusMock.mockReset()
     cancelAiBookCatchupMock.mockReset()
@@ -111,7 +107,7 @@ describe('aiBook store v3', () => {
     expect(generateAiBookChapterMemoryMock).toHaveBeenCalledWith({ bookUrl: book.bookUrl, chapterIndex: 3, mode: 'auto' })
   })
 
-  it('updates enabled reset map and catchup state via v3 actions', async () => {
+  it('updates enabled reset and catchup state via v3 actions', async () => {
     const book = createBook()
     const memoryResponse = createMemoryResponse(book)
     const enabledResponse = {
@@ -121,12 +117,10 @@ describe('aiBook store v3', () => {
       },
     }
     const resetResponse = createMemoryResponse(book)
-    const mapResponse = createMemoryResponse(book)
     const catchupStatus = createCatchupStatus()
     const cancelStatus = { ...catchupStatus, status: 'canceled' as const }
     setAiBookEnabledMock.mockResolvedValue(enabledResponse)
     resetAiBookMemoryMock.mockResolvedValue(resetResponse)
-    generateAiBookMapMock.mockResolvedValue(mapResponse)
     startAiBookCatchupMock.mockResolvedValue(catchupStatus)
     getAiBookCatchupStatusMock.mockResolvedValue(catchupStatus)
     cancelAiBookCatchupMock.mockResolvedValue(cancelStatus)
@@ -134,14 +128,12 @@ describe('aiBook store v3', () => {
 
     await store.setEnabled(book, true)
     await store.reset(book)
-    await store.generateMap({ bookUrl: book.bookUrl, sourceChapterIndex: 3, prompt: '世界地图' })
     await store.startCatchup({ bookUrl: book.bookUrl, targetChapterIndex: 9 })
     await store.loadCatchupStatus(book.bookUrl)
     await store.cancelCatchup(book.bookUrl)
 
     expect(setAiBookEnabledMock).toHaveBeenCalledWith({ bookUrl: book.bookUrl, enabled: true })
     expect(resetAiBookMemoryMock).toHaveBeenCalledWith(book.bookUrl)
-    expect(generateAiBookMapMock).toHaveBeenCalledWith({ bookUrl: book.bookUrl, sourceChapterIndex: 3, prompt: '世界地图' })
     expect(startAiBookCatchupMock).toHaveBeenCalledWith({ bookUrl: book.bookUrl, targetChapterIndex: 9 })
     expect(getAiBookCatchupStatusMock).toHaveBeenCalledWith(book.bookUrl)
     expect(cancelAiBookCatchupMock).toHaveBeenCalledWith(book.bookUrl)
@@ -170,20 +162,6 @@ describe('aiBook store v3', () => {
     })
   })
 
-
-  it('rethrows map generation failure', async () => {
-    const book = createBook()
-    const failure = new Error('地图失败')
-    generateAiBookMapMock.mockRejectedValueOnce(failure)
-    const store = useAiBookStore()
-
-    await expect(store.generateMap({ bookUrl: book.bookUrl, sourceChapterIndex: 3, prompt: '世界地图' }))
-      .rejects
-      .toThrow('地图失败')
-
-    expect(store.phase).toBe('error')
-    expect(store.statusText).toBe('地图失败')
-  })
 
   it('allows retry after chapter generation failure', async () => {
     const book = createBook()

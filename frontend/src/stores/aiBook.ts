@@ -4,7 +4,6 @@ import { getAiModelConfig } from '../api/aiModel'
 import {
   cancelAiBookCatchup,
   generateAiBookChapterMemory,
-  generateAiBookMap,
   getAiBookCatchupStatus,
   getAiBookChapterMemory,
   getAiBookMemory,
@@ -26,7 +25,7 @@ import type {
 import { useAppStore } from './app'
 import { getAiBookConfig, saveAiBookConfig } from '../utils/aiBookConfig'
 
-type GenerationPhase = 'idle' | 'loading' | 'text' | 'map' | 'error'
+type GenerationPhase = 'idle' | 'loading' | 'text' | 'error'
 interface LoadServerModelConfigOptions {
   force?: boolean
 }
@@ -50,7 +49,6 @@ export const useAiBookStore = defineStore('aiBook', () => {
     loading.value
     || phase.value === 'loading'
     || phase.value === 'text'
-    || phase.value === 'map'
     || catchupPolling.value
   ))
   const canUseServerModel = computed(() => Boolean(serverModelConfig.value?.canUseServerModel))
@@ -176,21 +174,6 @@ export const useAiBookStore = defineStore('aiBook', () => {
     }
   }
 
-  async function generateMap(params: { bookUrl: string; sourceChapterIndex?: number; prompt?: string }) {
-    phase.value = 'map'
-    statusText.value = '生成世界地图...'
-    try {
-      const response = await generateAiBookMap(params)
-      applyMemoryResponse(response.memory)
-      phase.value = 'idle'
-      statusText.value = ''
-      return memoryView.value
-    } catch (error) {
-      setActionError((error as Error).message || '地图生成失败')
-      throw error
-    }
-  }
-
   async function startCatchup(params: { bookUrl: string; targetChapterIndex?: number }) {
     catchupPolling.value = true
     try {
@@ -271,15 +254,6 @@ export const useAiBookStore = defineStore('aiBook', () => {
     }
   }
 
-  async function redrawMap(book: Book, prompt?: string, sourceChapterIndex?: number, currentMemory?: AiBookMemory | null) {
-    const next = await generateMap({
-      bookUrl: book.bookUrl,
-      sourceChapterIndex: sourceChapterIndex ?? currentMemory?.processedChapterIndex ?? memoryView.value?.processedChapterIndex ?? undefined,
-      prompt,
-    })
-    return next ? toLegacyMemory(next) : memory.value
-  }
-
   function applyMemoryResponse(next: AiBookMemoryViewModel) {
     memoryView.value = next
   }
@@ -328,14 +302,12 @@ export const useAiBookStore = defineStore('aiBook', () => {
     setEnabled,
     reset,
     generateChapterMemory,
-    generateMap,
     startCatchup,
     loadCatchupStatus,
     cancelCatchup,
     // temporary wrappers until Task 7 switches AiBookView/reader.ts to V3 actions directly
     autoUpdateCompletedChapter,
     runChapterUpdate,
-    redrawMap,
   }
 })
 

@@ -26,10 +26,6 @@ export function generateAiBookChapterMemory(params: { bookUrl: string; chapterIn
   return http.post<AiBookChapterMemoryViewResponse>('/aiBook/chapterMemory/generate', params).then((r) => r.data)
 }
 
-export function generateAiBookMap(params: { bookUrl: string; sourceChapterIndex?: number; prompt?: string }) {
-  return http.post<AiBookMemoryViewResponse>('/aiBook/map/generate', params).then((r) => r.data)
-}
-
 export function startAiBookCatchup(params: { bookUrl: string; targetChapterIndex?: number }) {
   return http.post<AiBookCatchupStatus>('/aiBook/catchup/start', params).then((r) => r.data)
 }
