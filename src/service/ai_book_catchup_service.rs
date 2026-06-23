@@ -291,12 +291,9 @@ impl AiBookCatchupService {
                     return;
                 }
             };
+            self.set_stage(&key, "digest").await;
             let memory_result = self
-                .run_stage(
-                    &key,
-                    "digest",
-                    self.process_chapter(&key, &context.memory, &chapter, &content, &context),
-                )
+                .process_chapter(&key, &context.memory, &chapter, &content, &context)
                 .await;
             let next_memory = match memory_result {
                 Ok(memory) => memory,
@@ -348,9 +345,9 @@ impl AiBookCatchupService {
         chapter: &CatchupChapter,
         chapter_content: &str,
         context: &CatchupBookContext,
-    ) -> Result<Value, AppError> {
+    ) -> Result<Value, StageError> {
         let mut memory_v3 = serde_json::from_value::<AiBookMemoryV3>(memory.clone())
-            .map_err(|e| AppError::BadRequest(format!("AI资料补齐内存格式不正确: {e}")))?;
+            .map_err(|e| StageError::App(AppError::BadRequest(format!("AI资料补齐内存格式不正确: {e}"))))?;
         let digest_working_context = select_working_context_v3(&memory_v3, None, chapter_content);
         let digest_started = Instant::now();
         let mut digest = (context.generate_digest)(
@@ -358,7 +355,8 @@ impl AiBookCatchupService {
             chapter.clone(),
             chapter_content.to_string(),
         )
-        .await?;
+        .await
+        .map_err(StageError::App)?;
         digest.chapter_index = chapter.index;
         digest.chapter_title = chapter.title.clone();
         self.bump_stats(key, |stats| {
@@ -368,6 +366,10 @@ impl AiBookCatchupService {
         })
         .await;
         upsert_digest_v3(&mut memory_v3, &digest);
+
+        if self.cancel_should_stop(key).await {
+            return Err(StageError::Canceled);
+        }
 
         let should_patch = digest_requires_patch(&digest, chapter_content, &memory_v3);
         if should_patch {
@@ -384,7 +386,8 @@ impl AiBookCatchupService {
                 chapter_content.to_string(),
                 digest.clone(),
             )
-            .await?;
+            .await
+            .map_err(StageError::App)?;
             patch.chapter_index = chapter.index;
             if patch.summary.as_deref().is_none_or(|summary| summary.trim().is_empty()) {
                 patch.summary = Some(digest.summary.clone());
@@ -412,7 +415,8 @@ impl AiBookCatchupService {
         memory_v3.last_error_chapter_index = None;
         memory_v3.last_error_chapter_title = None;
         memory_v3.catchup_stats = self.current_stats(key).await;
-        serde_json::to_value(memory_v3).map_err(|e| AppError::BadRequest(e.to_string()))
+        serde_json::to_value(memory_v3)
+            .map_err(|e| StageError::App(AppError::BadRequest(e.to_string())))
     }
 
     async fn set_plan(&self, key: &str, start: i32, target: i32, total: i32) {
@@ -1738,6 +1742,74 @@ mod tests {
 
         let status = service.get_status("u1", "book-a").await.unwrap();
         assert_eq!(status.status, "completed");
+    }
+
+    #[tokio::test]
+    async fn ai_book_v3_cancel_during_digest_prevents_patch_call() {
+        let runner = Arc::new(TestRunner::default());
+        let service = AiBookCatchupService::new_with_runner(runner.clone());
+        let patch_calls = Arc::new(Mutex::new(0));
+        let digest_started = Arc::new(tokio::sync::Notify::new());
+        let digest_release = Arc::new(tokio::sync::Notify::new());
+
+        service
+            .start_with("u1".to_string(), "book-a".to_string(), Some(0), {
+                let patch_calls = patch_calls.clone();
+                let digest_started = digest_started.clone();
+                let digest_release = digest_release.clone();
+                move || {
+                    let patch_calls = patch_calls.clone();
+                    let digest_started = digest_started.clone();
+                    let digest_release = digest_release.clone();
+                    async move {
+                        let mut context = sample_context();
+                        context.chapters.truncate(1);
+                        context.generate_digest = generate_digest_fn(move |_memory, chapter, _content| {
+                            let digest_started = digest_started.clone();
+                            let digest_release = digest_release.clone();
+                            async move {
+                                digest_started.notify_one();
+                                digest_release.notified().await;
+                                Ok(AiBookChapterDigestCandidateV3 {
+                                    chapter_index: chapter.index,
+                                    chapter_title: chapter.title,
+                                    summary: "关键变化".to_string(),
+                                    key_points: vec!["关系变化".to_string()],
+                                    has_important_changes: true,
+                                })
+                            }
+                        });
+                        context.generate_patch = generate_patch_fn(move |_memory, chapter, _content, _digest| {
+                            let patch_calls = patch_calls.clone();
+                            async move {
+                                *patch_calls.lock().unwrap() += 1;
+                                Ok(AiBookKnowledgePatchV3 {
+                                    chapter_index: chapter.index,
+                                    summary: Some("不该执行".to_string()),
+                                    ..Default::default()
+                                })
+                            }
+                        });
+                        Ok(context)
+                    }
+                }
+            })
+            .await
+            .unwrap();
+
+        let fut = runner.tasks.lock().unwrap().pop().unwrap();
+        let handle = tokio::spawn(fut);
+        digest_started.notified().await;
+
+        let canceled = service.request_cancel("u1", "book-a").await.unwrap();
+        assert_eq!(canceled.status, "canceling");
+
+        digest_release.notify_one();
+        handle.await.unwrap();
+
+        assert_eq!(*patch_calls.lock().unwrap(), 0);
+        let final_status = service.get_status("u1", "book-a").await.unwrap();
+        assert_eq!(final_status.status, "canceled");
     }
 
     #[tokio::test]
