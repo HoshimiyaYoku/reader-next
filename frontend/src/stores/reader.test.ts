@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useAppStore } from './app'
 import { useReaderStore } from './reader'
-import { getBookContent, getChapterList, getShelfBook } from '../api/bookshelf'
+import { getBookContent, getChapterList, getShelfBook, saveBookProgress } from '../api/bookshelf'
 import { getBrowserCachedChapter, setBrowserCachedChapter } from '../utils/browserCache'
 import type { Book } from '../types'
 
@@ -39,6 +39,22 @@ vi.mock('../utils/openaiSpeech', () => ({
   requestOpenAISpeechAudio: vi.fn(),
 }))
 
+
+const aiBookStoreMock = {
+  memoryView: null as any,
+  isServerModelAdmin: false,
+  canUseServerModel: false,
+  serverModelConfig: null as any,
+  load: vi.fn(),
+  generateChapterMemory: vi.fn(),
+  loadChapterMemory: vi.fn(),
+  loadServerModelConfig: vi.fn().mockResolvedValue(null),
+}
+
+vi.mock('./aiBook', () => ({
+  useAiBookStore: () => aiBookStoreMock,
+}))
+
 describe('reader local txt chapters', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -52,6 +68,8 @@ describe('reader local txt chapters', () => {
     vi.mocked(getBookContent).mockReset()
     vi.mocked(getChapterList).mockReset()
     vi.mocked(getShelfBook).mockReset()
+    vi.mocked(saveBookProgress).mockReset()
+    vi.mocked(saveBookProgress).mockResolvedValue('ok')
     vi.mocked(getBrowserCachedChapter).mockReset()
     vi.mocked(setBrowserCachedChapter).mockReset()
   })
@@ -204,5 +222,51 @@ describe('reader summary display config', () => {
   it('defaults key points to card style', () => {
     const store = useReaderStore()
     expect(store.config.chapterSummaryKeyPointStyle).toBe('card')
+  })
+})
+
+
+describe('reader ai book auto-update', () => {
+  beforeEach(() => {
+    aiBookStoreMock.memoryView = null
+    aiBookStoreMock.load.mockReset()
+    aiBookStoreMock.generateChapterMemory.mockReset()
+    aiBookStoreMock.loadChapterMemory.mockReset()
+    aiBookStoreMock.loadServerModelConfig.mockReset()
+    aiBookStoreMock.loadServerModelConfig.mockResolvedValue(null)
+  })
+
+  it('reader auto-update no longer passes chapterContent into aiBook store', async () => {
+    aiBookStoreMock.load.mockResolvedValue({ enabled: true, bookUrl: 'book-1' })
+    aiBookStoreMock.generateChapterMemory.mockResolvedValue({})
+    vi.mocked(getBookContent).mockResolvedValue('下一章正文')
+    vi.mocked(getBrowserCachedChapter).mockResolvedValue(null)
+    vi.mocked(setBrowserCachedChapter).mockResolvedValue(undefined)
+
+    const appStore = useAppStore()
+    appStore.setOnlineStatus(true)
+    const readerStore = useReaderStore()
+    readerStore.book = {
+      name: '测试书',
+      author: '作者',
+      origin: 'source-1',
+      bookUrl: 'book-1',
+    }
+    readerStore.chapters = [
+      { title: '第一章', url: 'chapter-1', index: 0 },
+      { title: '第二章', url: 'chapter-2', index: 1 },
+    ]
+    readerStore.currentIndex = 0
+    readerStore.content = '第一章正文'
+
+    await readerStore.nextChapter()
+
+    expect(aiBookStoreMock.load).toHaveBeenCalledWith(expect.objectContaining({ bookUrl: 'book-1' }))
+    expect(aiBookStoreMock.generateChapterMemory).toHaveBeenCalledWith({
+      bookUrl: 'book-1',
+      chapterIndex: 0,
+      mode: 'auto',
+    })
+    expect(aiBookStoreMock.generateChapterMemory.mock.calls[0][0]).not.toHaveProperty('chapterContent')
   })
 })

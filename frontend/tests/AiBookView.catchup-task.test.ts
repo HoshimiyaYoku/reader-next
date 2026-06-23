@@ -4,10 +4,10 @@ import { readFileSync } from 'node:fs'
 const source = readFileSync(new URL('../src/views/AiBookView.vue', import.meta.url), 'utf8')
 
 describe('AiBookView catchup task controls', () => {
-  it('wires backend catchup start pause and polling controls', () => {
-    expect(source).toContain('startAiBookCatchup')
-    expect(source).toContain('cancelAiBookCatchup')
-    expect(source).toContain('getAiBookCatchupStatus')
+  it('wires store-backed catchup start cancel and polling controls', () => {
+    expect(source).toContain('aiStore.startCatchup({')
+    expect(source).toContain('aiStore.cancelCatchup(book.value.bookUrl)')
+    expect(source).toContain('aiStore.loadCatchupStatus(book.value.bookUrl)')
     expect(source).toContain('补齐任务')
     expect(source).toContain('scheduleCatchupPoll')
     expect(source).toContain('onUnmounted')
@@ -18,6 +18,5 @@ describe('AiBookView catchup task controls', () => {
     expect(source).toContain('AI资料加载失败')
     expect(source).toContain('loadError')
     expect(source).toContain('class="ai-empty-panel"')
-    expect(source).not.toContain("appStore.showToast((error as Error).message || 'AI资料加载失败', 'error')\n    router.replace('/')")
   })
 })

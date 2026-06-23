@@ -1528,12 +1528,16 @@ export const useReaderStore = defineStore('reader', () => {
       const completedContent = content.value
       await loadChapter(currentIndex.value + 1)
       if (completedBook && completedChapter && completedContent) {
-        void aiBookStore.autoUpdateCompletedChapter({
-          book: completedBook,
-          chapter: completedChapter,
-          chapterContent: completedContent,
-          chapters: chapters.value,
-        })
+        void aiBookStore.load(completedBook)
+          .then((memoryView) => {
+            if (!memoryView?.enabled) return null
+            return aiBookStore.generateChapterMemory({
+              bookUrl: completedBook.bookUrl,
+              chapterIndex: completedChapter.index,
+              mode: 'auto',
+            })
+          })
+          .catch(() => null)
       }
     }
   }
