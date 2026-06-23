@@ -231,10 +231,10 @@ export const useAiBookStore = defineStore('aiBook', () => {
     allowSkip?: boolean
     throwOnError?: boolean
     chapters?: BookChapter[]
-  }) {
+  }): Promise<AiBookMemory> {
     const key = `${params.book.bookUrl}::${params.chapter.index}`
     if (updatingChapterKeys.has(key)) {
-      return memory.value
+      return resolveLegacyMemoryFallback(memory.value, params.book, params.current)
     }
     updatingChapterKeys.add(key)
     try {
@@ -243,13 +243,13 @@ export const useAiBookStore = defineStore('aiBook', () => {
         chapterIndex: params.chapter.index,
         mode: params.allowSkip ? 'auto' : 'manual',
       })
-      return memory.value
+      return resolveLegacyMemoryFallback(memory.value, params.book, params.current)
     } catch (error) {
       applyLocalError(params.chapter.index, params.chapter.title, (error as Error).message || 'AI 资料更新失败')
       if (params.throwOnError) {
         throw error
       }
-      return memory.value
+      return resolveLegacyMemoryFallback(memory.value, params.book, params.current)
     } finally {
       updatingChapterKeys.delete(key)
     }
@@ -403,4 +403,35 @@ function formatChapter(index?: number) {
     return undefined
   }
   return `第${index + 1}章`
+}
+
+function resolveLegacyMemoryFallback(next: AiBookMemory | null, book: Book, current?: AiBookMemory | null): AiBookMemory {
+  return toLegacyMemory(next)
+    || toLegacyMemory(current)
+    || toLegacyMemory({
+      bookUrl: book.bookUrl,
+      bookName: book.name,
+      author: book.author,
+      enabled: false,
+      updatedAt: Date.now(),
+      summary: {
+        current: '',
+        recentChanges: [],
+        openQuestions: [],
+      },
+      characters: [],
+      relationships: [],
+      knowledgeFacts: [],
+      locations: [],
+      map: null,
+      cleanup: {
+        droppedFactsCount: 0,
+        droppedByReason: {},
+        oldSchemaBackedUp: false,
+      },
+      catchupStats: null,
+      lastError: null,
+      lastErrorChapterIndex: null,
+      lastErrorChapterTitle: null,
+    })!
 }

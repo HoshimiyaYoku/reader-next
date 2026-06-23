@@ -147,6 +147,28 @@ describe('aiBook store v3', () => {
     expect(cancelAiBookCatchupMock).toHaveBeenCalledWith(book.bookUrl)
     expect(store.catchupStatus).toEqual(cancelStatus)
   })
+
+  it('preserves legacy non-null runChapterUpdate contract before Task 7', async () => {
+    const book = createBook()
+    const chapter = { index: 3, title: '第四章', url: 'chapter-3' }
+    const generatedResponse = createChapterResponse(book)
+    generateAiBookChapterMemoryMock.mockResolvedValue(generatedResponse)
+    const store = useAiBookStore()
+
+    const result = await store.runChapterUpdate({
+      book,
+      chapter,
+      chapterContent: '正文',
+      throwOnError: true,
+    })
+
+    expect(result).not.toBeNull()
+    expect(result).toMatchObject({
+      bookUrl: book.bookUrl,
+      summary: '摘要',
+      worldview: [],
+    })
+  })
 })
 
 function createBook(): Book {
