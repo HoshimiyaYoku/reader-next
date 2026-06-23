@@ -92,6 +92,8 @@ pub struct AiBookMemoryV3 {
     pub location_edges: Vec<AiBookLocationEdgeV3>,
     pub map_state: Option<AiBookMapStateV3>,
     pub render_artifacts: Option<AiBookRenderArtifactsV3>,
+    pub dropped_facts: Vec<AiBookDroppedFactV3>,
+    pub catchup_stats: Option<AiBookCatchupStatsV3>,
     pub last_error: Option<String>,
     pub last_error_chapter_index: Option<i32>,
     pub last_error_chapter_title: Option<String>,
@@ -118,6 +120,8 @@ impl Default for AiBookMemoryV3 {
             location_edges: Vec::new(),
             map_state: None,
             render_artifacts: None,
+            dropped_facts: Vec::new(),
+            catchup_stats: None,
             last_error: None,
             last_error_chapter_index: None,
             last_error_chapter_title: None,
@@ -141,6 +145,18 @@ pub struct AiBookSummaryV3 {
     pub current: String,
     pub recent_changes: Vec<String>,
     pub open_questions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookDroppedFactV3 {
+    pub source: String,
+    pub reason: String,
+    pub original_value_preview: String,
+    pub original_value_hash: String,
+    pub redirected_to: Option<String>,
+    pub chapter_index: Option<i32>,
+    pub created_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -334,6 +350,197 @@ pub struct AiBookCatchupStatsV3 {
     pub updated_at: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookMemoryViewModel {
+    pub book_url: String,
+    pub book_name: Option<String>,
+    pub author: Option<String>,
+    pub enabled: bool,
+    pub processed_chapter_index: Option<i32>,
+    pub processed_chapter_title: Option<String>,
+    pub updated_at: i64,
+    pub summary: AiBookSummaryV3,
+    pub characters: Vec<AiBookCharacterView>,
+    pub relationships: Vec<AiBookRelationView>,
+    pub knowledge_facts: Vec<AiBookKnowledgeFactView>,
+    pub locations: Vec<AiBookLocationView>,
+    pub map: Option<AiBookMapView>,
+    pub cleanup: AiBookDroppedFactsSummary,
+    pub catchup_stats: Option<AiBookCatchupStatsV3>,
+    pub last_error: Option<String>,
+    pub last_error_chapter_index: Option<i32>,
+    pub last_error_chapter_title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookChapterMemoryViewModel {
+    pub book_url: String,
+    pub chapter_index: i32,
+    pub chapter_title: Option<String>,
+    pub digest: Option<AiBookChapterDigestV3>,
+    pub characters: Vec<AiBookCharacterView>,
+    pub relationships: Vec<AiBookRelationView>,
+    pub knowledge_facts: Vec<AiBookKnowledgeFactView>,
+    pub locations: Vec<AiBookLocationView>,
+    pub generation_status: String,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookCharacterView {
+    pub id: String,
+    pub name: String,
+    pub aliases: Vec<String>,
+    pub importance: String,
+    pub description: Option<String>,
+    pub first_seen_chapter_index: Option<i32>,
+    pub last_seen_chapter_index: Option<i32>,
+    pub evidence: Vec<AiBookEvidenceV3>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookCharacterStateView {
+    pub character_id: String,
+    pub current_status: Option<String>,
+    pub current_location_id: Option<String>,
+    pub affiliations: Vec<String>,
+    pub abilities: Vec<AiBookCharacterAbilityView>,
+    pub resources: Vec<String>,
+    pub last_seen_chapter_index: Option<i32>,
+    pub evidence: Vec<AiBookEvidenceV3>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookCharacterAbilityView {
+    pub name: String,
+    pub level: Option<String>,
+    pub status: Option<String>,
+    pub knowledge_fact_id: Option<String>,
+    pub evidence: Vec<AiBookEvidenceV3>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookRelationView {
+    pub id: String,
+    pub source_character_id: String,
+    pub target_character_id: String,
+    pub kind: AiBookRelationKind,
+    pub subtype: Option<String>,
+    pub label: String,
+    pub polarity: AiBookRelationPolarity,
+    pub strength: AiBookRelationStrength,
+    pub status: AiBookRelationStatus,
+    pub direction: String,
+    pub summary: String,
+    pub current_dynamics: Vec<String>,
+    pub facets: Vec<AiBookRelationFacetView>,
+    pub first_seen_chapter_index: Option<i32>,
+    pub last_updated_chapter_index: Option<i32>,
+    pub evidence: Vec<AiBookEvidenceV3>,
+    pub history: Vec<AiBookRelationChangeView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookRelationFacetView {
+    pub kind: AiBookRelationKind,
+    pub subtype: Option<String>,
+    pub polarity: AiBookRelationPolarity,
+    pub status: AiBookRelationStatus,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookRelationChangeView {
+    pub chapter_index: i32,
+    pub chapter_title: String,
+    pub previous_kind: Option<AiBookRelationKind>,
+    pub next_kind: AiBookRelationKind,
+    pub previous_polarity: Option<AiBookRelationPolarity>,
+    pub next_polarity: AiBookRelationPolarity,
+    pub previous_status: Option<AiBookRelationStatus>,
+    pub next_status: AiBookRelationStatus,
+    pub note: String,
+    pub evidence: Vec<AiBookEvidenceV3>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookKnowledgeFactView {
+    pub id: String,
+    pub category: AiBookFactCategory,
+    pub title: String,
+    pub content: String,
+    pub confidence: AiBookFactConfidence,
+    pub importance: AiBookFactImportance,
+    pub first_seen_chapter_index: Option<i32>,
+    pub last_confirmed_chapter_index: Option<i32>,
+    pub evidence: Vec<AiBookEvidenceV3>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookLocationView {
+    pub id: String,
+    pub name: String,
+    pub aliases: Vec<String>,
+    pub kind: String,
+    pub scale: String,
+    pub parent_location_id: Option<String>,
+    pub description: String,
+    pub current_status: Option<String>,
+    pub importance: String,
+    pub first_seen_chapter_index: Option<i32>,
+    pub last_seen_chapter_index: Option<i32>,
+    pub evidence: Vec<AiBookEvidenceV3>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookMapView {
+    pub state: Option<AiBookMapStateV3>,
+    pub render_artifacts: Option<AiBookRenderArtifactsV3>,
+    pub locations: Vec<AiBookLocationView>,
+    pub location_edges: Vec<AiBookLocationEdgeV3>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookDroppedFactsSummary {
+    pub dropped_facts_count: i32,
+    pub dropped_by_reason: std::collections::BTreeMap<String, i32>,
+    pub old_schema_backed_up: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookMemoryViewResponse {
+    pub memory: AiBookMemoryViewModel,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookChapterMemoryViewResponse {
+    pub chapter: AiBookChapterMemoryViewModel,
+    pub memory: AiBookMemoryViewModel,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookEvidenceV3 {
+    pub chapter_index: i32,
+    pub chapter_title: String,
+    pub quote: Option<String>,
+    pub note: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum AiBookFactCategory {
@@ -387,6 +594,8 @@ mod tests {
         assert_eq!(value["characterRelations"], Value::Array(vec![]));
         assert_eq!(value["knowledgeFacts"], Value::Array(vec![]));
         assert_eq!(value["locationEdges"], Value::Array(vec![]));
+        assert_eq!(value["droppedFacts"], Value::Array(vec![]));
+        assert!(value["catchupStats"].is_null());
         assert!(value["mapState"].is_null());
         assert!(value["renderArtifacts"].is_null());
         assert!(value["lastError"].is_null());

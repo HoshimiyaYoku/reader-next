@@ -27,6 +27,8 @@ pub struct AiBookKnowledgePatchV3 {
     pub location_edges: Vec<AiBookLocationEdgePatchV3>,
 }
 
+pub type KnowledgePatchV3 = AiBookKnowledgePatchV3;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AiBookCombinedChapterGenerationV3 {
