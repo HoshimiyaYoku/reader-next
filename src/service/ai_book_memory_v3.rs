@@ -403,21 +403,28 @@ pub fn classify_relation_candidate_v3(
         ));
     }
 
-    if is_location_contains_relation(&kind_key)
-        || (source_location.is_some() && target_location.is_some() && !kind_key.is_empty())
-    {
+    if source_location.is_some() && target_location.is_some() {
         if let (Some(source_location), Some(target_location)) = (source_location, target_location) {
+            let edge_kind = normalize_location_edge_kind(&candidate.kind_raw);
+            if edge_kind == AiBookLocationEdgeKind::Unknown {
+                return RelationClassificationV3::Drop(make_dropped_fact(
+                    "location_edge_relation",
+                    preview,
+                    None,
+                    context.current_chapter_index,
+                ));
+            }
             let edge = NormalizedLocationEdgeV3 {
                 id: stable_location_edge_id(
                     &source_location.id,
                     &target_location.id,
-                    &AiBookLocationEdgeKind::Contains,
+                    &edge_kind,
                 ),
                 source_location_id: source_location.id,
                 source_name: source_location.name,
                 target_location_id: target_location.id,
                 target_name: target_location.name,
-                kind: AiBookLocationEdgeKind::Contains,
+                kind: edge_kind,
                 label: clean_optional(candidate.description.clone()),
                 evidence: dedupe_evidence(candidate.evidence),
             };
@@ -453,6 +460,15 @@ pub fn classify_relation_candidate_v3(
     if is_transient_relation(&kind_key, candidate.description.as_deref()) {
         return RelationClassificationV3::Drop(make_dropped_fact(
             "transient_action",
+            preview,
+            None,
+            context.current_chapter_index,
+        ));
+    }
+
+    if is_low_value_relation(&kind_key, candidate.description.as_deref()) {
+        return RelationClassificationV3::Drop(make_dropped_fact(
+            "low_value_relation",
             preview,
             None,
             context.current_chapter_index,
@@ -1156,26 +1172,31 @@ fn normalize_character_patch(
     context: &AiBookWorkingContextV3,
     evidence: &[AiBookEvidenceV3],
 ) -> Option<NormalizedCharacterV3> {
+    if !has_required_evidence(evidence) {
+        return None;
+    }
     let names = merge_name_candidates(std::slice::from_ref(&patch.name), &patch.aliases);
     if names.is_empty() {
         return None;
     }
-    let resolved = names
-        .iter()
-        .find_map(|name| find_character_ref(context, name))
-        .or_else(|| names.first().map(|name| CharacterRef {
-            id: stable_character_id(name, &[]),
-            name: name.clone(),
-        }));
-    let resolved = resolved?;
-    let canonical_name = if resolved.name.is_empty() {
-        names[0].clone()
+    let resolved = names.iter().find_map(|name| find_character_ref(context, name));
+    let (id, canonical_name) = if let Some(resolved) = resolved {
+        let canonical_name = if resolved.name.is_empty() {
+            names[0].clone()
+        } else {
+            resolved.name
+        };
+        (resolved.id, canonical_name)
     } else {
-        resolved.name
+        let canonical_name = names[0].clone();
+        (
+            stable_character_id(&canonical_name, &[]),
+            canonical_name,
+        )
     };
     let aliases = merge_name_candidates(std::slice::from_ref(&canonical_name), &names);
     Some(NormalizedCharacterV3 {
-        id: stable_character_id(&canonical_name, &aliases),
+        id,
         canonical_name,
         aliases,
         status: clean_optional(patch.status.clone()),
@@ -1191,6 +1212,9 @@ fn normalize_character_state_patch(
     context: &AiBookWorkingContextV3,
     evidence: &[AiBookEvidenceV3],
 ) -> Option<NormalizedCharacterStateV3> {
+    if !has_required_evidence(evidence) {
+        return None;
+    }
     let name = clean_required(&patch.name);
     if name.is_empty() {
         return None;
@@ -1212,6 +1236,9 @@ fn normalize_fact_patch(
     patch: &AiBookKnowledgeFactPatchV3,
     evidence: &[AiBookEvidenceV3],
 ) -> Option<NormalizedKnowledgeFactV3> {
+    if !has_required_evidence(evidence) {
+        return None;
+    }
     let title = clean_required(&patch.title);
     let content = clean_required(&patch.content);
     if title.is_empty() || content.is_empty() {
@@ -1234,6 +1261,9 @@ fn normalize_location_patch(
     context: &AiBookWorkingContextV3,
     evidence: &[AiBookEvidenceV3],
 ) -> Option<NormalizedLocationV3> {
+    if !has_required_evidence(evidence) {
+        return None;
+    }
     let name = clean_required(&patch.name);
     if name.is_empty() {
         return None;
@@ -1257,9 +1287,15 @@ fn normalize_location_edge_patch(
     context: &AiBookWorkingContextV3,
     evidence: &[AiBookEvidenceV3],
 ) -> Option<NormalizedLocationEdgeV3> {
+    if !has_required_evidence(evidence) {
+        return None;
+    }
     let source = find_location_ref(context, &patch.source)?;
     let target = find_location_ref(context, &patch.target)?;
     let kind = normalize_location_edge_kind(&patch.kind);
+    if kind == AiBookLocationEdgeKind::Unknown {
+        return None;
+    }
     Some(NormalizedLocationEdgeV3 {
         id: stable_location_edge_id(&source.id, &target.id, &kind),
         source_location_id: source.id,
@@ -1595,6 +1631,10 @@ fn dedupe_evidence(values: Vec<AiBookEvidenceV3>) -> Vec<AiBookEvidenceV3> {
     items
 }
 
+fn has_required_evidence(evidence: &[AiBookEvidenceV3]) -> bool {
+    !evidence.is_empty()
+}
+
 fn canonical_key(value: &str) -> String {
     let mut output = String::new();
     let mut last_sep = false;
@@ -1700,14 +1740,29 @@ fn is_person_item_relation(kind_key: &str) -> bool {
     matches!(kind_key, "item" | "owns" | "purchase" | "拥有" | "购买")
 }
 
-fn is_location_contains_relation(kind_key: &str) -> bool {
-    matches!(kind_key, "contains" | "part-of" | "包含")
-}
-
 fn is_transient_relation(kind_key: &str, description: Option<&str>) -> bool {
     matches!(kind_key, "see" | "hear" | "pass-by" | "说话" | "出现")
         || description
             .map(|text| text.contains("路过") || text.contains("看到") || text.contains("出现在大屏幕"))
+            .unwrap_or(false)
+}
+
+fn is_low_value_relation(kind_key: &str, description: Option<&str>) -> bool {
+    matches!(kind_key, "know" | "acquaintance" | "schoolmate" | "classmate" | "认识")
+        || description
+            .map(|text| {
+                [
+                    "同校",
+                    "认识",
+                    "同屏出现",
+                    "同班",
+                    "只是认识",
+                    "仅仅认识",
+                    "路人互动",
+                ]
+                .iter()
+                .any(|needle| text.contains(needle))
+            })
             .unwrap_or(false)
 }
 
@@ -1923,7 +1978,8 @@ mod tests {
     use super::*;
     use crate::model::ai_book::{AiBookSummaryV3, AiBookCharacterRelationV3};
     use crate::model::ai_book_generation::{
-        AiBookCharacterPatchV3, AiBookCharacterRelationPatchV3, AiBookKnowledgePatchV3,
+        AiBookCharacterPatchV3, AiBookCharacterRelationPatchV3, AiBookKnowledgeFactPatchV3,
+        AiBookKnowledgePatchV3, AiBookLocationPatchV3,
     };
 
     #[test]
@@ -2040,6 +2096,33 @@ mod tests {
     }
 
     #[test]
+    fn ai_book_v3_redirects_location_adjacent_to_location_edge() {
+        let context = working_context_with_entities(
+            Vec::<(&str, Vec<&str>)>::new(),
+            vec!["嵩阳高中", "训练馆"],
+        );
+        let result = classify_relation_candidate_v3(
+            RelationCandidateV3 {
+                source_name: "嵩阳高中".to_string(),
+                target_name: "训练馆".to_string(),
+                kind_raw: "adjacent".to_string(),
+                description: Some("嵩阳高中与训练馆相邻".to_string()),
+                evidence: vec![test_evidence()],
+                ..RelationCandidateV3::default()
+            },
+            &context,
+        );
+
+        match result {
+            RelationClassificationV3::Redirect(RelationRedirectV3::LocationEdge(edge)) => {
+                assert_eq!(edge.kind, AiBookLocationEdgeKind::Adjacent);
+                assert_eq!(edge.id, "location-edge:location:嵩阳高中:location:训练馆:Adjacent");
+            }
+            other => panic!("expected adjacent redirect, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn ai_book_v3_generates_stable_ids_without_trusting_model_ids() {
         let mut memory = create_empty_ai_book_memory_v3("book://test", None, None);
         memory.characters.push(AiBookCharacterV3 {
@@ -2069,6 +2152,39 @@ mod tests {
 
         assert_eq!(display.characters.len(), 1);
         assert_eq!(display.characters[0].id, "character:张羽");
+    }
+
+    #[test]
+    fn ai_book_v3_preserves_resolved_character_id_on_alias_merge() {
+        let context = AiBookWorkingContextV3 {
+            summary_current: "上下文摘要".to_string(),
+            relevant_characters: vec![WorkingContextCharacterV3 {
+                id: "character:stable-legacy".to_string(),
+                name: "张羽".to_string(),
+                aliases: vec!["羽哥".to_string()],
+                status: None,
+                affiliations: Vec::new(),
+                abilities: Vec::new(),
+            }],
+            current_chapter_index: Some(2),
+            current_chapter_title: Some("第二章".to_string()),
+            schema_hint: "KnowledgePatchV3".to_string(),
+            ..AiBookWorkingContextV3::default()
+        };
+        let patch = AiBookKnowledgePatchV3 {
+            chapter_index: 2,
+            characters: vec![AiBookCharacterPatchV3 {
+                name: "羽哥".to_string(),
+                aliases: vec!["张羽".to_string(), "小羽".to_string()],
+                ..AiBookCharacterPatchV3::default()
+            }],
+            ..AiBookKnowledgePatchV3::default()
+        };
+
+        let normalized = normalize_knowledge_patch_v3(patch, &context);
+
+        assert_eq!(normalized.characters.len(), 1);
+        assert_eq!(normalized.characters[0].id, "character:stable-legacy");
     }
 
     #[test]
@@ -2225,6 +2341,109 @@ mod tests {
         assert!(context.relevant_relations.len() <= 12);
         assert!(context.relevant_knowledge_facts.len() <= 12);
         assert!(context.relevant_locations.len() <= 15);
+    }
+
+    #[test]
+    fn ai_book_v3_requires_evidence_for_semantic_entities() {
+        let context = AiBookWorkingContextV3 {
+            summary_current: "无标题上下文".to_string(),
+            relevant_characters: vec![
+                WorkingContextCharacterV3 {
+                    id: "character:张羽".to_string(),
+                    name: "张羽".to_string(),
+                    aliases: Vec::new(),
+                    status: None,
+                    affiliations: Vec::new(),
+                    abilities: Vec::new(),
+                },
+                WorkingContextCharacterV3 {
+                    id: "character:白真真".to_string(),
+                    name: "白真真".to_string(),
+                    aliases: Vec::new(),
+                    status: None,
+                    affiliations: Vec::new(),
+                    abilities: Vec::new(),
+                },
+            ],
+            relevant_locations: vec![WorkingContextLocationV3 {
+                id: "location:嵩阳高中".to_string(),
+                name: "嵩阳高中".to_string(),
+                aliases: Vec::new(),
+                parent_name: None,
+                kind: "school".to_string(),
+                scale: "site".to_string(),
+            }],
+            current_chapter_index: Some(5),
+            current_chapter_title: None,
+            schema_hint: "KnowledgePatchV3".to_string(),
+            ..AiBookWorkingContextV3::default()
+        };
+        let patch = AiBookKnowledgePatchV3 {
+            chapter_index: 5,
+            characters: vec![AiBookCharacterPatchV3 {
+                name: "张羽".to_string(),
+                ..AiBookCharacterPatchV3::default()
+            }],
+            character_relations: vec![AiBookCharacterRelationPatchV3 {
+                source: "张羽".to_string(),
+                target: "白真真".to_string(),
+                kind: "friend".to_string(),
+                polarity: "positive".to_string(),
+                strength: "major".to_string(),
+                status: "active".to_string(),
+                description: Some("两人互相信任".to_string()),
+            }],
+            knowledge_facts: vec![AiBookKnowledgeFactPatchV3 {
+                title: "债务规则".to_string(),
+                content: "欠债要还".to_string(),
+                category: "基础规则".to_string(),
+                confidence: "已知".to_string(),
+                importance: "major".to_string(),
+            }],
+            locations: vec![AiBookLocationPatchV3 {
+                name: "嵩阳高中".to_string(),
+                description: "重要场景".to_string(),
+                ..AiBookLocationPatchV3::default()
+            }],
+            ..AiBookKnowledgePatchV3::default()
+        };
+
+        let normalized = normalize_knowledge_patch_v3(patch, &context);
+
+        assert!(normalized.characters.is_empty());
+        assert!(normalized.character_states.is_empty());
+        assert!(normalized.character_relations.is_empty());
+        assert!(normalized.knowledge_facts.is_empty());
+        assert!(normalized.locations.is_empty());
+        assert!(normalized.location_edges.is_empty());
+        assert_eq!(normalized.dropped_facts.len(), 1);
+        assert_eq!(normalized.dropped_facts[0].reason, "missing_evidence");
+    }
+
+    #[test]
+    fn ai_book_v3_drops_low_value_cooccurrence_relation() {
+        let context = working_context_with_entities(
+            vec![("张羽", vec![]), ("白真真", vec![])],
+            Vec::<&str>::new(),
+        );
+        let result = classify_relation_candidate_v3(
+            RelationCandidateV3 {
+                source_name: "张羽".to_string(),
+                target_name: "白真真".to_string(),
+                kind_raw: "friend".to_string(),
+                description: Some("两人只是同校认识，同屏出现".to_string()),
+                evidence: vec![test_evidence()],
+                ..RelationCandidateV3::default()
+            },
+            &context,
+        );
+
+        match result {
+            RelationClassificationV3::Drop(dropped) => {
+                assert_eq!(dropped.reason, "low_value_relation");
+            }
+            other => panic!("expected low-value drop, got {other:?}"),
+        }
     }
 
     fn test_evidence() -> AiBookEvidenceV3 {
