@@ -1,29 +1,303 @@
-import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { mount, flushPromises } from '@vue/test-utils'
+import AiBookView from '../src/views/AiBookView.vue'
+import type {
+  AiBookCatchupStatus,
+  AiBookChapterMemoryViewModel,
+  AiBookMemoryViewModel,
+  Book,
+} from '../src/types'
 
-const source = readFileSync(new URL('../src/views/AiBookView.vue', import.meta.url), 'utf8')
+const routeMock = {
+  query: {
+    bookUrl: 'book-1',
+  },
+}
 
-describe('AiBookView v3 cutover', () => {
-  it('aiBook_view_renders_relationships_from_view_model', () => {
-    expect(source).toContain('chapterMemory.value?.digest?.characterRelations')
-    expect(source).not.toContain('toAiBookDisplayMemory')
-    expect(source).not.toContain('isAiBookMemoryV2')
+const routerBackMock = vi.fn()
+const getShelfBookMock = vi.fn()
+const fetchUserInfoMock = vi.fn()
+const showToastMock = vi.fn()
+
+let aiStoreMock: ReturnType<typeof createAiStoreMock>
+let readerStoreMock: ReturnType<typeof createReaderStoreMock>
+
+vi.mock('vue-router', () => ({
+  useRoute: () => routeMock,
+  useRouter: () => ({ back: routerBackMock }),
+}))
+
+vi.mock('../src/api/bookshelf', () => ({
+  getShelfBook: (...args: unknown[]) => getShelfBookMock(...args),
+}))
+
+vi.mock('../src/stores/app', () => ({
+  useAppStore: () => ({
+    fetchUserInfo: fetchUserInfoMock,
+    showToast: showToastMock,
+  }),
+}))
+
+vi.mock('../src/stores/reader', () => ({
+  useReaderStore: () => readerStoreMock,
+}))
+
+vi.mock('../src/stores/aiBook', () => ({
+  useAiBookStore: () => aiStoreMock,
+}))
+
+describe('AiBookView v3 behavior', () => {
+  beforeEach(() => {
+    routerBackMock.mockReset()
+    getShelfBookMock.mockReset()
+    fetchUserInfoMock.mockReset()
+    fetchUserInfoMock.mockResolvedValue(undefined)
+    showToastMock.mockReset()
+    routeMock.query.bookUrl = 'book-1'
+    aiStoreMock = createAiStoreMock()
+    readerStoreMock = createReaderStoreMock()
+    getShelfBookMock.mockResolvedValue(createBook())
   })
 
-  it('aiBook_view_renders_character_state_from_view_model', () => {
-    expect(source).toContain('chapterMemory.value?.digest?.characterStates')
-    expect(source).toContain('memoryView.summary.current')
+  it('aiBook_view_renders_relationships_from_view_model', async () => {
+    const wrapper = mount(AiBookView)
+    await flushPromises()
+
+    await wrapper.get('nav.tabs button:nth-child(3)').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('林舟')
+    expect(wrapper.text()).toContain('苏九')
+    expect(wrapper.text()).toContain('盟友')
+    expect(wrapper.text()).toContain('并肩闯过外门试炼')
   })
 
-  it('aiBook_view_calls_generate_action', () => {
-    expect(source).toContain('aiStore.generateChapterMemory({')
-    expect(source).toContain('aiStore.loadChapterMemory(')
-    expect(source).not.toContain('updateToCurrentFallback')
-    expect(source).not.toContain('getBookContent(')
+  it('aiBook_view_renders_character_state_from_view_model', async () => {
+    const wrapper = mount(AiBookView)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('角色状态')
+    expect(wrapper.text()).toContain('林舟')
+    expect(wrapper.text()).toContain('灵力恢复，准备夜探藏经阁')
+    expect(wrapper.text()).toContain('第三章')
   })
 
-  it('aiBook_view_calls_map_generate_action', () => {
-    expect(source).toContain('aiStore.generateMap({')
-    expect(source).not.toContain('aiStore.redrawMap(')
+  it('aiBook_view_calls_generate_action', async () => {
+    const wrapper = mount(AiBookView)
+    await flushPromises()
+
+    const button = wrapper.get('button.primary-btn')
+    expect(button.text()).toContain('生成当前章节')
+    await button.trigger('click')
+    await flushPromises()
+
+    expect(aiStoreMock.generateChapterMemory).toHaveBeenCalledWith({
+      bookUrl: 'book-1',
+      chapterIndex: 2,
+      mode: 'manual',
+    })
+  })
+
+  it('aiBook_view_calls_map_generate_action', async () => {
+    const wrapper = mount(AiBookView)
+    await flushPromises()
+
+    await wrapper.get('nav.tabs button:nth-child(4)').trigger('click')
+    await flushPromises()
+
+    const button = wrapper.get('.map-head .secondary-btn')
+    expect(button.attributes('disabled')).toBeUndefined()
+    await button.trigger('click')
+    await flushPromises()
+
+    expect(aiStoreMock.generateMap).toHaveBeenCalledWith({
+      bookUrl: 'book-1',
+      sourceChapterIndex: 2,
+    })
   })
 })
+
+function createBook(): Book {
+  return {
+    name: '山海旧事',
+    author: '佚名',
+    bookUrl: 'book-1',
+    origin: 'source-1',
+    durChapterIndex: 2,
+    durChapterTitle: '第三章',
+  }
+}
+
+function createMemoryView(): AiBookMemoryViewModel {
+  return {
+    bookUrl: 'book-1',
+    bookName: '山海旧事',
+    author: '佚名',
+    enabled: true,
+    processedChapterIndex: 1,
+    processedChapterTitle: '第二章',
+    updatedAt: 1710000000000,
+    summary: {
+      current: '林舟在外门试炼后获得新线索。',
+      recentChanges: ['林舟与苏九结成临时盟友'],
+      openQuestions: ['黑石碑文的来历仍未知'],
+    },
+    characters: [
+      {
+        id: 'char-lz',
+        name: '林舟',
+        aliases: ['阿舟'],
+        importance: 'high',
+        description: '出身寒门的少年修士',
+        firstSeenChapterIndex: 0,
+        lastSeenChapterIndex: 2,
+        evidence: [],
+      },
+      {
+        id: 'char-sj',
+        name: '苏九',
+        aliases: [],
+        importance: 'medium',
+        description: '擅长阵法的同门',
+        firstSeenChapterIndex: 1,
+        lastSeenChapterIndex: 2,
+        evidence: [],
+      },
+    ],
+    relationships: [
+      {
+        id: 'rel-lz-sj',
+        sourceCharacterId: 'char-lz',
+        targetCharacterId: 'char-sj',
+        kind: 'alliance',
+        label: '盟友',
+        polarity: 'positive',
+        strength: 'moderate',
+        status: 'active',
+        direction: 'directed',
+        summary: '并肩闯过外门试炼',
+        currentDynamics: [],
+        facets: [],
+        evidence: [],
+        history: [],
+      },
+    ],
+    knowledgeFacts: [],
+    locations: [],
+    map: {
+      state: {
+        dirty: false,
+        nodes: [],
+        edges: [],
+      },
+      renderArtifacts: {
+        imageUrl: 'https://example.com/map.png',
+        updatedAt: 1710000000000,
+      },
+      locations: [],
+      locationEdges: [],
+    },
+    cleanup: {
+      droppedFactsCount: 0,
+      droppedByReason: {},
+      oldSchemaBackedUp: false,
+    },
+    catchupStats: null,
+    lastError: null,
+    lastErrorChapterIndex: null,
+    lastErrorChapterTitle: null,
+  }
+}
+
+function createChapterMemory(): AiBookChapterMemoryViewModel {
+  return {
+    bookUrl: 'book-1',
+    chapterIndex: 2,
+    chapterTitle: '第三章',
+    digest: {
+      chapterIndex: 2,
+      chapterTitle: '第三章',
+      summary: '林舟夜探藏经阁前恢复灵力，并与苏九达成合作。',
+      keyPoints: ['夜探藏经阁前恢复灵力', '与苏九达成合作'],
+      characters: [
+        {
+          name: '林舟',
+          aliases: ['阿舟'],
+          status: '灵力恢复，准备夜探藏经阁',
+          description: '状态稳定',
+          lastSeenChapter: '第三章',
+        },
+      ],
+      characterStates: [
+        {
+          name: '林舟',
+          status: '灵力恢复，准备夜探藏经阁',
+          description: '状态稳定',
+          lastSeenChapterIndex: 2,
+          lastSeenChapterTitle: '第三章',
+        },
+      ],
+      characterRelations: [
+        {
+          source: '林舟',
+          target: '苏九',
+          kind: 'alliance',
+          polarity: 'positive',
+          strength: 'moderate',
+          status: 'active',
+          description: '共同调查黑石碑文',
+        },
+      ],
+      knowledgeFacts: [],
+      locations: [],
+      locationEdges: [],
+    },
+    characters: [],
+    relationships: [],
+    knowledgeFacts: [],
+    locations: [],
+    generationStatus: 'generated',
+    lastError: null,
+  }
+}
+
+function createCatchupStatus(status: AiBookCatchupStatus['status'] = 'idle'): AiBookCatchupStatus {
+  return {
+    status,
+    bookUrl: 'book-1',
+    totalChapters: 0,
+    completedChapters: 0,
+    updatedAt: 1710000000000,
+    error: null,
+    stats: null,
+  }
+}
+
+function createAiStoreMock() {
+  return {
+    memoryView: createMemoryView(),
+    chapterMemory: createChapterMemory(),
+    phase: 'idle',
+    statusText: '',
+    isBusy: false,
+    load: vi.fn().mockResolvedValue(createMemoryView()),
+    loadChapterMemory: vi.fn().mockResolvedValue(createChapterMemory()),
+    generateChapterMemory: vi.fn().mockResolvedValue(createChapterMemory()),
+    generateMap: vi.fn().mockResolvedValue(createMemoryView()),
+    setEnabled: vi.fn().mockResolvedValue(createMemoryView()),
+    reset: vi.fn().mockResolvedValue(createMemoryView()),
+    startCatchup: vi.fn().mockResolvedValue(createCatchupStatus('running')),
+    loadCatchupStatus: vi.fn().mockResolvedValue(createCatchupStatus('idle')),
+    cancelCatchup: vi.fn().mockResolvedValue(createCatchupStatus('canceled')),
+  }
+}
+
+function createReaderStoreMock() {
+  return {
+    book: createBook(),
+    currentIndex: 2,
+    currentChapter: {
+      title: '第三章',
+    },
+  }
+}
