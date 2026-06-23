@@ -199,7 +199,6 @@ impl AiBookCatchupService {
         task.pause_requested = true;
         let _ = task.pause_tx.send(true);
         task.view.status = AiBookCatchupTaskStatus::Pausing.as_str().to_string();
-        task.view.current_stage = Some("pausing".to_string());
         task.view.updated_at = now_ts() * 1000;
         Ok(task.snapshot())
     }
