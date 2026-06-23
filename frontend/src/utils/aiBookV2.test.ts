@@ -110,6 +110,67 @@ describe('aiBookV2', () => {
     })
   })
 
+  it('keeps V2 parentName when adapting display locations', () => {
+    const memory: AiBookMemoryV2 = {
+      ...createEmptyAiBookMemoryV2(book),
+      locations: [
+        {
+          id: 'loc-world',
+          name: '昆墟',
+          aliases: [],
+          kind: '超级建筑/世界',
+          scale: 'world',
+          description: '分层世界。',
+          importance: 'high',
+          relatedCharacterIds: [],
+          evidence: [],
+        },
+        {
+          id: 'loc-layer-one',
+          name: '昆墟第一层',
+          aliases: [],
+          kind: '分层区域',
+          scale: 'region',
+          parentName: '昆墟',
+          description: '主角生活区域。',
+          importance: 'high',
+          relatedCharacterIds: [],
+          evidence: [],
+        },
+      ],
+    }
+
+    const display = toAiBookDisplayMemory(memory)
+
+    expect(display.locations[1]).toMatchObject({
+      name: '昆墟第一层',
+      parentName: '昆墟',
+    })
+  })
+
+  it('adapts backend name-based V2 relationships for display', () => {
+    const memory: AiBookMemoryV2 = {
+      ...createEmptyAiBookMemoryV2(book),
+      relationships: [{
+        sourceName: '张羽',
+        targetName: '张羽的姐姐',
+        targetKind: 'character',
+        relationType: '姐弟',
+        currentStatus: '关系冷淡但仍有转账帮助。',
+        importance: 'medium',
+        evidence: [],
+      } as any],
+    }
+
+    const display = toAiBookDisplayMemory(memory)
+
+    expect(display.relationships[0]).toMatchObject({
+      source: '张羽',
+      target: '张羽的姐姐',
+      relation: '姐弟',
+    })
+  })
+
   it('merges character aliases into an existing character', () => {
     const first = reconcileAiBookMemoryV2(createEmptyAiBookMemoryV2(book), {
       chapterDigest: digest('林舟离开旧村。'),

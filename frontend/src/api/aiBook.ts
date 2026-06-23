@@ -24,3 +24,7 @@ export function getAiBookCatchupStatus(bookUrl: string) {
 export function pauseAiBookCatchup(bookUrl: string) {
   return http.post<AiBookCatchupStatus>('/aiBookCatchup/pause', { bookUrl }).then((r) => r.data)
 }
+
+export function cancelAiBookCatchup(bookUrl: string) {
+  return http.post<AiBookCatchupStatus>('/aiBookCatchup/cancel', { bookUrl }).then((r) => r.data)
+}

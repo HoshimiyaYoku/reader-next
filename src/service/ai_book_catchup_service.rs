@@ -7,14 +7,20 @@ use futures::future::BoxFuture;
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{watch, RwLock};
 
 const DEFAULT_PROMPT: &str = r#"你是小说 AI资料后台补齐 agent。只允许基于当前已读章节和本次章节正文更新资料，不预测未读内容，不剧透目标章节之后内容。
-输入会给你 currentMemory 和 chapter。请输出严格 JSON。
-优先输出 {"memory": <完整更新后的 AI memory JSON>}。
+输入会给你 currentMemory 和 chapter。不要输出 Markdown，不要输出解释，只输出严格 JSON 对象。
+优先输出 {"memory": <只包含本章新增/更新字段的 AI memory 增量 JSON>}；不要回传未变化的大数组，后端会与 currentMemory 合并。
 如果 currentMemory.schemaVersion 是 2，必须保留 V2 结构：summary.current/recentChanges/openQuestions、chapterDigests、worldFacts、characters、relationships、locations、mapState、renderArtifacts。
-每次必须推进 processedChapterIndex/processedChapterTitle，并保留或更新已有有效资料。无法确认的信息标为“推断”或“未知”。"#;
+V2 中 worldFacts、characters、relationships、locations 里的每个有效条目都必须带 evidence 数组；evidence 至少 1 条，至少包含 chapterIndex、chapterTitle、note，quote 仅在必要时填写。
+worldFacts 必须使用 category/title/content/confidence/importance；category 只能从 基础规则、势力制度、历史传说、技术/魔法、社会文化、地理环境、组织体系、未确认信息 中选择，禁止留空。
+characters 使用 name/currentStatus/faction/locationName/description；relationships 使用 sourceName/targetName/targetKind/relationType/direction/currentStatus/description。
+locations 必须使用 name/kind/scale/parentName/description/currentStatus；parentName 表示层级归属，例如 昆墟 > 昆墟第一层 > 嵩阳高中 > 学校食堂；无法确认父级才留空。
+不要为了凑数输出 importance=low 的空洞条目；无法确认的信息标为“推断”或“未知”。
+每次必须推进 processedChapterIndex/processedChapterTitle，并保留或更新已有有效资料。"#;
 
 type SaveMemoryFn = Arc<dyn Fn(Value) -> BoxFuture<'static, Result<Value, AppError>> + Send + Sync>;
 type FetchContentFn =
@@ -30,10 +36,12 @@ pub struct AiBookCatchupService {
 struct TaskState {
     view: AiBookCatchupTaskView,
     pause_requested: bool,
+    pause_tx: watch::Sender<bool>,
 }
 
 impl TaskState {
     fn new(user_ns: &str, book_url: &str, target_chapter_index: Option<i32>) -> Self {
+        let (pause_tx, _) = watch::channel(false);
         Self {
             view: AiBookCatchupTaskView {
                 user_ns: user_ns.to_string(),
@@ -51,6 +59,7 @@ impl TaskState {
                 updated_at: now_ts() * 1000,
             },
             pause_requested: false,
+            pause_tx,
         }
     }
 
@@ -186,9 +195,21 @@ impl AiBookCatchupService {
             return Ok(task.snapshot());
         }
         task.pause_requested = true;
+        let _ = task.pause_tx.send(true);
         task.view.status = AiBookCatchupTaskStatus::Pausing.as_str().to_string();
         task.view.updated_at = now_ts() * 1000;
         Ok(task.snapshot())
+    }
+
+    pub async fn request_cancel(
+        &self,
+        user_ns: &str,
+        book_url: &str,
+    ) -> Option<AiBookCatchupTaskView> {
+        let mut tasks = self.tasks.write().await;
+        let task = tasks.remove(&task_key(user_ns, book_url))?;
+        let _ = task.pause_tx.send(true);
+        Some(task.snapshot())
     }
 
     async fn run_task(
@@ -213,6 +234,9 @@ impl AiBookCatchupService {
             .collect::<Vec<_>>();
         self.set_plan(&key, start_index, target_index, chapters.len() as i32)
             .await;
+        let Some(mut pause_rx) = self.pause_receiver(&key).await else {
+            return;
+        };
 
         if chapters.is_empty() {
             self.mark_completed(&key).await;
@@ -220,8 +244,22 @@ impl AiBookCatchupService {
         }
 
         for chapter in chapters {
+            if *pause_rx.borrow() {
+                self.mark_paused(&key).await;
+                return;
+            }
             self.set_current_chapter(&key, &chapter).await;
-            let content = match (context.fetch_content)(chapter.clone()).await {
+            let Some(content_result) = self
+                .await_or_pause(
+                    &key,
+                    &mut pause_rx,
+                    (context.fetch_content)(chapter.clone()),
+                )
+                .await
+            else {
+                return;
+            };
+            let content = match content_result {
                 Ok(content) => content,
                 Err(err) => {
                     self.save_failure_memory(&context, &chapter, &err.to_string())
@@ -230,18 +268,25 @@ impl AiBookCatchupService {
                     return;
                 }
             };
-            let next_memory = match self
-                .process_chapter(
-                    &context.memory,
-                    &context.ai_config,
-                    &context.book_name,
-                    &context.author,
-                    &book_url,
-                    &chapter,
-                    &content,
+            let Some(memory_result) = self
+                .await_or_pause(
+                    &key,
+                    &mut pause_rx,
+                    self.process_chapter(
+                        &context.memory,
+                        &context.ai_config,
+                        &context.book_name,
+                        &context.author,
+                        &book_url,
+                        &chapter,
+                        &content,
+                    ),
                 )
                 .await
-            {
+            else {
+                return;
+            };
+            let next_memory = match memory_result {
                 Ok(memory) => memory,
                 Err(err) => {
                     self.save_failure_memory(&context, &chapter, &err.to_string())
@@ -337,6 +382,39 @@ impl AiBookCatchupService {
             task.view.total_chapters = total.max(0);
             task.view.completed_chapters = 0;
             task.view.updated_at = now_ts() * 1000;
+        }
+    }
+
+    async fn pause_receiver(&self, key: &str) -> Option<watch::Receiver<bool>> {
+        self.tasks
+            .read()
+            .await
+            .get(key)
+            .map(|task| task.pause_tx.subscribe())
+    }
+
+    async fn await_or_pause<T, F>(
+        &self,
+        key: &str,
+        pause_rx: &mut watch::Receiver<bool>,
+        future: F,
+    ) -> Option<Result<T, AppError>>
+    where
+        F: Future<Output = Result<T, AppError>>,
+    {
+        if *pause_rx.borrow() {
+            self.mark_paused(key).await;
+            return None;
+        }
+        tokio::select! {
+            result = future => Some(result),
+            changed = pause_rx.changed() => {
+                if changed.is_ok() && *pause_rx.borrow() {
+                    self.mark_paused(key).await;
+                    return None;
+                }
+                Some(Err(AppError::BadRequest("补齐任务暂停状态异常".to_string())))
+            }
         }
     }
 
@@ -486,6 +564,10 @@ fn build_model_body(path: &str, model: &str, prompt: String) -> Value {
     if is_responses_path(path) {
         return json!({
             "model": model,
+            "temperature": 0.2,
+            "max_output_tokens": 8192,
+            "stream": false,
+            "text": { "format": { "type": "json_object" } },
             "input": [
                 { "role": "system", "content": DEFAULT_PROMPT },
                 { "role": "user", "content": prompt }
@@ -636,7 +718,47 @@ fn parse_json_content(text: &str) -> Result<Value, AppError> {
         trimmed
     };
     serde_json::from_str::<Value>(json_text)
+        .or_else(|_| {
+            extract_first_json_object(json_text)
+                .ok_or(())
+                .and_then(|json| serde_json::from_str::<Value>(json).map_err(|_| ()))
+        })
         .map_err(|_| AppError::BadRequest("AI资料补齐返回 JSON 格式不正确".to_string()))
+}
+
+fn extract_first_json_object(text: &str) -> Option<&str> {
+    let start = text.find('{')?;
+    let mut stack = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    for (offset, ch) in text[start..].char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '{' => stack.push('}'),
+            '[' => stack.push(']'),
+            '}' | ']' => {
+                if stack.pop()? != ch {
+                    return None;
+                }
+                if stack.is_empty() {
+                    let end = start + offset + ch.len_utf8();
+                    return Some(&text[start..end]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn merge_patch(mut current: Value, patch: Value, chapter: &CatchupChapter) -> Value {
@@ -752,10 +874,10 @@ fn merge_non_empty_array_by_identity(
             return;
         };
         for item in items {
-            if let Some(identity) = item_identity(item) {
+            if let Some(identity) = item_identity(target, item) {
                 if let Some(old) = existing
                     .iter_mut()
-                    .find(|old| item_identity(old).as_deref() == Some(identity.as_str()))
+                    .find(|old| item_identity(target, old).as_deref() == Some(identity.as_str()))
                 {
                     merge_value_fields(old, item);
                     continue;
@@ -766,12 +888,41 @@ fn merge_non_empty_array_by_identity(
     }
 }
 
-fn item_identity(item: &Value) -> Option<String> {
+fn item_identity(kind: &str, item: &Value) -> Option<String> {
+    if kind == "relationships" {
+        return relationship_identity(item);
+    }
     ["id", "name", "title"]
         .iter()
         .find_map(|key| item.get(*key).and_then(Value::as_str))
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn relationship_identity(item: &Value) -> Option<String> {
+    let source = item
+        .get("sourceCharacterId")
+        .or_else(|| item.get("sourceName"))
+        .or_else(|| item.get("source"))
+        .and_then(Value::as_str)?
+        .trim();
+    let target = item
+        .get("targetEntityId")
+        .or_else(|| item.get("targetName"))
+        .or_else(|| item.get("target"))
+        .and_then(Value::as_str)?
+        .trim();
+    let relation = item
+        .get("relationType")
+        .or_else(|| item.get("relation"))
+        .and_then(Value::as_str)?
+        .trim();
+    if source.is_empty() || target.is_empty() || relation.is_empty() {
+        return None;
+    }
+    let mut pair = [source, target];
+    pair.sort_unstable();
+    Some(format!("{}::{}::{}", pair[0], pair[1], relation))
 }
 
 fn merge_value_fields(target: &mut Value, patch: &Value) {
@@ -1086,6 +1237,74 @@ mod tests {
         assert_eq!(final_status.completed_chapters, 1);
     }
 
+    #[tokio::test]
+    async fn pause_interrupts_blocked_chapter_fetch() {
+        let runner = Arc::new(TestRunner::default());
+        let service = AiBookCatchupService::new_with_runner(runner.clone());
+
+        service
+            .start_with("u1".to_string(), "book-a".to_string(), None, || async {
+                let mut context = sample_context();
+                context.chapters.truncate(1);
+                context.fetch_content = fetch_content_fn(|_chapter| async move {
+                    std::future::pending::<()>().await;
+                    Ok(String::new())
+                });
+                Ok(context)
+            })
+            .await
+            .unwrap();
+
+        let fut = runner.tasks.lock().unwrap().pop().unwrap();
+        let handle = tokio::spawn(fut);
+        tokio::task::yield_now().await;
+
+        let paused = service.request_pause("u1", "book-a").await.unwrap();
+        assert_eq!(paused.status, "pausing");
+
+        tokio::time::timeout(std::time::Duration::from_millis(200), handle)
+            .await
+            .expect("pause should stop blocked fetch quickly")
+            .unwrap();
+
+        let final_status = service.get_status("u1", "book-a").await.unwrap();
+        assert_eq!(final_status.status, "paused");
+        assert_eq!(final_status.completed_chapters, 0);
+    }
+
+    #[tokio::test]
+    async fn cancel_interrupts_blocked_chapter_fetch_and_removes_task() {
+        let runner = Arc::new(TestRunner::default());
+        let service = AiBookCatchupService::new_with_runner(runner.clone());
+
+        service
+            .start_with("u1".to_string(), "book-a".to_string(), None, || async {
+                let mut context = sample_context();
+                context.chapters.truncate(1);
+                context.fetch_content = fetch_content_fn(|_chapter| async move {
+                    std::future::pending::<()>().await;
+                    Ok(String::new())
+                });
+                Ok(context)
+            })
+            .await
+            .unwrap();
+
+        let fut = runner.tasks.lock().unwrap().pop().unwrap();
+        let handle = tokio::spawn(fut);
+        tokio::task::yield_now().await;
+
+        let canceled = service.request_cancel("u1", "book-a").await.unwrap();
+        assert_eq!(canceled.status, "running");
+
+        tokio::time::timeout(std::time::Duration::from_millis(200), handle)
+            .await
+            .expect("cancel should stop blocked fetch quickly")
+            .unwrap();
+
+        assert!(service.get_status("u1", "book-a").await.is_none());
+    }
+
     #[test]
     fn direct_memory_update_preserves_v2_and_advances_chapter() {
         let current = sample_context().memory;
@@ -1234,6 +1453,43 @@ mod tests {
         );
     }
 
+    #[test]
+    fn v2_patch_merges_same_name_based_relationship() {
+        let mut current = sample_context().memory;
+        current["relationships"] = json!([{
+            "sourceName": "张羽",
+            "targetName": "张羽的姐姐",
+            "targetKind": "character",
+            "relationType": "姐弟",
+            "description": "旧描述",
+            "evidence": []
+        }]);
+        let chapter = CatchupChapter {
+            title: "第6章".to_string(),
+            chapter_url: "c6".to_string(),
+            index: 5,
+        };
+
+        let next = parse_memory_update(
+            r#"{"memory":{"schemaVersion":2,"summary":{"current":"姐姐转账"},"relationships":[{"sourceName":"张羽","targetName":"张羽的姐姐","targetKind":"character","relationType":"姐弟","currentStatus":"转账500元","evidence":[]}]}}"#,
+            &current,
+            "book-a",
+            "书A",
+            "作者A",
+            &chapter,
+        )
+        .unwrap();
+
+        let relationships = next.get("relationships").and_then(Value::as_array).unwrap();
+        assert_eq!(relationships.len(), 1);
+        assert_eq!(
+            relationships[0]
+                .get("currentStatus")
+                .and_then(Value::as_str),
+            Some("转账500元")
+        );
+    }
+
     #[tokio::test]
     async fn chapter_failure_persists_last_error_to_memory() {
         let runner = Arc::new(TestRunner::default());
@@ -1309,7 +1565,21 @@ mod tests {
     }
 
     #[test]
+    fn json_content_parser_extracts_wrapped_object() {
+        let parsed = parse_json_content("说明：{\"summary\":\"ok\"}").unwrap();
+        assert_eq!(parsed.get("summary").and_then(Value::as_str), Some("ok"));
+    }
+
+    #[test]
     fn responses_endpoint_uses_output_text() {
+        let body = build_model_body("/v1/responses", "test-model", "hi".to_string());
+        assert!(body.get("messages").is_none());
+        assert_eq!(
+            body.pointer("/text/format/type").and_then(Value::as_str),
+            Some("json_object")
+        );
+        assert_eq!(body.get("stream").and_then(Value::as_bool), Some(false));
+
         let content = extract_model_content(
             "/v1/responses",
             &json!({ "output_text": "{\"summary\":\"ok\"}" }),

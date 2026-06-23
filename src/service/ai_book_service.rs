@@ -223,6 +223,8 @@ fn validate_ai_book_memory_value(memory: &Value) -> Result<(), AppError> {
         }
     }
 
+    validate_v2_entity_evidence(object)?;
+
     if claims_processed_chapter(object)
         && !has_ai_book_semantic_content(object)
         && !has_non_empty_string(object.get("lastError"))
@@ -231,6 +233,79 @@ fn validate_ai_book_memory_value(memory: &Value) -> Result<(), AppError> {
     }
 
     Ok(())
+}
+
+fn validate_v2_entity_evidence(object: &serde_json::Map<String, Value>) -> Result<(), AppError> {
+    if object.get("schemaVersion").and_then(Value::as_i64) != Some(2) {
+        return Ok(());
+    }
+
+    for key in ["worldFacts", "characters", "relationships", "locations"] {
+        let Some(items) = object.get(key).and_then(Value::as_array) else {
+            continue;
+        };
+        for (index, item) in items.iter().enumerate() {
+            if !item_should_require_evidence(item) {
+                continue;
+            }
+            let Some(evidence) = item.get("evidence").and_then(Value::as_array) else {
+                return Err(AppError::BadRequest(format!(
+                    "{key}[{index}] missing evidence"
+                )));
+            };
+            if evidence.is_empty() {
+                return Err(AppError::BadRequest(format!(
+                    "{key}[{index}] missing evidence"
+                )));
+            }
+            for (evidence_index, entry) in evidence.iter().enumerate() {
+                let Some(entry_object) = entry.as_object() else {
+                    return Err(AppError::BadRequest(format!(
+                        "{key}[{index}].evidence[{evidence_index}] must be an object"
+                    )));
+                };
+                if entry_object
+                    .get("chapterIndex")
+                    .and_then(Value::as_i64)
+                    .is_none()
+                {
+                    return Err(AppError::BadRequest(format!(
+                        "{key}[{index}].evidence[{evidence_index}] missing chapterIndex"
+                    )));
+                }
+                if !has_non_empty_string(entry_object.get("chapterTitle")) {
+                    return Err(AppError::BadRequest(format!(
+                        "{key}[{index}].evidence[{evidence_index}] missing chapterTitle"
+                    )));
+                }
+                if !has_non_empty_string(entry_object.get("note")) {
+                    return Err(AppError::BadRequest(format!(
+                        "{key}[{index}].evidence[{evidence_index}] missing note"
+                    )));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn item_should_require_evidence(item: &Value) -> bool {
+    let Some(object) = item.as_object() else {
+        return false;
+    };
+    object.values().any(value_has_meaningful_content)
+}
+
+fn value_has_meaningful_content(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(flag) => *flag,
+        Value::Number(_) => true,
+        Value::String(text) => !text.trim().is_empty(),
+        Value::Array(items) => !items.is_empty(),
+        Value::Object(object) => !object.is_empty(),
+    }
 }
 
 fn claims_processed_chapter(object: &serde_json::Map<String, Value>) -> bool {

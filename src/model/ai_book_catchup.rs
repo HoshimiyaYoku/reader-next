@@ -46,6 +46,13 @@ pub struct AiBookCatchupPauseRequest {
     pub book_url: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookCatchupCancelRequest {
+    #[serde(rename = "bookUrl", alias = "url")]
+    pub book_url: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AiBookCatchupTaskView {

@@ -634,13 +634,25 @@
         </section>
       </main>
     </div>
+
+    <div v-else class="ai-empty-panel">
+      <button class="back-btn" @click="goBack">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="m15 18-6-6 6-6" />
+        </svg>
+        返回
+      </button>
+      <h2>AI资料加载失败</h2>
+      <p>{{ loadError || '无法加载这本书的 AI资料' }}</p>
+      <small>如果刚切换过账号，当前账号书架可能没有这本书。</small>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, defineComponent, h, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getAiBookCatchupStatus, pauseAiBookCatchup, startAiBookCatchup } from '../api/aiBook'
+import { cancelAiBookCatchup, getAiBookCatchupStatus, startAiBookCatchup } from '../api/aiBook'
 import { saveAiModelConfig } from '../api/aiModel'
 import { getBookContent, getChapterList, getShelfBook } from '../api/bookshelf'
 import { useAiBookStore } from '../stores/aiBook'
@@ -698,6 +710,7 @@ const catchupPollingStatuses = new Set<AiBookCatchupTaskStatus>(['running', 'pau
 const catchupTerminalStatuses = new Set<AiBookCatchupTaskStatus>(['paused', 'completed', 'failed'])
 
 const loading = ref(true)
+const loadError = ref('')
 const activeTab = ref<AiTab>('overview')
 const adminModelPanelRef = ref<HTMLElement | null>(null)
 const book = ref<Book | null>(null)
@@ -817,8 +830,8 @@ const isCatchupRunning = computed(() => catchupStatus.value ? catchupPollingStat
 const catchupActionDisabled = computed(() => catchupActionPending.value || aiStore.isBusy || catchupStatus.value?.status === 'pausing')
 const catchupActionLabel = computed(() => {
   if (aiStore.phase === 'text') return '更新中...'
-  if (catchupStatus.value?.status === 'pausing') return '暂停中...'
-  if (isCatchupRunning.value) return '暂停补齐'
+  if (catchupStatus.value?.status === 'pausing') return '取消中...'
+  if (isCatchupRunning.value) return '取消补齐'
   return '补齐到当前进度'
 })
 const catchupStatusLabel = computed(() => catchupStatus.value ? describeCatchupStatus(catchupStatus.value.status) : '')
@@ -846,7 +859,7 @@ const catchupDetailText = computed(() => {
   const current = formatCatchupChapter(catchupStatus.value.currentChapterIndex, catchupStatus.value.currentChapterTitle)
   const processed = formatCatchupChapter(catchupStatus.value.processedChapterIndex, catchupStatus.value.processedChapterTitle)
   if (catchupStatus.value.status === 'running' && current) return `当前正在处理 ${current}`
-  if (catchupStatus.value.status === 'pausing' && current) return `暂停请求已发送，当前仍在处理 ${current}`
+  if (catchupStatus.value.status === 'pausing' && current) return `取消请求已发送，当前仍在处理 ${current}`
   if (catchupStatus.value.status === 'completed') return processed ? `已完成，最新补齐到 ${processed}` : '已完成'
   if (catchupStatus.value.status === 'paused') return processed ? `已暂停，最新补齐到 ${processed}` : '任务已暂停'
   if (processed) return `已补齐到 ${processed}`
@@ -857,7 +870,9 @@ const catchupUpdatedAtText = computed(() => {
   return `更新于 ${formatTime(catchupStatus.value.updatedAt)}`
 })
 const statusNotice = computed(() => {
-  const source = aiStore.statusText || memory.value?.lastError || ''
+  const memoryError = memory.value?.lastError || ''
+  const catchupError = catchupStatus.value?.status === 'failed' ? catchupStatus.value.error || '' : ''
+  const source = aiStore.statusText || (collapseWhitespace(memoryError) === collapseWhitespace(catchupError) ? '' : memoryError)
   if (!source.trim()) return null
   const isLastError = !aiStore.statusText && Boolean(memory.value?.lastError)
   const summary = summarizeDisplayError(source)
@@ -914,10 +929,13 @@ onMounted(async () => {
   }
   const bookUrl = String(route.query.bookUrl || '')
   if (!bookUrl) {
-    router.replace('/')
+    loadError.value = '缺少书籍参数，无法加载 AI资料'
+    appStore.showToast(loadError.value, 'error')
+    loading.value = false
     return
   }
   try {
+    loadError.value = ''
     book.value = await getShelfBook(bookUrl)
     await aiStore.load(book.value)
     chapters.value = await getChapterList({
@@ -926,8 +944,8 @@ onMounted(async () => {
     }).catch(() => [])
     await refreshCatchupStatus({ silent: true })
   } catch (error) {
-    appStore.showToast((error as Error).message || 'AI资料加载失败', 'error')
-    router.replace('/')
+    loadError.value = (error as Error).message || 'AI资料加载失败'
+    appStore.showToast(loadError.value, 'error')
   } finally {
     loading.value = false
   }
@@ -968,7 +986,7 @@ async function toggleEnabled(event: Event) {
 
 async function updateToCurrent() {
   if (isCatchupRunning.value) {
-    await pauseCatchupTask()
+    await cancelCatchupTask()
     return
   }
   await startCatchupTask()
@@ -1008,15 +1026,15 @@ async function startCatchupTask() {
   }
 }
 
-async function pauseCatchupTask() {
+async function cancelCatchupTask() {
   if (!book.value) return
   catchupActionPending.value = true
   try {
-    const status = await pauseAiBookCatchup(book.value.bookUrl)
+    const status = await cancelAiBookCatchup(book.value.bookUrl)
     await applyCatchupStatus(status, { reloadOnTerminal: true })
-    appStore.showToast(status.status === 'paused' ? '补齐任务已暂停' : '已请求暂停补齐任务', 'success')
+    appStore.showToast('补齐任务已取消', 'success')
   } catch (error) {
-    appStore.showToast((error as Error).message || '补齐任务暂停失败', 'error')
+    appStore.showToast((error as Error).message || '补齐任务取消失败', 'error')
   } finally {
     catchupActionPending.value = false
   }
@@ -1340,6 +1358,29 @@ function normalizeModelPath(path: string | undefined, fallback: string) {
   justify-content: center;
   gap: 12px;
   color: var(--color-text-secondary);
+}
+
+.ai-empty-panel {
+  max-width: 520px;
+  margin: 72px auto;
+  padding: 24px;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  background: var(--color-bg-elevated);
+  color: var(--color-text);
+}
+
+.ai-empty-panel h2 {
+  margin: 18px 0 10px;
+}
+
+.ai-empty-panel p {
+  margin: 0 0 8px;
+  color: var(--color-text-secondary);
+}
+
+.ai-empty-panel small {
+  color: var(--color-text-tertiary);
 }
 
 .ai-shell {

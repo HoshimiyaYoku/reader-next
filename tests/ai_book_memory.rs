@@ -123,7 +123,8 @@ async fn ai_book_memory_json_round_trips_v1_and_v2_extension_fields() {
             "parentName": "山海大陆",
             "kind": "区域",
             "description": "寒冷边境。",
-            "importance": "high"
+            "importance": "high",
+            "evidence": [{"chapterIndex": 7, "chapterTitle": "第八章", "note": "章节主舞台"}]
         }],
         "map": {
             "prompt": "绘制北境地图",
@@ -276,5 +277,39 @@ async fn ai_book_memory_rejects_oversized_entity_arrays() {
         .expect_err("oversized arrays should fail");
 
     assert!(err.to_string().contains("worldFacts"));
+    let _ = std::fs::remove_dir_all(storage_dir);
+}
+
+#[tokio::test]
+async fn ai_book_memory_rejects_v2_entities_without_evidence() {
+    let (service, storage_dir) = create_service("missing-evidence").await;
+    let memory = serde_json::json!({
+        "schemaVersion": 2,
+        "bookUrl": "https://example.test/book/evidence",
+        "enabled": true,
+        "updatedAt": 1,
+        "summary": {"current": "北境出现旧神传说。", "recentChanges": [], "openQuestions": []},
+        "worldFacts": [{
+            "id": "fact-old-god",
+            "category": "历史传说",
+            "title": "旧神传说",
+            "content": "北境流传旧神传说。",
+            "confidence": "推断",
+            "importance": "high"
+        }],
+        "characters": [],
+        "relationships": [],
+        "locations": [],
+        "chapterDigests": [],
+        "mapState": {"dirty": false, "nodes": [], "edges": []},
+        "renderArtifacts": {}
+    });
+
+    let err = service
+        .save_value_for_book("alice", "https://example.test/book/evidence", memory)
+        .await
+        .expect_err("v2 entities without evidence should fail");
+
+    assert!(err.to_string().contains("worldFacts[0] missing evidence"));
     let _ = std::fs::remove_dir_all(storage_dir);
 }

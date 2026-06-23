@@ -234,6 +234,10 @@ pub fn build_router(state: AppState) -> Router {
             post(handlers::pause_ai_book_catchup),
         )
         .route(
+            "/reader3/aiBookCatchup/cancel",
+            post(handlers::cancel_ai_book_catchup),
+        )
+        .route(
             "/reader3/getAiModelConfig",
             get(handlers::get_ai_model_config),
         )

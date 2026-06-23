@@ -31,6 +31,20 @@ describe('aiBookPresentation', () => {
     ])
   })
 
+  it('infers useful worldview categories for old notes without category', () => {
+    const groups = groupAiBookWorldview([
+      { title: '羽书', content: '显示道心、法力、肉体强度。' },
+      { title: '嵩阳高中成绩至上', content: '学校以成绩和排名为尊。' },
+      { title: '昆墟第一层', content: '张羽生活的主要区域。' },
+    ])
+
+    expect(groups.map((group) => group.category)).toEqual(expect.arrayContaining([
+      '技术/魔法',
+      '势力制度',
+      '地理环境',
+    ]))
+  })
+
   it('builds location rows from explicit parent names and collapsed parents', () => {
     const rows = buildAiBookLocationRows([
       { name: '廷根市', kind: '城市', description: '鲁恩王国城市。' },

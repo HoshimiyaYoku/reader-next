@@ -516,6 +516,7 @@ export interface AiBookLocationV2 {
   kind: string
   scale: AiBookLocationScale
   parentId?: string
+  parentName?: string
   description: string
   currentStatus?: string
   relatedCharacterIds: string[]

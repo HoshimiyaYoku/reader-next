@@ -63,8 +63,27 @@ export function createEmptyAiBookMemoryV2(book: Book): AiBookMemoryV2 {
 export function toAiBookDisplayMemory(memory: AiBookAnyMemory): AiBookMemory {
   if (!isAiBookMemoryV2(memory)) return memory
 
-  const charactersById = new Map(memory.characters.map((character) => [character.id, character]))
-  const locationsById = new Map(memory.locations.map((location) => [location.id, location]))
+  const summary = memory.summary || { current: '' }
+  const worldFacts = Array.isArray(memory.worldFacts) ? memory.worldFacts : []
+  const characters = Array.isArray(memory.characters) ? memory.characters : []
+  const relationships = Array.isArray(memory.relationships) ? memory.relationships : []
+  const locations = Array.isArray(memory.locations) ? memory.locations : []
+  const mapState = memory.mapState || {
+    dirty: false,
+    nodes: [],
+    edges: [],
+    mapPrompt: undefined,
+    lastRenderedAt: undefined,
+    sourceChapterIndex: undefined,
+  }
+  const renderArtifacts = memory.renderArtifacts || {
+    mapImageUrl: undefined,
+    mapImagePrompt: undefined,
+    mapFallbackReason: undefined,
+  }
+
+  const charactersById = new Map(characters.map((character) => [character.id, character]))
+  const locationsById = new Map(locations.map((location) => [location.id, location]))
 
   return {
     bookUrl: memory.bookUrl,
@@ -74,8 +93,8 @@ export function toAiBookDisplayMemory(memory: AiBookAnyMemory): AiBookMemory {
     processedChapterIndex: memory.processedChapterIndex,
     processedChapterTitle: memory.processedChapterTitle,
     updatedAt: memory.updatedAt,
-    summary: memory.summary.current,
-    worldview: memory.worldFacts.map((fact) => ({
+    summary: summary.current,
+    worldview: worldFacts.map((fact) => ({
       title: fact.title,
       content: fact.content,
       category: fact.category,
@@ -83,7 +102,7 @@ export function toAiBookDisplayMemory(memory: AiBookAnyMemory): AiBookMemory {
       importance: fact.importance,
       evidence: fact.evidence,
     })),
-    characters: memory.characters.map((character): AiBookCharacter => ({
+    characters: characters.map((character): AiBookCharacter => ({
       name: character.name,
       aliases: character.aliases,
       status: character.currentStatus,
@@ -94,7 +113,12 @@ export function toAiBookDisplayMemory(memory: AiBookAnyMemory): AiBookMemory {
       importance: character.importance,
       evidence: character.evidence,
     })),
-    relationships: memory.relationships.map((relationship): AiBookRelationship => {
+    relationships: relationships.map((relationship): AiBookRelationship => {
+      const raw = relationship as typeof relationship & {
+        sourceName?: string
+        targetName?: string
+        status?: string
+      }
       const source = charactersById.get(relationship.sourceCharacterId)
       const targetCharacter = relationship.targetKind === 'character'
         ? charactersById.get(relationship.targetEntityId)
@@ -103,41 +127,44 @@ export function toAiBookDisplayMemory(memory: AiBookAnyMemory): AiBookMemory {
         ? locationsById.get(relationship.targetEntityId)
         : undefined
       return {
-        source: source?.name || relationship.sourceCharacterId,
-        target: targetCharacter?.name || targetLocation?.name || relationship.targetEntityId,
+        source: source?.name || raw.sourceName || relationship.sourceCharacterId,
+        target: targetCharacter?.name || targetLocation?.name || raw.targetName || relationship.targetEntityId,
         relation: relationship.relationType,
-        status: relationship.currentStatus,
+        status: relationship.currentStatus || raw.status,
         description: relationship.description,
         importance: relationship.importance,
         evidence: relationship.evidence,
       }
     }),
-    locations: memory.locations.map((location): AiBookLocation => ({
-      name: location.name,
-      kind: location.kind,
-      parentName: location.parentId ? locationsById.get(location.parentId)?.name : undefined,
-      description: location.description,
-      status: location.currentStatus,
-      relatedCharacters: location.relatedCharacterIds
-        .map((id) => charactersById.get(id)?.name || id)
-        .filter(Boolean),
-      firstSeenChapter: formatChapterLabel(location.firstSeenChapterIndex),
-      importance: location.importance,
-      evidence: location.evidence,
-    })),
-    map: memory.renderArtifacts.mapImageUrl || memory.renderArtifacts.mapImagePrompt || memory.renderArtifacts.mapFallbackReason
+    locations: locations.map((location): AiBookLocation => {
+      const relatedCharacterIds = Array.isArray(location.relatedCharacterIds) ? location.relatedCharacterIds : []
+      return {
+        name: location.name,
+        kind: location.kind,
+        parentName: location.parentName || (location.parentId ? locationsById.get(location.parentId)?.name : undefined),
+        description: location.description,
+        status: location.currentStatus,
+        relatedCharacters: relatedCharacterIds
+          .map((id) => charactersById.get(id)?.name || id)
+          .filter(Boolean),
+        firstSeenChapter: formatChapterLabel(location.firstSeenChapterIndex),
+        importance: location.importance,
+        evidence: location.evidence,
+      }
+    }),
+    map: renderArtifacts.mapImageUrl || renderArtifacts.mapImagePrompt || renderArtifacts.mapFallbackReason
       ? {
-          imageUrl: memory.renderArtifacts.mapImageUrl,
-          prompt: memory.renderArtifacts.mapImagePrompt || memory.mapState.mapPrompt,
-          updatedAt: memory.mapState.lastRenderedAt,
-          sourceChapterIndex: memory.mapState.sourceChapterIndex,
-          fallback: memory.renderArtifacts.mapFallbackReason && !memory.renderArtifacts.mapImageUrl
+          imageUrl: renderArtifacts.mapImageUrl,
+          prompt: renderArtifacts.mapImagePrompt || mapState.mapPrompt,
+          updatedAt: mapState.lastRenderedAt,
+          sourceChapterIndex: mapState.sourceChapterIndex,
+          fallback: renderArtifacts.mapFallbackReason && !renderArtifacts.mapImageUrl
             ? 'relationship-graph'
             : undefined,
-          fallbackReason: memory.renderArtifacts.mapFallbackReason,
+          fallbackReason: renderArtifacts.mapFallbackReason,
         }
       : null,
-    mapDirty: memory.mapState.dirty,
+    mapDirty: Boolean(mapState.dirty),
     lastError: memory.lastError,
   }
 }

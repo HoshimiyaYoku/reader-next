@@ -16,7 +16,7 @@ export function groupAiBookWorldview(notes: AiBookNote[], collapsedCategories: S
   const groups = new Map<string, AiBookNote[]>()
   for (const note of notes) {
     if (isLowImportance(note.importance)) continue
-    const category = note.category?.trim() || '基础设定'
+    const category = note.category?.trim() || inferWorldviewCategory(note)
     const items = groups.get(category) || []
     if (!items.some((item) => normalizeKey(item.title) === normalizeKey(note.title))) {
       items.push(note)
@@ -39,6 +39,20 @@ export function groupAiBookWorldview(notes: AiBookNote[], collapsedCategories: S
       }
       return left.category.localeCompare(right.category, 'zh-CN')
     })
+}
+
+function inferWorldviewCategory(note: AiBookNote) {
+  const text = normalizeKey([note.title, note.content].filter(Boolean).join(' '))
+  if (hasAny(text, ['学校', '高中', '月考', '成绩', '班级', '排名', '制度', '垄断', '资源'])) return '势力制度'
+  if (hasAny(text, ['符号', '羽书', '法力', '道心', '道术', '武功', '健体', '肉体强度', '请神', '邪神', '神灵', '仪式'])) return '技术/魔法'
+  if (hasAny(text, ['债', '开销', '补剂', '针剂', '手术', '家庭', '母亲', '家人'])) return '社会文化'
+  if (hasAny(text, ['传说', '历史', '旧神'])) return '历史传说'
+  if (hasAny(text, ['昆墟', '第一层', '第二层', '区域', '地点', '出租房', '烂尾楼'])) return '地理环境'
+  return '基础设定'
+}
+
+function hasAny(text: string, terms: string[]) {
+  return terms.some((term) => text.includes(normalizeKey(term)))
 }
 
 export function buildAiBookLocationRows(locations: AiBookLocation[], collapsedLocations: Set<string> = new Set()): AiBookLocationRow[] {
