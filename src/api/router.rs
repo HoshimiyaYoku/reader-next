@@ -375,11 +375,9 @@ mod tests {
     use crate::storage::db;
     use crate::storage::db::repo::BookSourceRepo;
     use crate::util::crypto::random_string;
-    use axum::body::Body;
-    use axum::http::{Method, Request, StatusCode};
+    use reqwest::{Client, Method, StatusCode};
     use std::path::PathBuf;
     use std::sync::Arc;
-    use tower::util::ServiceExt;
 
     async fn create_test_state() -> (AppState, PathBuf) {
         let dir = std::env::temp_dir().join(format!("reader-ai-book-router-{}", random_string(8)));
@@ -439,22 +437,22 @@ mod tests {
     #[tokio::test]
     async fn ai_book_v3_routes_are_registered_without_legacy_aliases() {
         let (state, dir) = create_test_state().await;
-        let mut app = build_router(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, build_router(state)).await.unwrap();
+        });
+        let client = Client::new();
+        let base_url = format!("http://{}", addr);
 
         for (method, path) in [
             (Method::POST, "/reader3/saveAiBookMemory"),
             (Method::GET, "/reader3/getAiBookMemory"),
             (Method::POST, "/reader3/aiBookCatchup/pause"),
         ] {
-            let response = app
-                .as_service::<Body>()
-                .oneshot(
-                    Request::builder()
-                        .method(method.clone())
-                        .uri(path)
-                        .body(Body::empty())
-                        .unwrap(),
-                )
+            let response = client
+                .request(method.clone(), format!("{base_url}{path}"))
+                .send()
                 .await
                 .unwrap();
             assert!(matches!(
@@ -474,15 +472,9 @@ mod tests {
             (Method::GET, AI_BOOK_CATCHUP_STATUS_ROUTE),
             (Method::POST, AI_BOOK_CATCHUP_CANCEL_ROUTE),
         ] {
-            let response = app
-                .as_service::<Body>()
-                .oneshot(
-                    Request::builder()
-                        .method(method.clone())
-                        .uri(path)
-                        .body(Body::empty())
-                        .unwrap(),
-                )
+            let response = client
+                .request(method.clone(), format!("{base_url}{path}"))
+                .send()
                 .await
                 .unwrap();
             assert_ne!(response.status(), StatusCode::NOT_FOUND, "{method} {path}");
@@ -493,32 +485,21 @@ mod tests {
             );
         }
 
-        let wrong_method_memory = app
-            .as_service::<Body>()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(AI_BOOK_MEMORY_ROUTE)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+        let wrong_method_memory = client
+            .request(Method::POST, format!("{base_url}{AI_BOOK_MEMORY_ROUTE}"))
+            .send()
             .await
             .unwrap();
         assert_eq!(wrong_method_memory.status(), StatusCode::METHOD_NOT_ALLOWED);
 
-        let wrong_method_enabled = app
-            .as_service::<Body>()
-            .oneshot(
-                Request::builder()
-                    .method(Method::GET)
-                    .uri(AI_BOOK_ENABLED_ROUTE)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+        let wrong_method_enabled = client
+            .request(Method::GET, format!("{base_url}{AI_BOOK_ENABLED_ROUTE}"))
+            .send()
             .await
             .unwrap();
         assert_eq!(wrong_method_enabled.status(), StatusCode::METHOD_NOT_ALLOWED);
 
+        server.abort();
         let _ = tokio::fs::remove_dir_all(dir).await;
     }
 }
