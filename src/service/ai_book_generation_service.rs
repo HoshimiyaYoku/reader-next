@@ -636,6 +636,7 @@ mod tests {
                     chapter_title: "第一章 开场".to_string(),
                     summary: "甲用户章节摘要".to_string(),
                     key_points: vec!["甲用户内容".to_string()],
+                    has_important_changes: true,
                 },
                 patch: AiBookKnowledgePatchV3 {
                     chapter_index: 0,
@@ -705,6 +706,7 @@ mod tests {
                     chapter_title: "模型乱写标题".to_string(),
                     summary: "错误索引也要落到当前章".to_string(),
                     key_points: vec!["当前章关键点".to_string()],
+                    has_important_changes: true,
                 },
                 patch: AiBookKnowledgePatchV3 {
                     chapter_index: 77,
@@ -765,6 +767,7 @@ mod tests {
                     chapter_title: "第一章 开场".to_string(),
                     summary: "局势变化".to_string(),
                     key_points: vec!["主角进城".to_string()],
+                    has_important_changes: true,
                 },
                 patch: AiBookKnowledgePatchV3 {
                     chapter_index: 0,

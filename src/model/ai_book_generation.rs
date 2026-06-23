@@ -12,6 +12,7 @@ pub struct AiBookChapterDigestCandidateV3 {
     pub chapter_title: String,
     pub summary: String,
     pub key_points: Vec<String>,
+    pub has_important_changes: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]

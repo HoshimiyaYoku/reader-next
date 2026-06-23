@@ -15,12 +15,11 @@ use crate::model::ai_book_catchup::{
     AiBookCatchupTaskView,
 };
 use crate::service::ai_book_catchup_service::{
-    fetch_content_fn, save_memory_fn, CatchupBookContext, CatchupChapter,
+    fetch_content_fn, generate_digest_fn, generate_patch_fn, save_memory_fn, CatchupBookContext,
+    CatchupChapter,
 };
-use crate::service::ai_book_generation_service::AiBookGenerationMode;
-use crate::service::ai_book_memory_v3::{
-    select_ai_book_chapter_view_v3, select_ai_book_display_memory_v3,
-};
+use crate::service::ai_book_generation_service::{AiBookGenerationMode, LoadedChapter};
+use crate::service::ai_book_memory_v3::{select_ai_book_chapter_view_v3, select_ai_book_display_memory_v3};
 use crate::service::local_txt_book::is_local_txt_origin;
 use crate::util::text::repair_encoded_url;
 
@@ -304,53 +303,33 @@ pub async fn start_ai_book_catchup(
             book_url.clone(),
             target_chapter_index,
             move || async move {
-                let memory = state_for_task
+                let memory_v3 = state_for_task
                     .ai_book_service
-                    .get_value(&user_ns_for_task, &book_url_for_task)
-                    .await?
-                    .unwrap_or_else(|| {
-                        serde_json::json!({
-                            "schemaVersion": 2,
-                            "bookUrl": book_url_for_task.clone(),
-                            "bookName": shelf_book_for_task.name.clone(),
-                            "author": shelf_book_for_task.author.clone(),
-                            "enabled": true,
-                            "summary": { "current": "", "recentChanges": [], "openQuestions": [] },
-                            "chapterDigests": [],
-                            "arcs": [],
-                            "worldFacts": [],
-                            "characters": [],
-                            "relationships": [],
-                            "locations": [],
-                            "mapState": { "dirty": false, "nodes": [], "edges": [] },
-                            "renderArtifacts": {},
-                        })
-                    });
-                let start_chapter_index = memory
-                    .get("processedChapterIndex")
-                    .and_then(Value::as_i64)
-                    .map(|index| (index as i32) + 1)
-                    .unwrap_or(0);
+                    .get_or_create_v3(
+                        &user_ns_for_task,
+                        &book_url_for_task,
+                        Some(shelf_book_for_task.name.clone()),
+                        Some(shelf_book_for_task.author.clone()),
+                    )
+                    .await?;
+                let memory =
+                    serde_json::to_value(&memory_v3).map_err(|e| AppError::BadRequest(e.to_string()))?;
+                let start_chapter_index = memory_v3.processed_chapter_index.map(|index| index + 1).unwrap_or(0);
                 let save_start_failure = {
                     let state = state_for_task.clone();
                     let user_ns = user_ns_for_task.clone();
                     let book_url = book_url_for_task.clone();
-                    let fallback_memory = memory.clone();
+                    let fallback_memory = memory_v3.clone();
                     move |error: String| {
                         let state = state.clone();
                         let user_ns = user_ns.clone();
                         let book_url = book_url.clone();
                         let fallback_memory = fallback_memory.clone();
                         async move {
-                            let latest = state
-                                .ai_book_service
-                                .get_value(&user_ns, &book_url)
-                                .await
-                                .ok()
-                                .flatten();
+                            let latest = state.ai_book_service.get_value(&user_ns, &book_url).await.ok().flatten();
                             let memory = build_catchup_start_failure_memory(
                                 latest,
-                                fallback_memory,
+                                serde_json::to_value(fallback_memory).unwrap_or_default(),
                                 start_chapter_index,
                                 &error,
                             );
@@ -385,12 +364,14 @@ pub async fn start_ai_book_catchup(
                 let fetch_user_ns = user_ns_for_task.clone();
                 let fetch_book_url = book_url_for_task.clone();
                 let fetch_origin = shelf_book_for_task.origin.clone();
+                let digest_state = state_for_task.clone();
+                let patch_state = state_for_task.clone();
                 Ok(CatchupBookContext {
                     book_name: shelf_book_for_task.name.clone(),
                     author: shelf_book_for_task.author.clone(),
                     chapters,
                     memory,
-                    ai_config,
+                    ai_config: ai_config.clone(),
                     save_memory: save_memory_fn(move |memory| {
                         let save_state = save_state.clone();
                         let save_user_ns = save_user_ns.clone();
@@ -431,6 +412,40 @@ pub async fn start_ai_book_catchup(
                                     &fetch_book_url,
                                     &source,
                                     &chapter.chapter_url,
+                                )
+                                .await
+                        }
+                    }),
+                    generate_digest: generate_digest_fn(move |memory, chapter, content| {
+                        let digest_state = digest_state.clone();
+                        async move {
+                            let loaded = LoadedChapter {
+                                index: chapter.index,
+                                title: chapter.title.clone(),
+                                chapter_url: chapter.chapter_url.clone(),
+                            };
+                            digest_state
+                                .ai_book_generation_service
+                                .generate_digest(&content, &memory, &loaded, AiBookGenerationMode::Auto)
+                                .await
+                        }
+                    }),
+                    generate_patch: generate_patch_fn(move |memory, chapter, content, digest| {
+                        let patch_state = patch_state.clone();
+                        async move {
+                            let loaded = LoadedChapter {
+                                index: chapter.index,
+                                title: chapter.title.clone(),
+                                chapter_url: chapter.chapter_url.clone(),
+                            };
+                            patch_state
+                                .ai_book_generation_service
+                                .generate_patch_for_catchup(
+                                    &content,
+                                    &memory,
+                                    &loaded,
+                                    &digest,
+                                    AiBookGenerationMode::Auto,
                                 )
                                 .await
                         }
@@ -482,14 +497,13 @@ pub async fn cancel_ai_book_catchup(
     let req = parse_ai_book_catchup_cancel_request(q, body)?;
     let book_url = required_book_url(req.book_url)?;
     ensure_shelf_book(&state, &user_ns, &book_url).await?;
-    let _ = state
+    let task = state
         .ai_book_catchup_service
         .request_cancel(&user_ns, &book_url)
-        .await;
-    clear_catchup_status(&state, &user_ns, &book_url).await;
+        .await?;
+    persist_catchup_status(&state, &user_ns, &book_url, &task).await;
     Ok(Json(ApiResponse::ok(
-        serde_json::to_value(idle_catchup_status(&state, &user_ns, &book_url).await?)
-            .unwrap_or_default(),
+        serde_json::to_value(task).unwrap_or_default(),
     )))
 }
 
@@ -619,20 +633,6 @@ async fn persist_catchup_status(
         .await;
 }
 
-async fn clear_catchup_status(state: &AppState, user_ns: &str, book_url: &str) {
-    let Ok(Some(mut memory)) = state.ai_book_service.get_value(user_ns, book_url).await else {
-        return;
-    };
-    let Some(object) = memory.as_object_mut() else {
-        return;
-    };
-    object.remove(CATCHUP_TASK_MEMORY_KEY);
-    let _ = state
-        .ai_book_service
-        .save_value_for_book(user_ns, book_url, memory)
-        .await;
-}
-
 fn empty_ai_book_memory(book_url: &str) -> Value {
     json!({
         "schemaVersion": 2,
@@ -709,10 +709,10 @@ fn read_persisted_catchup_status(
 }
 
 fn normalize_persisted_catchup_status(task: &mut AiBookCatchupTaskView) {
-    if matches!(task.status.as_str(), "running" | "pausing") {
-        task.status = "paused".to_string();
+    if task.status == "running" {
+        task.status = "idle".to_string();
     }
-    if task.status == "paused" {
+    if matches!(task.status.as_str(), "idle" | "canceled") {
         task.current_chapter_index = None;
         task.current_chapter_title = None;
     }
@@ -1098,12 +1098,12 @@ mod tests {
     }
 
     #[test]
-    fn persisted_running_or_pausing_status_restores_as_paused() {
+    fn persisted_running_or_pausing_status_preserves_canceling_and_clears_running_chapter() {
         let memory = json!({
             "bookUrl": "book-a",
             "catchupTask": {
                 "bookUrl": "book-a",
-                "status": "pausing",
+                "status": "canceling",
                 "currentChapterIndex": 0,
                 "currentChapterTitle": "第1章",
                 "totalChapters": 10,
@@ -1113,7 +1113,28 @@ mod tests {
         });
 
         let restored = read_persisted_catchup_status(&memory, "default", "book-a").unwrap();
-        assert_eq!(restored.status, "paused");
+        assert_eq!(restored.status, "canceling");
+        assert_eq!(restored.current_chapter_index, Some(0));
+        assert_eq!(restored.current_chapter_title.as_deref(), Some("第1章"));
+    }
+
+    #[test]
+    fn persisted_running_status_restores_as_idle() {
+        let memory = json!({
+            "bookUrl": "book-a",
+            "catchupTask": {
+                "bookUrl": "book-a",
+                "status": "running",
+                "currentChapterIndex": 0,
+                "currentChapterTitle": "第1章",
+                "totalChapters": 10,
+                "completedChapters": 0,
+                "updatedAt": 123
+            }
+        });
+
+        let restored = read_persisted_catchup_status(&memory, "default", "book-a").unwrap();
+        assert_eq!(restored.status, "idle");
         assert_eq!(restored.current_chapter_index, None);
         assert_eq!(restored.current_chapter_title, None);
     }

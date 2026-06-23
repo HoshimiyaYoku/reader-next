@@ -7,8 +7,6 @@ pub type AiBookCatchupTaskStats = crate::model::ai_book::AiBookCatchupStatsV3;
 pub enum AiBookCatchupTaskStatus {
     Idle,
     Running,
-    Pausing,
-    Paused,
     Canceling,
     Canceled,
     Completed,
@@ -20,8 +18,6 @@ impl AiBookCatchupTaskStatus {
         match self {
             Self::Idle => "idle",
             Self::Running => "running",
-            Self::Pausing => "pausing",
-            Self::Paused => "paused",
             Self::Canceling => "canceling",
             Self::Canceled => "canceled",
             Self::Completed => "completed",
@@ -44,15 +40,6 @@ pub struct AiBookCatchupStatusRequest {
     #[serde(rename = "bookUrl", alias = "url")]
     pub book_url: Option<String>,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default, rename_all = "camelCase")]
-pub struct AiBookCatchupPauseRequest {
-    #[serde(rename = "bookUrl", alias = "url")]
-    pub book_url: Option<String>,
-}
-
-
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]

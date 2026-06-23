@@ -1,15 +1,20 @@
 use crate::error::error::AppError;
+use crate::model::ai_book::{AiBookChapterDigestV3, AiBookMemoryV3};
 use crate::model::ai_book_catchup::{AiBookCatchupTaskStats, AiBookCatchupTaskStatus, AiBookCatchupTaskView};
-use crate::model::ai_model::{AiModelConfig, AiModelKind, ResolvedAiModelEndpoint};
+use crate::model::ai_book_generation::{AiBookChapterDigestCandidateV3, AiBookKnowledgePatchV3};
+use crate::model::ai_model::{AiModelConfig, ResolvedAiModelEndpoint};
 use crate::model::ai_proxy::build_ai_proxy_url;
+use crate::service::ai_book_memory_v3::{
+    merge_ai_book_memory_v3, normalize_knowledge_patch_v3, select_working_context_v3,
+};
 use crate::util::time::now_ts;
 use futures::future::BoxFuture;
-use reqwest::Client;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
-use tokio::sync::{watch, RwLock};
+use std::time::Instant;
+use tokio::sync::RwLock;
 
 const DEFAULT_PROMPT: &str = r#"你是小说 AI资料后台补齐 agent。只允许基于当前已读章节和本次章节正文更新资料，不预测未读内容，不剧透目标章节之后内容。
 输入会给你 currentMemory 和 chapter。不要输出 Markdown，不要输出解释，只输出严格 JSON 对象。
@@ -25,6 +30,21 @@ locations 必须使用 name/kind/scale/parentName/description/currentStatus；pa
 type SaveMemoryFn = Arc<dyn Fn(Value) -> BoxFuture<'static, Result<Value, AppError>> + Send + Sync>;
 type FetchContentFn =
     Arc<dyn Fn(CatchupChapter) -> BoxFuture<'static, Result<String, AppError>> + Send + Sync>;
+type GenerateDigestFn = Arc<
+    dyn Fn(AiBookMemoryV3, CatchupChapter, String) -> BoxFuture<'static, Result<AiBookChapterDigestCandidateV3, AppError>>
+        + Send
+        + Sync,
+>;
+type GeneratePatchFn = Arc<
+    dyn Fn(
+            AiBookMemoryV3,
+            CatchupChapter,
+            String,
+            AiBookChapterDigestCandidateV3,
+        ) -> BoxFuture<'static, Result<AiBookKnowledgePatchV3, AppError>>
+        + Send
+        + Sync,
+>;
 
 #[derive(Clone)]
 pub struct AiBookCatchupService {
@@ -35,13 +55,11 @@ pub struct AiBookCatchupService {
 #[derive(Debug, Clone)]
 struct TaskState {
     view: AiBookCatchupTaskView,
-    pause_requested: bool,
-    pause_tx: watch::Sender<bool>,
+    cancel_requested: bool,
 }
 
 impl TaskState {
     fn new(user_ns: &str, book_url: &str, target_chapter_index: Option<i32>) -> Self {
-        let (pause_tx, _) = watch::channel(false);
         Self {
             view: AiBookCatchupTaskView {
                 user_ns: user_ns.to_string(),
@@ -60,8 +78,7 @@ impl TaskState {
                 current_stage: Some("fetching".to_string()),
                 stats: Some(AiBookCatchupTaskStats::default()),
             },
-            pause_requested: false,
-            pause_tx,
+            cancel_requested: false,
         }
     }
 
@@ -86,6 +103,8 @@ pub struct CatchupBookContext {
     pub ai_config: AiModelConfig,
     pub save_memory: SaveMemoryFn,
     pub fetch_content: FetchContentFn,
+    pub generate_digest: GenerateDigestFn,
+    pub generate_patch: GeneratePatchFn,
 }
 
 pub fn save_memory_fn<F, Fut>(f: F) -> SaveMemoryFn
@@ -102,6 +121,25 @@ where
     Fut: std::future::Future<Output = Result<String, AppError>> + Send + 'static,
 {
     Arc::new(move |chapter| Box::pin(f(chapter)))
+}
+
+pub fn generate_digest_fn<F, Fut>(f: F) -> GenerateDigestFn
+where
+    F: Fn(AiBookMemoryV3, CatchupChapter, String) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Result<AiBookChapterDigestCandidateV3, AppError>> + Send + 'static,
+{
+    Arc::new(move |memory, chapter, content| Box::pin(f(memory, chapter, content)))
+}
+
+pub fn generate_patch_fn<F, Fut>(f: F) -> GeneratePatchFn
+where
+    F: Fn(AiBookMemoryV3, CatchupChapter, String, AiBookChapterDigestCandidateV3) -> Fut
+        + Send
+        + Sync
+        + 'static,
+    Fut: std::future::Future<Output = Result<AiBookKnowledgePatchV3, AppError>> + Send + 'static,
+{
+    Arc::new(move |memory, chapter, content, digest| Box::pin(f(memory, chapter, content, digest)))
 }
 
 pub trait CatchupRunner: Send + Sync {
@@ -153,7 +191,7 @@ impl AiBookCatchupService {
         let key = task_key(&user_ns, &book_url);
         let mut tasks = self.tasks.write().await;
         if let Some(existing) = tasks.get(&key) {
-            if matches_status(&existing.view.status, &["running", "pausing", "canceling"]) {
+            if matches_status(&existing.view.status, &["running", "canceling"]) {
                 return Ok(existing.snapshot());
             }
         }
@@ -184,7 +222,7 @@ impl AiBookCatchupService {
             .map(TaskState::snapshot)
     }
 
-    pub async fn request_pause(
+    pub async fn request_cancel(
         &self,
         user_ns: &str,
         book_url: &str,
@@ -193,25 +231,13 @@ impl AiBookCatchupService {
         let task = tasks
             .get_mut(&task_key(user_ns, book_url))
             .ok_or_else(|| AppError::BadRequest("任务不存在".to_string()))?;
-        if matches_status(&task.view.status, &["completed", "failed", "paused"]) {
+        if matches_status(&task.view.status, &["completed", "failed", "canceled"]) {
             return Ok(task.snapshot());
         }
-        task.pause_requested = true;
-        let _ = task.pause_tx.send(true);
-        task.view.status = AiBookCatchupTaskStatus::Pausing.as_str().to_string();
+        task.cancel_requested = true;
+        task.view.status = AiBookCatchupTaskStatus::Canceling.as_str().to_string();
         task.view.updated_at = now_ts() * 1000;
         Ok(task.snapshot())
-    }
-
-    pub async fn request_cancel(
-        &self,
-        user_ns: &str,
-        book_url: &str,
-    ) -> Option<AiBookCatchupTaskView> {
-        let mut tasks = self.tasks.write().await;
-        let task = tasks.remove(&task_key(user_ns, book_url))?;
-        let _ = task.pause_tx.send(true);
-        Some(task.snapshot())
     }
 
     async fn run_task(
@@ -236,9 +262,6 @@ impl AiBookCatchupService {
             .collect::<Vec<_>>();
         self.set_plan(&key, start_index, target_index, chapters.len() as i32)
             .await;
-        let Some(mut pause_rx) = self.pause_receiver(&key).await else {
-            return;
-        };
 
         if chapters.is_empty() {
             self.mark_completed(&key).await;
@@ -246,54 +269,44 @@ impl AiBookCatchupService {
         }
 
         for chapter in chapters {
-            if *pause_rx.borrow() {
-                self.mark_paused(&key).await;
+            if self.cancel_should_stop(&key).await {
+                self.mark_canceled(&key).await;
                 return;
             }
             self.set_current_chapter(&key, &chapter).await;
-            let Some(content_result) = self
-                .await_or_pause(
-                    &key,
-                    &mut pause_rx,
-                    (context.fetch_content)(chapter.clone()),
-                )
-                .await
-            else {
-                return;
-            };
+            let content_result = self
+                .run_stage(&key, "fetching", (context.fetch_content)(chapter.clone()))
+                .await;
             let content = match content_result {
                 Ok(content) => content,
-                Err(err) => {
+                Err(StageError::App(err)) => {
                     self.save_failure_memory(&context, &chapter, &err.to_string())
                         .await;
                     self.mark_failed(&key, err.to_string()).await;
                     return;
                 }
+                Err(StageError::Canceled) => {
+                    self.mark_canceled(&key).await;
+                    return;
+                }
             };
-            let Some(memory_result) = self
-                .await_or_pause(
+            let memory_result = self
+                .run_stage(
                     &key,
-                    &mut pause_rx,
-                    self.process_chapter(
-                        &context.memory,
-                        &context.ai_config,
-                        &context.book_name,
-                        &context.author,
-                        &book_url,
-                        &chapter,
-                        &content,
-                    ),
+                    "digest",
+                    self.process_chapter(&key, &context.memory, &chapter, &content, &context),
                 )
-                .await
-            else {
-                return;
-            };
+                .await;
             let next_memory = match memory_result {
                 Ok(memory) => memory,
-                Err(err) => {
+                Err(StageError::App(err)) => {
                     self.save_failure_memory(&context, &chapter, &err.to_string())
                         .await;
                     self.mark_failed(&key, err.to_string()).await;
+                    return;
+                }
+                Err(StageError::Canceled) => {
+                    self.mark_canceled(&key).await;
                     return;
                 }
             };
@@ -302,8 +315,8 @@ impl AiBookCatchupService {
                 Ok(saved) => {
                     context.memory = saved;
                     self.mark_processed(&key, &chapter).await;
-                    if self.pause_should_stop(&key).await {
-                        self.mark_paused(&key).await;
+                    if self.cancel_should_stop(&key).await {
+                        self.mark_canceled(&key).await;
                         return;
                     }
                 }
@@ -329,51 +342,74 @@ impl AiBookCatchupService {
 
     async fn process_chapter(
         &self,
+        key: &str,
         memory: &Value,
-        ai_config: &AiModelConfig,
-        book_name: &str,
-        author: &str,
-        book_url: &str,
         chapter: &CatchupChapter,
         chapter_content: &str,
+        context: &CatchupBookContext,
     ) -> Result<Value, AppError> {
-        let endpoint = ai_config.resolve(AiModelKind::Text);
-        if !endpoint.enabled
-            || endpoint.base_url.trim().is_empty()
-            || endpoint.model.trim().is_empty()
-        {
-            return Err(AppError::BadRequest(
-                "后端文本模型未启用或配置不完整".to_string(),
-            ));
+        let mut memory_v3 = serde_json::from_value::<AiBookMemoryV3>(memory.clone())
+            .map_err(|e| AppError::BadRequest(format!("AI资料补齐内存格式不正确: {e}")))?;
+        let digest_started = Instant::now();
+        let mut digest = (context.generate_digest)(
+            memory_v3.clone(),
+            chapter.clone(),
+            chapter_content.to_string(),
+        )
+        .await?;
+        digest.chapter_index = chapter.index;
+        digest.chapter_title = chapter.title.clone();
+        self.bump_stats(key, |stats| {
+            stats.total_model_calls += 1;
+            stats.digest_calls += 1;
+            record_stats(stats, chapter.index, digest_started.elapsed());
+        })
+        .await;
+        upsert_digest_v3(&mut memory_v3, &digest);
+
+        let should_patch = digest_requires_patch(&digest, chapter_content, &memory_v3);
+        if should_patch {
+            self.set_stage(key, "patch").await;
+            let patch_started = Instant::now();
+            let mut patch = (context.generate_patch)(
+                memory_v3.clone(),
+                chapter.clone(),
+                chapter_content.to_string(),
+                digest.clone(),
+            )
+            .await?;
+            patch.chapter_index = chapter.index;
+            if patch.summary.as_deref().is_none_or(|summary| summary.trim().is_empty()) {
+                patch.summary = Some(digest.summary.clone());
+            }
+            let working_context = select_working_context_v3(
+                &memory_v3,
+                Some(&digest_to_view(&digest)),
+                chapter_content,
+            );
+            let normalized = normalize_knowledge_patch_v3(patch, &working_context);
+            memory_v3 = merge_ai_book_memory_v3(memory_v3, normalized);
+            self.bump_stats(key, |stats| {
+                stats.total_model_calls += 1;
+                stats.patch_calls += 1;
+                record_stats(stats, chapter.index, patch_started.elapsed());
+            })
+            .await;
+        } else {
+            self.bump_stats(key, |stats| {
+                stats.skipped_patch_chapters += 1;
+                stats.updated_at = now_ts();
+                stats.last_chapter_index = Some(chapter.index);
+            })
+            .await;
         }
-        let client = Client::new();
-        let target = build_target_url(&endpoint)?;
-        let prompt = build_user_prompt(memory, book_name, author, chapter, chapter_content);
-        let body = build_model_body(&endpoint.path, &endpoint.model, prompt);
-        let request = client
-            .post(target)
-            .header(reqwest::header::ACCEPT, "application/json")
-            .header(reqwest::header::CONTENT_TYPE, "application/json");
-        let response = apply_auth_headers(request, &endpoint, &body)
-            .send()
-            .await
-            .map_err(|e| AppError::BadRequest(format!("AI资料补齐请求失败: {e}")))?;
-        let status = response.status();
-        let text = response
-            .text()
-            .await
-            .map_err(|e| AppError::BadRequest(format!("AI资料补齐读取响应失败: {e}")))?;
-        if !status.is_success() {
-            return Err(AppError::BadRequest(format!(
-                "AI资料补齐请求失败: {} {}",
-                status,
-                text.chars().take(200).collect::<String>()
-            )));
-        }
-        let value: Value = serde_json::from_str(&text)
-            .map_err(|_| AppError::BadRequest("AI资料补齐返回 JSON 格式不正确".to_string()))?;
-        let content = extract_model_content(&endpoint.path, &value)?;
-        parse_memory_update(&content, memory, book_url, book_name, author, chapter)
+        memory_v3.processed_chapter_index = Some(chapter.index);
+        memory_v3.processed_chapter_title = Some(chapter.title.clone());
+        memory_v3.last_error = None;
+        memory_v3.last_error_chapter_index = None;
+        memory_v3.last_error_chapter_title = None;
+        memory_v3.catchup_stats = self.current_stats(key).await;
+        serde_json::to_value(memory_v3).map_err(|e| AppError::BadRequest(e.to_string()))
     }
 
     async fn set_plan(&self, key: &str, start: i32, target: i32, total: i32) {
@@ -387,43 +423,30 @@ impl AiBookCatchupService {
         }
     }
 
-    async fn pause_receiver(&self, key: &str) -> Option<watch::Receiver<bool>> {
-        self.tasks
-            .read()
-            .await
-            .get(key)
-            .map(|task| task.pause_tx.subscribe())
-    }
-
-    async fn await_or_pause<T, F>(
-        &self,
-        key: &str,
-        pause_rx: &mut watch::Receiver<bool>,
-        future: F,
-    ) -> Option<Result<T, AppError>>
+    async fn run_stage<T, F>(&self, key: &str, stage: &str, future: F) -> Result<T, StageError>
     where
         F: Future<Output = Result<T, AppError>>,
     {
-        if *pause_rx.borrow() {
-            self.mark_paused(key).await;
-            return None;
+        self.set_stage(key, stage).await;
+        let result = future.await.map_err(StageError::App);
+        if self.cancel_should_stop(key).await {
+            return Err(StageError::Canceled);
         }
-        tokio::select! {
-            result = future => Some(result),
-            changed = pause_rx.changed() => {
-                if changed.is_ok() && *pause_rx.borrow() {
-                    self.mark_paused(key).await;
-                    return None;
-                }
-                Some(Err(AppError::BadRequest("补齐任务暂停状态异常".to_string())))
-            }
+        result
+    }
+
+    async fn set_stage(&self, key: &str, stage: &str) {
+        let mut tasks = self.tasks.write().await;
+        if let Some(task) = tasks.get_mut(key) {
+            task.view.current_stage = Some(stage.to_string());
+            task.view.updated_at = now_ts() * 1000;
         }
     }
 
     async fn set_current_chapter(&self, key: &str, chapter: &CatchupChapter) {
         let mut tasks = self.tasks.write().await;
         if let Some(task) = tasks.get_mut(key) {
-            if !task.pause_requested {
+            if !task.cancel_requested {
                 task.view.status = AiBookCatchupTaskStatus::Running.as_str().to_string();
             }
             task.view.current_chapter_index = Some(chapter.index);
@@ -446,30 +469,6 @@ impl AiBookCatchupService {
                 .min(task.view.total_chapters.max(0));
             task.view.error = None;
             task.view.updated_at = now_ts() * 1000;
-            if task.pause_requested {
-                task.view.status = AiBookCatchupTaskStatus::Paused.as_str().to_string();
-                task.view.current_stage = None;
-            }
-        }
-    }
-
-    async fn pause_should_stop(&self, key: &str) -> bool {
-        self.tasks
-            .read()
-            .await
-            .get(key)
-            .map(|task| task.pause_requested)
-            .unwrap_or(false)
-    }
-
-    async fn mark_paused(&self, key: &str) {
-        let mut tasks = self.tasks.write().await;
-        if let Some(task) = tasks.get_mut(key) {
-            task.view.status = AiBookCatchupTaskStatus::Paused.as_str().to_string();
-            task.view.current_stage = None;
-            task.view.current_chapter_index = None;
-            task.view.current_chapter_title = None;
-            task.view.updated_at = now_ts() * 1000;
         }
     }
 
@@ -484,6 +483,17 @@ impl AiBookCatchupService {
         }
     }
 
+    async fn mark_canceled(&self, key: &str) {
+        let mut tasks = self.tasks.write().await;
+        if let Some(task) = tasks.get_mut(key) {
+            task.view.status = AiBookCatchupTaskStatus::Canceled.as_str().to_string();
+            task.view.current_stage = None;
+            task.view.current_chapter_index = None;
+            task.view.current_chapter_title = None;
+            task.view.updated_at = now_ts() * 1000;
+        }
+    }
+
     async fn mark_failed(&self, key: &str, error: String) {
         let mut tasks = self.tasks.write().await;
         if let Some(task) = tasks.get_mut(key) {
@@ -491,6 +501,35 @@ impl AiBookCatchupService {
             task.view.error = Some(error);
             task.view.updated_at = now_ts() * 1000;
         }
+    }
+
+    async fn cancel_should_stop(&self, key: &str) -> bool {
+        self.tasks
+            .read()
+            .await
+            .get(key)
+            .map(|task| task.cancel_requested)
+            .unwrap_or(false)
+    }
+
+    async fn bump_stats<F>(&self, key: &str, update: F)
+    where
+        F: FnOnce(&mut AiBookCatchupTaskStats),
+    {
+        let mut tasks = self.tasks.write().await;
+        if let Some(task) = tasks.get_mut(key) {
+            let stats = task.view.stats.get_or_insert_with(AiBookCatchupTaskStats::default);
+            update(stats);
+            task.view.updated_at = now_ts() * 1000;
+        }
+    }
+
+    async fn current_stats(&self, key: &str) -> Option<AiBookCatchupTaskStats> {
+        self.tasks
+            .read()
+            .await
+            .get(key)
+            .and_then(|task| task.view.stats.clone())
     }
 }
 
@@ -500,6 +539,108 @@ fn task_key(user_ns: &str, book_url: &str) -> String {
 
 fn matches_status(current: &str, candidates: &[&str]) -> bool {
     candidates.iter().any(|item| current == *item)
+}
+
+#[derive(Debug)]
+enum StageError {
+    Canceled,
+    App(AppError),
+}
+
+fn record_stats(stats: &mut AiBookCatchupTaskStats, chapter_index: i32, elapsed: std::time::Duration) {
+    let latency_ms = elapsed.as_millis() as i64;
+    stats.last_call_latency_ms = Some(latency_ms);
+    stats.last_chapter_index = Some(chapter_index);
+    stats.updated_at = now_ts();
+    stats.average_call_latency_ms = Some(match stats.average_call_latency_ms {
+        Some(avg) if stats.total_model_calls > 0 => {
+            ((avg * (stats.total_model_calls as i64 - 1)) + latency_ms) / stats.total_model_calls as i64
+        }
+        _ => latency_ms,
+    });
+}
+
+fn digest_to_view(digest: &AiBookChapterDigestCandidateV3) -> AiBookChapterDigestV3 {
+    AiBookChapterDigestV3 {
+        chapter_index: digest.chapter_index,
+        chapter_title: digest.chapter_title.clone(),
+        summary: digest.summary.clone(),
+        key_points: digest.key_points.clone(),
+        characters: Vec::new(),
+        character_states: Vec::new(),
+        character_relations: Vec::new(),
+        knowledge_facts: Vec::new(),
+        locations: Vec::new(),
+        location_edges: Vec::new(),
+    }
+}
+
+fn upsert_digest_v3(memory: &mut AiBookMemoryV3, digest: &AiBookChapterDigestCandidateV3) {
+    let digest_v3 = digest_to_view(digest);
+    if let Some(existing) = memory
+        .chapter_digests
+        .iter_mut()
+        .find(|item| item.chapter_index == digest.chapter_index)
+    {
+        *existing = digest_v3;
+    } else {
+        memory.chapter_digests.push(digest_v3);
+        memory.chapter_digests.sort_by_key(|item| item.chapter_index);
+    }
+}
+
+fn digest_requires_patch(
+    digest: &AiBookChapterDigestCandidateV3,
+    chapter_text: &str,
+    memory: &AiBookMemoryV3,
+) -> bool {
+    if digest.has_important_changes {
+        return true;
+    }
+    if chapter_text.trim().is_empty() {
+        return false;
+    }
+    if digest.summary.trim().is_empty() {
+        return true;
+    }
+    let important = digest
+        .key_points
+        .iter()
+        .any(|item| contains_patch_trigger(item))
+        || contains_patch_trigger(&digest.summary);
+    if important {
+        return true;
+    }
+    backend_patch_guard(chapter_text, memory)
+}
+
+fn backend_patch_guard(chapter_text: &str, memory: &AiBookMemoryV3) -> bool {
+    let text = chapter_text.trim();
+    if text.is_empty() {
+        return false;
+    }
+    if text.chars().any(|ch| ch == '→' || ch == '→') {
+        return true;
+    }
+    if ["加入", "背叛", "救下", "欠", "债", "师父", "同盟", "冲突", "能力", "突破", "搬到", "来到", "离开"]
+        .iter()
+        .any(|keyword| text.contains(keyword))
+    {
+        return true;
+    }
+    text.split(|ch: char| ch.is_whitespace() || "，。！？；：、“”‘’（）()《》<>-".contains(ch))
+        .filter(|token| token.chars().count() >= 2)
+        .any(|token| {
+            let known_character = memory.characters.iter().any(|item| item.name == token || item.aliases.iter().any(|alias| alias == token));
+            let known_location = memory.locations.iter().any(|item| item.name == token);
+            !known_character && !known_location && token.chars().all(|ch| !ch.is_ascii_digit())
+        })
+}
+
+fn contains_patch_trigger(text: &str) -> bool {
+    ["关系", "势力", "地点", "设定", "能力", "突破", "冲突", "身份", "加入", "离开"]
+        .iter()
+        .any(|keyword| text.contains(keyword))
 }
 
 fn read_i32(value: &Value, key: &str) -> Option<i32> {
@@ -1186,6 +1327,21 @@ mod tests {
             fetch_content: fetch_content_fn(|chapter| async move {
                 Ok(format!("正文{}", chapter.index + 1))
             }),
+            generate_digest: generate_digest_fn(|_memory, chapter, _content| async move {
+                Ok(AiBookChapterDigestCandidateV3 {
+                    chapter_index: chapter.index,
+                    chapter_title: chapter.title,
+                    summary: format!("第{}章摘要", chapter.index + 1),
+                    key_points: vec![],
+                    has_important_changes: false,
+                })
+            }),
+            generate_patch: generate_patch_fn(|_memory, chapter, _content, _digest| async move {
+                Ok(AiBookKnowledgePatchV3 {
+                    chapter_index: chapter.index,
+                    ..Default::default()
+                })
+            }),
         }
     }
 
@@ -1210,7 +1366,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pause_marks_task_without_immediate_completion() {
+    async fn ai_book_v3_cancel_moves_to_canceling_then_canceled() {
         let runner = Arc::new(TestRunner::default());
         let service = AiBookCatchupService::new_with_runner(runner.clone());
 
@@ -1221,8 +1377,8 @@ mod tests {
             .await
             .unwrap();
 
-        let paused = service.request_pause("u1", "book-a").await.unwrap();
-        assert_eq!(paused.status, "pausing");
+        let canceled = service.request_cancel("u1", "book-a").await.unwrap();
+        assert_eq!(canceled.status, "canceling");
 
         let key = task_key("u1", "book-a");
         let chapter = CatchupChapter {
@@ -1232,52 +1388,17 @@ mod tests {
         };
         service.set_plan(&key, 0, 1, 2).await;
         service.mark_processed(&key, &chapter).await;
-        assert!(service.pause_should_stop(&key).await);
-        service.mark_paused(&key).await;
+        assert!(service.cancel_should_stop(&key).await);
+        service.mark_canceled(&key).await;
 
         let final_status = service.get_status("u1", "book-a").await.unwrap();
-        assert_eq!(final_status.status, "paused");
+        assert_eq!(final_status.status, "canceled");
         assert_eq!(final_status.processed_chapter_index, Some(0));
         assert_eq!(final_status.completed_chapters, 1);
     }
 
     #[tokio::test]
-    async fn pause_interrupts_blocked_chapter_fetch() {
-        let runner = Arc::new(TestRunner::default());
-        let service = AiBookCatchupService::new_with_runner(runner.clone());
-
-        service
-            .start_with("u1".to_string(), "book-a".to_string(), None, || async {
-                let mut context = sample_context();
-                context.chapters.truncate(1);
-                context.fetch_content = fetch_content_fn(|_chapter| async move {
-                    std::future::pending::<()>().await;
-                    Ok(String::new())
-                });
-                Ok(context)
-            })
-            .await
-            .unwrap();
-
-        let fut = runner.tasks.lock().unwrap().pop().unwrap();
-        let handle = tokio::spawn(fut);
-        tokio::task::yield_now().await;
-
-        let paused = service.request_pause("u1", "book-a").await.unwrap();
-        assert_eq!(paused.status, "pausing");
-
-        tokio::time::timeout(std::time::Duration::from_millis(200), handle)
-            .await
-            .expect("pause should stop blocked fetch quickly")
-            .unwrap();
-
-        let final_status = service.get_status("u1", "book-a").await.unwrap();
-        assert_eq!(final_status.status, "paused");
-        assert_eq!(final_status.completed_chapters, 0);
-    }
-
-    #[tokio::test]
-    async fn cancel_interrupts_blocked_chapter_fetch_and_removes_task() {
+    async fn cancel_interrupts_blocked_chapter_fetch() {
         let runner = Arc::new(TestRunner::default());
         let service = AiBookCatchupService::new_with_runner(runner.clone());
 
@@ -1299,14 +1420,50 @@ mod tests {
         tokio::task::yield_now().await;
 
         let canceled = service.request_cancel("u1", "book-a").await.unwrap();
-        assert_eq!(canceled.status, "running");
+        assert_eq!(canceled.status, "canceling");
 
         tokio::time::timeout(std::time::Duration::from_millis(200), handle)
             .await
             .expect("cancel should stop blocked fetch quickly")
             .unwrap();
 
-        assert!(service.get_status("u1", "book-a").await.is_none());
+        let final_status = service.get_status("u1", "book-a").await.unwrap();
+        assert_eq!(final_status.status, "canceled");
+        assert_eq!(final_status.completed_chapters, 0);
+    }
+
+    #[tokio::test]
+    async fn cancel_interrupts_blocked_chapter_fetch_keeps_task_queryable() {
+        let runner = Arc::new(TestRunner::default());
+        let service = AiBookCatchupService::new_with_runner(runner.clone());
+
+        service
+            .start_with("u1".to_string(), "book-a".to_string(), None, || async {
+                let mut context = sample_context();
+                context.chapters.truncate(1);
+                context.fetch_content = fetch_content_fn(|_chapter| async move {
+                    std::future::pending::<()>().await;
+                    Ok(String::new())
+                });
+                Ok(context)
+            })
+            .await
+            .unwrap();
+
+        let fut = runner.tasks.lock().unwrap().pop().unwrap();
+        let handle = tokio::spawn(fut);
+        tokio::task::yield_now().await;
+
+        let canceled = service.request_cancel("u1", "book-a").await.unwrap();
+        assert_eq!(canceled.status, "canceling");
+
+        tokio::time::timeout(std::time::Duration::from_millis(200), handle)
+            .await
+            .expect("cancel should stop blocked fetch quickly")
+            .unwrap();
+
+        let final_status = service.get_status("u1", "book-a").await.unwrap();
+        assert_eq!(final_status.status, "canceled");
     }
 
     #[test]
@@ -1537,6 +1694,158 @@ mod tests {
                 .and_then(Value::as_i64),
             Some(0)
         );
+    }
+
+    #[tokio::test]
+    async fn ai_book_v3_digest_only_skips_patch() {
+        let runner = Arc::new(TestRunner::default());
+        let service = AiBookCatchupService::new_with_runner(runner.clone());
+        let saved = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let saved_for_context = saved.clone();
+
+        service
+            .start_with("u1".to_string(), "book-a".to_string(), Some(0), move || {
+                let saved = saved_for_context.clone();
+                async move {
+                    let mut context = sample_context();
+                    context.chapters.truncate(1);
+                    context.save_memory = save_memory_fn(move |memory| {
+                        let saved = saved.clone();
+                        async move {
+                            saved.lock().unwrap().push(memory.clone());
+                            Ok(memory)
+                        }
+                    });
+                    context.generate_digest = generate_digest_fn(|memory, chapter, _content| async move {
+                        assert!(memory.chapter_digests.is_empty());
+                        Ok(AiBookChapterDigestCandidateV3 {
+                            chapter_index: chapter.index,
+                            chapter_title: chapter.title,
+                            summary: "仅摘要".to_string(),
+                            key_points: vec!["日常推进".to_string()],
+                            has_important_changes: false,
+                        })
+                    });
+                    context.generate_patch = generate_patch_fn(|_memory, _chapter, _content, _digest| async move {
+                        Err(AppError::BadRequest("unexpected patch".to_string()))
+                    });
+                    Ok(context)
+                }
+            })
+            .await
+            .unwrap();
+
+        let fut = runner.tasks.lock().unwrap().pop().unwrap();
+        fut.await;
+
+        let status = service.get_status("u1", "book-a").await.unwrap();
+        assert_eq!(status.status, "completed");
+        assert_eq!(status.stats.as_ref().and_then(|s| Some(s.skipped_patch_chapters)), Some(1));
+        let saved = saved.lock().unwrap();
+        let saved_memory: AiBookMemoryV3 = serde_json::from_value(saved.last().cloned().unwrap()).unwrap();
+        assert_eq!(saved_memory.chapter_digests.len(), 1);
+        assert_eq!(saved_memory.catchup_stats.as_ref().map(|s| s.skipped_patch_chapters), Some(1));
+    }
+
+    #[tokio::test]
+    async fn ai_book_v3_digest_guard_forces_patch_when_needed() {
+        let runner = Arc::new(TestRunner::default());
+        let service = AiBookCatchupService::new_with_runner(runner.clone());
+        let patch_calls = Arc::new(Mutex::new(0));
+        let patch_calls_for_context = patch_calls.clone();
+
+        service
+            .start_with("u1".to_string(), "book-a".to_string(), Some(0), move || {
+                let patch_calls = patch_calls_for_context.clone();
+                async move {
+                    let mut context = sample_context();
+                    context.chapters.truncate(1);
+                    context.fetch_content = fetch_content_fn(|chapter| async move {
+                        Ok(format!("正文{} 新角色加入宗门", chapter.index + 1))
+                    });
+                    context.generate_digest = generate_digest_fn(|_memory, chapter, _content| async move {
+                        Ok(AiBookChapterDigestCandidateV3 {
+                            chapter_index: chapter.index,
+                            chapter_title: chapter.title,
+                            summary: "普通摘要".to_string(),
+                            key_points: vec!["轻微变化".to_string()],
+                            has_important_changes: false,
+                        })
+                    });
+                    context.generate_patch = generate_patch_fn(move |_memory, chapter, _content, _digest| {
+                        let patch_calls = patch_calls.clone();
+                        async move {
+                            *patch_calls.lock().unwrap() += 1;
+                            Ok(AiBookKnowledgePatchV3 {
+                                chapter_index: chapter.index,
+                                summary: Some("普通摘要".to_string()),
+                                characters: vec![crate::model::ai_book_generation::AiBookCharacterPatchV3 {
+                                    name: "新角色".to_string(),
+                                    aliases: vec![],
+                                    status: Some("加入宗门".to_string()),
+                                    faction: Some("宗门".to_string()),
+                                    location: None,
+                                    description: Some("首次登场".to_string()),
+                                    last_seen_chapter: None,
+                                }],
+                                ..Default::default()
+                            })
+                        }
+                    });
+                    Ok(context)
+                }
+            })
+            .await
+            .unwrap();
+
+        let fut = runner.tasks.lock().unwrap().pop().unwrap();
+        fut.await;
+
+        assert_eq!(*patch_calls.lock().unwrap(), 1);
+        let status = service.get_status("u1", "book-a").await.unwrap();
+        assert_eq!(status.stats.as_ref().and_then(|s| Some(s.patch_calls)), Some(1));
+    }
+
+    #[tokio::test]
+    async fn ai_book_v3_catchup_stats_increment() {
+        let runner = Arc::new(TestRunner::default());
+        let service = AiBookCatchupService::new_with_runner(runner.clone());
+
+        service
+            .start_with("u1".to_string(), "book-a".to_string(), Some(0), || async {
+                let mut context = sample_context();
+                context.chapters.truncate(1);
+                context.generate_digest = generate_digest_fn(|_memory, chapter, _content| async move {
+                    Ok(AiBookChapterDigestCandidateV3 {
+                        chapter_index: chapter.index,
+                        chapter_title: chapter.title,
+                        summary: "关键变化".to_string(),
+                        key_points: vec!["关系变化".to_string()],
+                        has_important_changes: true,
+                    })
+                });
+                context.generate_patch = generate_patch_fn(|_memory, chapter, _content, _digest| async move {
+                    Ok(AiBookKnowledgePatchV3 {
+                        chapter_index: chapter.index,
+                        summary: Some("关键变化".to_string()),
+                        ..Default::default()
+                    })
+                });
+                Ok(context)
+            })
+            .await
+            .unwrap();
+
+        let fut = runner.tasks.lock().unwrap().pop().unwrap();
+        fut.await;
+
+        let status = service.get_status("u1", "book-a").await.unwrap();
+        let stats = status.stats.unwrap();
+        assert_eq!(stats.total_model_calls, 2);
+        assert_eq!(stats.digest_calls, 1);
+        assert_eq!(stats.patch_calls, 1);
+        assert!(stats.last_call_latency_ms.is_some());
+        assert!(stats.average_call_latency_ms.is_some());
     }
 
     #[test]
