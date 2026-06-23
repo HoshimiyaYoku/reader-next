@@ -195,12 +195,7 @@ impl AiBookService {
                     .await
             }
         };
-        if let Err(_) = self.prepare_v3_for_save(book_url, &mut memory) {
-            return self
-                .reset_v3_internal(user_ns, book_url, book_name, author, legacy_path.as_ref())
-                .await;
-        }
-        if validate_ai_book_memory_v3(&memory).is_err() {
+        if validate_ai_book_memory_v3(&memory).is_err() || memory.book_url != book_url {
             return self
                 .reset_v3_internal(user_ns, book_url, book_name, author, legacy_path.as_ref())
                 .await;
@@ -680,6 +675,61 @@ mod tests {
         assert_eq!(invalid_json["schemaVersion"], json!(3));
         assert_eq!(invalid_json["bookUrl"], json!("book://invalid"));
         assert!(service.memory_path(user_ns, "book://invalid").exists() == false);
+
+        for (book_url, stored_json) in [
+            (
+                "book://missing-url",
+                json!({
+                    "schemaVersion": 3,
+                    "summary": { "current": "旧摘要" },
+                    "knowledgeFacts": [{
+                        "title": "规则",
+                        "content": "旧内容"
+                    }]
+                }),
+            ),
+            (
+                "book://blank-url",
+                json!({
+                    "schemaVersion": 3,
+                    "bookUrl": "   ",
+                    "summary": { "current": "旧摘要" },
+                    "characters": [{
+                        "name": "张羽"
+                    }]
+                }),
+            ),
+        ] {
+            sqlx::query(
+                "INSERT INTO ai_book_memories (user_ns, book_key, book_url, json, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(user_ns, book_key) DO UPDATE SET json=excluded.json, updated_at=excluded.updated_at",
+            )
+            .bind(user_ns)
+            .bind(md5_hex(book_url))
+            .bind(book_url)
+            .bind(stored_json.to_string())
+            .bind(now_ts())
+            .execute(&service.pool)
+            .await
+            .unwrap();
+
+            let reset = service
+                .get_or_create_v3(user_ns, book_url, None, None)
+                .await
+                .unwrap();
+            assert_eq!(reset.schema_version, 3);
+            assert_eq!(reset.book_url, book_url);
+            assert!(reset.summary.current.is_empty());
+            assert!(reset.knowledge_facts.is_empty());
+            assert!(reset.characters.is_empty());
+
+            let reset_json = load_memory_json(&service, user_ns, book_url).await;
+            assert_eq!(reset_json["schemaVersion"], json!(3));
+            assert_eq!(reset_json["bookUrl"], json!(book_url));
+            assert_eq!(reset_json["summary"]["current"], json!(""));
+            assert_eq!(reset_json["knowledgeFacts"], json!([]));
+            assert_eq!(reset_json["characters"], json!([]));
+        }
 
         let _ = fs::remove_dir_all(dir).await;
     }
