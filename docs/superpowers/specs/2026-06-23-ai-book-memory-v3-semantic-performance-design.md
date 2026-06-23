@@ -10,7 +10,7 @@ Reader 的 AI资料 V2 把角色、地点、世界观、关系都存在一个 JS
 
 1. 让“关系”页只展示用户直觉中的重要人物关系。
 2. 把人物状态、技能/功法、地点归属、世界设定从人物关系中拆出来。
-3. 统一浏览器生成和后台补齐的语义模型，避免两套规则漂移。
+3. 将 AI资料语义逻辑集中到后端 AI Memory Engine，前端只触发动作和展示后端 view model。
 4. 为 V2 脏数据提供确定性迁移和清洗，不要求用户手动重置。
 5. 让章节补齐耗时不随完整 memory 线性增长。
 6. 为补齐任务增加可观测性能数据，后续优化有证据。
@@ -215,7 +215,19 @@ interface AiBookDroppedFact {
 
 ## Generation Contract
 
-所有新生成统一使用 `KnowledgePatchV3`。浏览器生成和后台补齐都走同一套 schema、同一套归一化规则。
+所有新生成统一由后端 AI Memory Engine 完成。前端不构造 prompt，不直接提交 patch，不解析模型 response，不执行 memory merge。
+
+主路径：
+
+1. 前端请求后端获取或生成某本书/某章节的 AI资料。
+2. 后端读取书籍、章节正文、当前 memory。
+3. 后端构造 `AiBookWorkingContext` 和 prompt。
+4. 后端调用模型并得到 raw response。
+5. 后端解析为内部 `KnowledgePatchV3` 候选。
+6. 后端 normalize、migrate、merge、validate、save。
+7. 后端返回前端可直接渲染的 view model。
+
+`KnowledgePatchV3` 是后端内部合同，不是前端 API 合同：
 
 ```ts
 interface KnowledgePatchV3 {
@@ -234,6 +246,8 @@ interface KnowledgePatchV3 {
   locationEdges?: Partial<AiBookLocationEdgeV3>[]
 }
 ```
+
+Browser-side model generation is legacy-only. If kept, it must be hidden behind an advanced setting and still submit raw model output to a backend normalization endpoint; frontend must not merge or save AI memory itself.
 
 Prompt 必须明确：
 
@@ -376,40 +390,91 @@ interface AiBookCatchupStats {
 
 任务状态接口返回最近统计，UI 显示“已跳过 patch N 章 / 平均耗时 X 秒”。
 
+## API Design
+
+Frontend-facing APIs return view models, not raw memory internals.
+
+- `GET /reader3/aiBook/chapterMemory?bookUrl=...&chapterIndex=...`
+  - Returns cached chapter AI view data, generation status, and related global context.
+  - Does not call the model.
+
+- `POST /reader3/aiBook/chapterMemory/generate`
+  - Body: `{ "bookUrl": string, "chapterIndex": number, "mode": "cached" | "refresh" }`.
+  - Backend performs the full generation pipeline and returns the same view model as `GET`.
+
+- `GET /reader3/aiBook/memory?bookUrl=...`
+  - Returns the full AI资料 view model for the AI资料 page: summary, characters, relations, facts, locations, map state, cleanup stats.
+
+- `POST /reader3/aiBook/memory/clean`
+  - Runs V2/V3 migration and semantic cleanup for one book, then returns cleanup counts and updated view model.
+
+- `POST /reader3/aiBook/catchup/start`
+  - Starts backend catch-up to a target chapter.
+
+- `GET /reader3/aiBook/catchup/status?bookUrl=...`
+  - Returns task progress, cancellation state, and `catchupStats`.
+
+- `POST /reader3/aiBook/catchup/cancel`
+  - Cancels the current backend task for the book.
+
+The old browser-generation API remains only as a compatibility path if needed; it must not be used by the default UI.
+
 ## Backend Responsibilities
 
+Backend owns the AI Memory Engine.
+
 - `src/service/ai_book_service.rs`
-  - 接受 V3。
-  - 保存前调用 V3 validator。
-  - 惰性迁移 V1/V2 到 V3。
+  - Accept and persist V3.
+  - Run V3 validator before saving.
+  - Lazily migrate V1/V2 to V3 when loading.
+  - Return frontend-facing view models instead of raw internal memory where possible.
+
+- `src/service/ai_book_memory_v3.rs`
+  - Normalize model candidates.
+  - Migrate V1/V2 memory.
+  - Validate relation ontology and evidence.
+  - Merge relation lifecycle/history.
+  - Build display view models.
+  - Select working context for generation.
+
+- `src/service/ai_book_generation_service.rs`
+  - Build prompts.
+  - Call the configured text model.
+  - Parse raw response into `KnowledgePatchV3`.
+  - Call V3 normalizer/merge/save.
+  - Support current-chapter generation and refresh.
 
 - `src/service/ai_book_catchup_service.rs`
-  - 使用 digest/patch 两阶段。
-  - 使用 working context，而不是完整 memory。
-  - 记录 catchupStats。
-  - 继续支持取消任务。
+  - Use backend generation service for each digest/patch stage.
+  - Use working context instead of full memory.
+  - Record `catchupStats`.
+  - Continue supporting cancellation.
 
-- 新增语义模块，例如 `src/service/ai_book_memory_v3.rs`
-  - V3 类型无须先强 Rust struct 化完整 JSON；第一版可用 serde_json + 小型 helper，避免大重构。
-  - 包含 normalize、migrate、validate、select working context。
+- `src/api/handlers/ai_book.rs`
+  - Expose chapterMemory/memory/clean/catchup endpoints.
+  - Never expose raw prompt or require frontend to submit model patches on the default path.
 
 ## Frontend Responsibilities
 
+Frontend owns presentation only.
+
+- `frontend/src/api/aiBook.ts`
+  - Call backend memory, generation, cleanup, and catchup endpoints.
+  - Treat returned data as a view model.
+
 - `frontend/src/types/index.ts`
-  - 增加 V3 类型和 patch 类型。
-
-- `frontend/src/utils/aiBookV3.ts`
-  - V3 merge/migration/display selectors。
-  - 与后端规则保持同名测试 fixture。
-
-- `frontend/src/utils/aiBookGeneration.ts`
-  - browser 模式输出 `KnowledgePatchV3`。
-  - 不再让模型直接输出 legacy relationships。
+  - Define API response/view-model types used by Vue components.
+  - Do not duplicate internal V3 merge or migration types unless needed for display shape.
 
 - `frontend/src/views/AiBookView.vue`
-  - 关系页只展示人物关系。
-  - 角色卡增加能力/地点/阵营摘要。
-  - 设置页可显示清洗统计，不展示 `droppedFacts` 详细内容，除非 debug 模式。
+  - Render summary, characters, relationships, facts, locations, map state, cleanup stats.
+  - Trigger generate/refresh/clean/catchup/cancel actions.
+  - Keep only UI state: active tab, search, collapse, loading, toast.
+
+- Remove or quarantine frontend semantic logic:
+  - `frontend/src/utils/aiBookGeneration.ts` must not be used by the default V3 path.
+  - `frontend/src/utils/aiBookV2.ts` merge/migration logic becomes legacy compatibility or test fixture only.
+  - Frontend selectors may sort/filter/collapse display rows, but must not decide whether a relation is semantically valid.
 
 ## Testing Strategy
 
@@ -446,11 +511,13 @@ interface AiBookCatchupStats {
 
 1. Add V3 types, normalizer, migration tests.
 2. Add display selectors and UI compatibility, still allow reading V2.
-3. Switch browser generation to V3 patch.
-4. Switch backend catchup prompt to V3 patch and working context.
-5. Add digest/patch two-stage processing and stats.
-6. Add one-time cleanup action for existing memories.
-7. Remove or hide legacy relationship display once migration tests pass.
+3. Add backend chapterMemory/memory/clean APIs returning view models.
+4. Move current-chapter generation to backend-only AI Memory Engine.
+5. Switch backend catchup prompt to V3 patch and working context.
+6. Add digest/patch two-stage processing and stats.
+7. Remove default UI dependency on frontend browser generation and frontend merge logic.
+8. Add one-time cleanup action for existing memories.
+9. Remove or hide legacy relationship display once migration tests pass.
 
 ## Risks
 
