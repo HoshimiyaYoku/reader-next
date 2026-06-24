@@ -58,7 +58,7 @@ export function buildSummaryRelationshipGraph(input: {
       : relation.targetCharacterId === protagonistId
         ? relation.sourceCharacterId
         : ''
-    if (!otherId || !characterById.has(otherId)) continue
+    if (!otherId || otherId === protagonistId || !characterById.has(otherId)) continue
     grouped.set(otherId, [...(grouped.get(otherId) || []), relation])
   }
 
@@ -139,12 +139,9 @@ function findProtagonistId(
     scores.set(character.id, (character.importance === 'high' ? 4 : 0) + recencyScore(character.lastSeenChapterIndex, currentChapterIndex))
   }
   for (const relation of memory.relationships) {
-    if (characterById.has(relation.sourceCharacterId)) {
-      scores.set(relation.sourceCharacterId, (scores.get(relation.sourceCharacterId) || 0) + 10)
-    }
-    if (characterById.has(relation.targetCharacterId)) {
-      scores.set(relation.targetCharacterId, (scores.get(relation.targetCharacterId) || 0) + 10)
-    }
+    if (!characterById.has(relation.sourceCharacterId) || !characterById.has(relation.targetCharacterId)) continue
+    scores.set(relation.sourceCharacterId, (scores.get(relation.sourceCharacterId) || 0) + 10)
+    scores.set(relation.targetCharacterId, (scores.get(relation.targetCharacterId) || 0) + 10)
   }
   return [...scores.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || ''
 }

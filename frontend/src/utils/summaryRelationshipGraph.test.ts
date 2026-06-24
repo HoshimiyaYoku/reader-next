@@ -88,6 +88,102 @@ describe('buildSummaryRelationshipGraph', () => {
     expect(graph.links.map((link) => link.targetId)).not.toContain('ghost')
   })
 
+  it('does not let ghost to known edges outweigh valid protagonist edges', () => {
+    const graph = buildSummaryRelationshipGraph({
+      memory: {
+        ...memory,
+        relationships: [
+          {
+            id: 'r-valid',
+            sourceCharacterId: 'hero',
+            targetCharacterId: 'ally',
+            kind: 'alliance',
+            label: '盟友',
+            polarity: 'positive',
+            strength: 'strong',
+            status: 'active',
+            direction: 'grouped',
+            summary: '有效关系',
+            currentDynamics: [],
+            facets: [],
+            lastUpdatedChapterIndex: 10,
+            evidence: [],
+            history: [],
+          },
+          {
+            id: 'r-ghost-1',
+            sourceCharacterId: 'ghost',
+            targetCharacterId: 'stranger',
+            kind: 'conflict',
+            label: '幽灵施压',
+            polarity: 'negative',
+            strength: 'critical',
+            status: 'active',
+            direction: 'grouped',
+            summary: '坏边 1',
+            currentDynamics: [],
+            facets: [],
+            lastUpdatedChapterIndex: 10,
+            evidence: [],
+            history: [],
+          },
+          {
+            id: 'r-ghost-2',
+            sourceCharacterId: 'ghost',
+            targetCharacterId: 'stranger',
+            kind: 'conflict',
+            label: '幽灵施压',
+            polarity: 'negative',
+            strength: 'critical',
+            status: 'active',
+            direction: 'grouped',
+            summary: '坏边 2',
+            currentDynamics: [],
+            facets: [],
+            lastUpdatedChapterIndex: 10,
+            evidence: [],
+            history: [],
+          },
+        ],
+      },
+      currentChapterIndex: 10,
+    })
+
+    expect(graph.protagonist?.id).toBe('hero')
+  })
+
+  it('skips self relations when building grouped nodes and links', () => {
+    const graph = buildSummaryRelationshipGraph({
+      memory: {
+        ...memory,
+        relationships: [
+          {
+            id: 'r-self',
+            sourceCharacterId: 'hero',
+            targetCharacterId: 'hero',
+            kind: 'unknown',
+            label: '自我关系',
+            polarity: 'neutral',
+            strength: 'weak',
+            status: 'active',
+            direction: 'grouped',
+            summary: '不应进入图',
+            currentDynamics: [],
+            facets: [],
+            lastUpdatedChapterIndex: 10,
+            evidence: [],
+            history: [],
+          },
+        ],
+      },
+      currentChapterIndex: 10,
+    })
+
+    expect(graph.nodes).toHaveLength(0)
+    expect(graph.links).toHaveLength(0)
+    expect(graph.protagonist).toBeNull()
+  })
+
   it('returns an empty reason when memory has no usable relationships', () => {
     const graph = buildSummaryRelationshipGraph({
       memory: { ...memory, relationships: [] },
