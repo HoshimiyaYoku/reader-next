@@ -188,7 +188,23 @@
                   role="tab"
                   type="button"
                   @click="chapterSummaryActiveTab = 'content'"
-                >正文</button>
+                >摘要</button>
+                <button
+                  class="summary-tab"
+                  :class="{ active: chapterSummaryActiveTab === 'focus' }"
+                  :aria-selected="chapterSummaryActiveTab === 'focus'"
+                  role="tab"
+                  type="button"
+                  @click="chapterSummaryActiveTab = 'focus'"
+                >重点</button>
+                <button
+                  class="summary-tab"
+                  :class="{ active: chapterSummaryActiveTab === 'more' }"
+                  :aria-selected="chapterSummaryActiveTab === 'more'"
+                  role="tab"
+                  type="button"
+                  @click="chapterSummaryActiveTab = 'more'"
+                >更多</button>
                 <button
                   class="summary-tab"
                   :class="{ active: chapterSummaryActiveTab === 'settings' }"
@@ -225,6 +241,51 @@
                 </button>
                 <button v-if="chapterSummary" class="summary-action" @click.stop="copyChapterSummary">复制</button>
               </div>
+            </section>
+            <section v-else-if="chapterSummaryActiveTab === 'focus'" class="chapter-summary-body" role="tabpanel" :style="chapterSummaryBodyStyle">
+              <div v-if="aiBookContextStatus === 'loading'" class="summary-skeleton" aria-label="重点加载中">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <div v-else-if="chapterSummaryContext.focusRows.length" class="summary-list style-card summary-context-list">
+                <strong>当前最该记住</strong>
+                <ul>
+                  <li v-for="row in chapterSummaryContext.focusRows" :key="`${row.kind}-${row.title}-${row.detail}`" class="summary-context-row">
+                    <span class="summary-context-kind">{{ row.label }}</span>
+                    <span class="summary-context-text">
+                      <strong class="summary-context-title">{{ row.title }}</strong>
+                      <span>{{ row.detail }}</span>
+                      <small>{{ row.meta }}</small>
+                    </span>
+                  </li>
+                </ul>
+              </div>
+              <p v-else-if="aiBookContextStatus === 'error'" class="summary-main summary-muted">AI资料暂时加载失败。</p>
+              <p v-else class="summary-main summary-muted">暂无重点资料。可先生成 AI资料或补齐到当前章节。</p>
+            </section>
+            <section v-else-if="chapterSummaryActiveTab === 'more'" class="chapter-summary-body" role="tabpanel" :style="chapterSummaryBodyStyle">
+              <div v-if="aiBookContextStatus === 'loading'" class="summary-skeleton" aria-label="资料加载中">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <div v-else-if="hasChapterSummaryMoreContext" class="summary-context-sections">
+                <div v-for="section in chapterSummaryContext.moreSections" v-show="section.rows.length" :key="section.key" class="summary-list style-list summary-context-list">
+                  <strong>{{ section.title }}</strong>
+                  <ul>
+                    <li v-for="row in section.rows" :key="`${section.key}-${row.title}-${row.detail}`" class="summary-context-row">
+                      <span class="summary-context-text">
+                        <strong class="summary-context-title">{{ row.title }}</strong>
+                        <span>{{ row.detail }}</span>
+                        <small>{{ row.meta }}</small>
+                      </span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+              <p v-else-if="aiBookContextStatus === 'error'" class="summary-main summary-muted">AI资料暂时加载失败。</p>
+              <p v-else class="summary-main summary-muted">暂无更多资料。可先生成 AI资料或补齐到当前章节。</p>
             </section>
             <section v-else class="chapter-summary-settings-panel reader-ui-font" role="tabpanel">
               <div class="summary-setting-group">
@@ -402,7 +463,23 @@
                   role="tab"
                   type="button"
                   @click="chapterSummaryActiveTab = 'content'"
-                >正文</button>
+                >摘要</button>
+                <button
+                  class="summary-tab"
+                  :class="{ active: chapterSummaryActiveTab === 'focus' }"
+                  :aria-selected="chapterSummaryActiveTab === 'focus'"
+                  role="tab"
+                  type="button"
+                  @click="chapterSummaryActiveTab = 'focus'"
+                >重点</button>
+                <button
+                  class="summary-tab"
+                  :class="{ active: chapterSummaryActiveTab === 'more' }"
+                  :aria-selected="chapterSummaryActiveTab === 'more'"
+                  role="tab"
+                  type="button"
+                  @click="chapterSummaryActiveTab = 'more'"
+                >更多</button>
                 <button
                   class="summary-tab"
                   :class="{ active: chapterSummaryActiveTab === 'settings' }"
@@ -439,6 +516,51 @@
                 </button>
                 <button v-if="chapterSummary" class="summary-action" @click.stop="copyChapterSummary">复制</button>
               </div>
+            </section>
+            <section v-else-if="chapterSummaryActiveTab === 'focus'" class="chapter-summary-body" role="tabpanel" :style="chapterSummaryBodyStyle">
+              <div v-if="aiBookContextStatus === 'loading'" class="summary-skeleton" aria-label="重点加载中">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <div v-else-if="chapterSummaryContext.focusRows.length" class="summary-list style-card summary-context-list">
+                <strong>当前最该记住</strong>
+                <ul>
+                  <li v-for="row in chapterSummaryContext.focusRows" :key="`${row.kind}-${row.title}-${row.detail}`" class="summary-context-row">
+                    <span class="summary-context-kind">{{ row.label }}</span>
+                    <span class="summary-context-text">
+                      <strong class="summary-context-title">{{ row.title }}</strong>
+                      <span>{{ row.detail }}</span>
+                      <small>{{ row.meta }}</small>
+                    </span>
+                  </li>
+                </ul>
+              </div>
+              <p v-else-if="aiBookContextStatus === 'error'" class="summary-main summary-muted">AI资料暂时加载失败。</p>
+              <p v-else class="summary-main summary-muted">暂无重点资料。可先生成 AI资料或补齐到当前章节。</p>
+            </section>
+            <section v-else-if="chapterSummaryActiveTab === 'more'" class="chapter-summary-body" role="tabpanel" :style="chapterSummaryBodyStyle">
+              <div v-if="aiBookContextStatus === 'loading'" class="summary-skeleton" aria-label="资料加载中">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <div v-else-if="hasChapterSummaryMoreContext" class="summary-context-sections">
+                <div v-for="section in chapterSummaryContext.moreSections" v-show="section.rows.length" :key="section.key" class="summary-list style-list summary-context-list">
+                  <strong>{{ section.title }}</strong>
+                  <ul>
+                    <li v-for="row in section.rows" :key="`${section.key}-${row.title}-${row.detail}`" class="summary-context-row">
+                      <span class="summary-context-text">
+                        <strong class="summary-context-title">{{ row.title }}</strong>
+                        <span>{{ row.detail }}</span>
+                        <small>{{ row.meta }}</small>
+                      </span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+              <p v-else-if="aiBookContextStatus === 'error'" class="summary-main summary-muted">AI资料暂时加载失败。</p>
+              <p v-else class="summary-main summary-muted">暂无更多资料。可先生成 AI资料或补齐到当前章节。</p>
             </section>
             <section v-else class="chapter-summary-settings-panel reader-ui-font" role="tabpanel">
               <div class="summary-setting-group">
@@ -586,7 +708,23 @@
             role="tab"
             type="button"
             @click="chapterSummaryActiveTab = 'content'"
-          >正文</button>
+          >摘要</button>
+          <button
+            class="summary-tab"
+            :class="{ active: chapterSummaryActiveTab === 'focus' }"
+            :aria-selected="chapterSummaryActiveTab === 'focus'"
+            role="tab"
+            type="button"
+            @click="chapterSummaryActiveTab = 'focus'"
+          >重点</button>
+          <button
+            class="summary-tab"
+            :class="{ active: chapterSummaryActiveTab === 'more' }"
+            :aria-selected="chapterSummaryActiveTab === 'more'"
+            role="tab"
+            type="button"
+            @click="chapterSummaryActiveTab = 'more'"
+          >更多</button>
           <button
             class="summary-tab"
             :class="{ active: chapterSummaryActiveTab === 'settings' }"
@@ -625,6 +763,55 @@
             <button v-if="chapterSummary" class="summary-action" @click.stop="copyChapterSummary">复制</button>
             <button class="summary-action" @click="hideChapterSummary">隐藏</button>
           </div>
+        </div>
+      </section>
+      <section v-else-if="chapterSummaryActiveTab === 'focus'" class="chapter-summary-card side" role="tabpanel">
+        <div class="chapter-summary-body" :style="chapterSummaryBodyStyle">
+          <div v-if="aiBookContextStatus === 'loading'" class="summary-skeleton" aria-label="重点加载中">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <div v-else-if="chapterSummaryContext.focusRows.length" class="summary-list style-card summary-context-list">
+            <strong>当前最该记住</strong>
+            <ul>
+              <li v-for="row in chapterSummaryContext.focusRows" :key="`${row.kind}-${row.title}-${row.detail}`" class="summary-context-row">
+                <span class="summary-context-kind">{{ row.label }}</span>
+                <span class="summary-context-text">
+                  <strong class="summary-context-title">{{ row.title }}</strong>
+                  <span>{{ row.detail }}</span>
+                  <small>{{ row.meta }}</small>
+                </span>
+              </li>
+            </ul>
+          </div>
+          <p v-else-if="aiBookContextStatus === 'error'" class="summary-main summary-muted">AI资料暂时加载失败。</p>
+          <p v-else class="summary-main summary-muted">暂无重点资料。可先生成 AI资料或补齐到当前章节。</p>
+        </div>
+      </section>
+      <section v-else-if="chapterSummaryActiveTab === 'more'" class="chapter-summary-card side" role="tabpanel">
+        <div class="chapter-summary-body" :style="chapterSummaryBodyStyle">
+          <div v-if="aiBookContextStatus === 'loading'" class="summary-skeleton" aria-label="资料加载中">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <div v-else-if="hasChapterSummaryMoreContext" class="summary-context-sections">
+            <div v-for="section in chapterSummaryContext.moreSections" v-show="section.rows.length" :key="section.key" class="summary-list style-list summary-context-list">
+              <strong>{{ section.title }}</strong>
+              <ul>
+                <li v-for="row in section.rows" :key="`${section.key}-${row.title}-${row.detail}`" class="summary-context-row">
+                  <span class="summary-context-text">
+                    <strong class="summary-context-title">{{ row.title }}</strong>
+                    <span>{{ row.detail }}</span>
+                    <small>{{ row.meta }}</small>
+                  </span>
+                </li>
+              </ul>
+            </div>
+          </div>
+          <p v-else-if="aiBookContextStatus === 'error'" class="summary-main summary-muted">AI资料暂时加载失败。</p>
+          <p v-else class="summary-main summary-muted">暂无更多资料。可先生成 AI资料或补齐到当前章节。</p>
         </div>
       </section>
       <section v-else class="chapter-summary-settings-panel reader-ui-font" role="tabpanel">
@@ -788,6 +975,7 @@ import {
   getChapterSummaryConfig,
   saveChapterSummaryConfig,
 } from '../api/chapterSummary'
+import { getAiBookChapterMemory, getAiBookMemory } from '../api/aiBook'
 import { applySystemTheme } from '../utils/systemUi'
 import { countBrowserBookCache } from '../utils/browserCache'
 import { APP_VIEWPORT_CHANGE_EVENT, syncViewportSize } from '../utils/viewport'
@@ -795,7 +983,8 @@ import { isReaderInteractiveClickTarget } from '../utils/readerClick'
 import { createReaderProgressAutoSaveScheduler, createReaderProgressExitSaver } from '../utils/readerProgressAutoSave'
 import { buildChapterSummaryIdentity, isCurrentChapterSummaryIdentity } from '../utils/chapterSummaryState'
 import { chooseChapterSummaryPlacement, clampChapterSummarySiderWidth, getChapterSummaryFontSize } from '../utils/chapterSummaryLayout'
-import type { Book, ChapterSummaryConfigResponse, ChapterSummaryRecord } from '../types'
+import { buildChapterSummaryContext } from '../utils/chapterSummaryContext'
+import type { AiBookChapterMemoryViewModel, AiBookMemoryViewModel, Book, ChapterSummaryConfigResponse, ChapterSummaryRecord } from '../types'
 
 import ReaderSidebar from '../components/reader/ReaderSidebar.vue'
 import ReaderToolbar from '../components/reader/ReaderToolbar.vue'
@@ -902,8 +1091,11 @@ const offlineCachedCount = ref(0)
 const chapterSummary = ref<ChapterSummaryRecord | null>(null)
 const chapterSummaryStatus = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
 const chapterSummaryError = ref('')
+const aiBookMemoryForSummary = ref<AiBookMemoryViewModel | null>(null)
+const aiBookChapterForSummary = ref<AiBookChapterMemoryViewModel | null>(null)
+const aiBookContextStatus = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
 const showChapterSummary = ref(config.value.showChapterSummary)
-type ChapterSummaryTab = 'content' | 'settings'
+type ChapterSummaryTab = 'content' | 'focus' | 'more' | 'settings'
 const chapterSummaryActiveTab = ref<ChapterSummaryTab>('content')
 const chapterSummaryConfig = ref<ChapterSummaryConfigResponse | null>(null)
 const savingChapterSummaryConfig = ref(false)
@@ -922,6 +1114,7 @@ let chapterSummaryResizeStartX = 0
 let chapterSummaryResizeStartWidth = 0
 let chapterSummaryTimer: number | null = null
 let chapterSummaryRequestId = 0
+let aiBookContextRequestId = 0
 const speechTimerNow = ref(Date.now())
 const speechTimerText = computed(() => {
   if (!store.speechStopAt) return ''
@@ -1004,6 +1197,12 @@ const chapterSummaryBodyStyle = computed(() => ({
   fontSize: `${getChapterSummaryFontSize(config.value.chapterSummaryFontSize)}px`,
   fontFamily: currentFontFamily.value || 'var(--font-body)',
 }))
+const chapterSummaryContext = computed(() => buildChapterSummaryContext({
+  memory: aiBookMemoryForSummary.value,
+  chapter: aiBookChapterForSummary.value,
+  currentChapterIndex: store.currentIndex,
+}))
+const hasChapterSummaryMoreContext = computed(() => chapterSummaryContext.value.moreSections.some((section) => section.rows.length > 0))
 
 function clearChapterSummaryTimer() {
   if (!chapterSummaryTimer) return
@@ -1016,6 +1215,12 @@ function resetChapterSummaryState() {
   chapterSummary.value = null
   chapterSummaryStatus.value = 'idle'
   chapterSummaryError.value = ''
+}
+
+function resetAiBookContextState() {
+  aiBookMemoryForSummary.value = null
+  aiBookChapterForSummary.value = null
+  aiBookContextStatus.value = 'idle'
 }
 
 function applyChapterSummaryConfigDraft(response: ChapterSummaryConfigResponse) {
@@ -1103,6 +1308,34 @@ async function loadChapterSummaryForCurrentChapter() {
     if (requestId !== chapterSummaryRequestId) return
     chapterSummaryStatus.value = 'error'
     chapterSummaryError.value = (error as Error).message || '摘要加载失败'
+  }
+}
+
+
+async function loadAiBookContextForCurrentChapter() {
+  const bookUrl = store.book?.bookUrl
+  if (!bookUrl) {
+    resetAiBookContextState()
+    return
+  }
+
+  const chapterIndex = store.currentIndex
+  const requestId = ++aiBookContextRequestId
+  aiBookContextStatus.value = 'loading'
+  try {
+    const [memory, chapter] = await Promise.all([
+      getAiBookMemory(bookUrl),
+      getAiBookChapterMemory({ bookUrl, chapterIndex }).catch(() => null),
+    ])
+    if (requestId !== aiBookContextRequestId || store.book?.bookUrl !== bookUrl || store.currentIndex !== chapterIndex) return
+    aiBookMemoryForSummary.value = memory.memory
+    aiBookChapterForSummary.value = chapter?.chapter.bookUrl === bookUrl ? chapter.chapter : null
+    aiBookContextStatus.value = 'ready'
+  } catch {
+    if (requestId !== aiBookContextRequestId) return
+    aiBookMemoryForSummary.value = null
+    aiBookChapterForSummary.value = null
+    aiBookContextStatus.value = 'error'
   }
 }
 
@@ -2493,6 +2726,7 @@ watch(
   () => {
     resetChapterSummaryState()
     void loadChapterSummaryForCurrentChapter()
+    void loadAiBookContextForCurrentChapter()
   },
   { immediate: true },
 )
@@ -2857,7 +3091,7 @@ watch(
   line-height: 1.65;
 }
 
-.summary-list strong {
+.summary-list > strong {
   display: block;
   margin-bottom: 6px;
   color: inherit;
@@ -2916,6 +3150,57 @@ watch(
 .summary-list.style-list li {
   position: relative;
   padding: 1px 0 1px 18px;
+}
+
+
+.summary-context-sections {
+  display: grid;
+  gap: 12px;
+}
+
+.summary-context-list .summary-context-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding-left: 0;
+}
+
+.summary-context-list .summary-context-row::before {
+  display: none;
+}
+
+.summary-context-kind {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.4em;
+  border: 1px solid color-mix(in srgb, var(--color-primary, #c97f3a) 34%, transparent);
+  border-radius: 999px;
+  padding: 0 6px;
+  color: var(--color-primary, #c97f3a);
+  font-size: 0.78em;
+  line-height: 1.6;
+  opacity: 0.86;
+}
+
+.summary-context-text {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.summary-context-title {
+  display: inline;
+  margin: 0;
+  font-size: 1em;
+  font-weight: 600;
+  opacity: 0.9;
+}
+
+.summary-context-text small {
+  opacity: 0.56;
+  font-size: 0.82em;
 }
 
 .summary-skeleton {
