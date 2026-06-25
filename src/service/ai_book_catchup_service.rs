@@ -451,7 +451,9 @@ impl AiBookCatchupService {
         F: Future<Output = Result<T, AppError>>,
     {
         self.set_stage(key, stage).await;
+        let deadline = tokio::time::sleep(stage_timeout(stage));
         tokio::pin!(future);
+        tokio::pin!(deadline);
         loop {
             if self.cancel_should_stop(key).await {
                 return Err(StageError::Canceled);
@@ -463,6 +465,12 @@ impl AiBookCatchupService {
                         return Err(StageError::Canceled);
                     }
                     return result;
+                }
+                _ = &mut deadline => {
+                    return Err(StageError::App(AppError::BadRequest(format!(
+                        "AI资料补齐阶段超时: {}",
+                        stage_label(stage),
+                    ))));
                 }
                 _ = tokio::time::sleep(Duration::from_millis(200)) => {}
             }
@@ -572,6 +580,22 @@ impl AiBookCatchupService {
 
 fn task_key(user_ns: &str, book_url: &str) -> String {
     format!("{user_ns}::{book_url}")
+}
+
+fn stage_timeout(stage: &str) -> Duration {
+    match stage {
+        "fetching" => Duration::from_secs(45),
+        _ => Duration::from_secs(180),
+    }
+}
+
+fn stage_label(stage: &str) -> &str {
+    match stage {
+        "fetching" => "获取章节正文",
+        "digest" => "生成章节摘要",
+        "patch" => "更新AI资料",
+        _ => stage,
+    }
 }
 
 fn matches_status(current: &str, candidates: &[&str]) -> bool {
