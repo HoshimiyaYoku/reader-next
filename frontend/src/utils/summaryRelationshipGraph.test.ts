@@ -56,6 +56,35 @@ describe('buildSummaryRelationshipGraph', () => {
     expect(graph.nodes.map((node) => node.id)).not.toContain('mother')
   })
 
+  it('keeps the default graph focused on five strongest recent relationships', () => {
+    const focusedMemory = {
+      ...memory,
+      characters: [
+        ...memory.characters,
+        { id: 'mentor', name: '师父', aliases: [], importance: 'medium', description: '近期指导者', lastSeenChapterIndex: 10, evidence: [] },
+        { id: 'rival', name: '宿敌', aliases: [], importance: 'medium', description: '近期对手', lastSeenChapterIndex: 10, evidence: [] },
+        { id: 'sister', name: '师姐', aliases: [], importance: 'medium', description: '近期同伴', lastSeenChapterIndex: 10, evidence: [] },
+      ],
+      relationships: [
+        ...memory.relationships,
+        {
+          id: 'r6', sourceCharacterId: 'hero', targetCharacterId: 'mentor', kind: 'supervision', label: '指导', polarity: 'positive', strength: 'strong', status: 'active', direction: 'grouped', summary: '近期指点修行', currentDynamics: ['刚刚给出关键建议'], facets: [], lastUpdatedChapterIndex: 10, evidence: [], history: [],
+        },
+        {
+          id: 'r7', sourceCharacterId: 'hero', targetCharacterId: 'rival', kind: 'rivalry', label: '竞争', polarity: 'negative', strength: 'strong', status: 'developing', direction: 'grouped', summary: '近期正面竞争', currentDynamics: ['冲突升温'], facets: [], lastUpdatedChapterIndex: 10, evidence: [], history: [],
+        },
+        {
+          id: 'r8', sourceCharacterId: 'hero', targetCharacterId: 'sister', kind: 'friendship', label: '同门', polarity: 'positive', strength: 'moderate', status: 'active', direction: 'grouped', summary: '近期一同行动', currentDynamics: ['共同推进线索'], facets: [], lastUpdatedChapterIndex: 10, evidence: [], history: [],
+        },
+      ],
+    } satisfies AiBookMemoryViewModel
+
+    const graph = buildSummaryRelationshipGraph({ memory: focusedMemory, currentChapterIndex: 10 })
+
+    expect(graph.links).toHaveLength(5)
+    expect(graph.nodes.map((node) => node.id)).not.toContain('mother')
+  })
+
   it('ignores unknown relationship endpoints when choosing protagonist', () => {
     const graph = buildSummaryRelationshipGraph({
       memory: {

@@ -68,7 +68,7 @@ export function buildSummaryRelationshipGraph(input: {
   const related = [...grouped.entries()]
     .map(([characterId, relations]) => ({ characterId, relations, score: relationshipScore(relations, input.currentChapterIndex) }))
     .sort((a, b) => b.score - a.score)
-    .slice(0, input.limit ?? 6)
+    .slice(0, input.limit ?? 5)
 
   if (related.length === 0) return empty('人物关系不足，继续阅读后会补全。')
 
