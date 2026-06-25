@@ -211,6 +211,57 @@ describe('reader local txt chapters', () => {
     expect(readerStore.currentIndex).toBe(4)
     expect(readerStore.book?.durChapterPos).toBe(6400)
   })
+
+  it('keeps newer local session even when server has a deeper older chapter', async () => {
+    const localBook: Book = {
+      name: '恢复书',
+      author: '作者',
+      origin: 'source-1',
+      bookUrl: 'book-restore',
+      durChapterIndex: 0,
+      durChapterPos: 0,
+      durChapterTitle: '第1章',
+    }
+    const serverBook: Book = {
+      ...localBook,
+      durChapterIndex: 4,
+      durChapterPos: 6400,
+      durChapterTime: 1_765_000_000,
+      durChapterTitle: '第5章',
+    }
+    const chapters = [
+      { title: '第1章', url: 'chapter-1', index: 0 },
+      { title: '第2章', url: 'chapter-2', index: 1 },
+      { title: '第3章', url: 'chapter-3', index: 2 },
+      { title: '第4章', url: 'chapter-4', index: 3 },
+      { title: '第5章', url: 'chapter-5', index: 4 },
+    ]
+    localStorage.setItem('reader-last-session', JSON.stringify({
+      book: localBook,
+      chapters,
+      currentIndex: 0,
+      chapterScrollProgress: 0,
+      updatedAt: Date.now(),
+    }))
+    vi.mocked(getShelfBook).mockResolvedValue(serverBook)
+    vi.mocked(getChapterList).mockResolvedValue(chapters)
+    vi.mocked(getBookContent).mockResolvedValue('服务端进度章节正文')
+    vi.mocked(getBrowserCachedChapter).mockResolvedValue(null)
+    vi.mocked(setBrowserCachedChapter).mockResolvedValue(undefined)
+    useAppStore().setOnlineStatus(true)
+    const readerStore = useReaderStore()
+
+    const restored = await readerStore.restorePersistedSession()
+
+    expect(restored).toBe(true)
+    expect(readerStore.currentIndex).toBe(0)
+    expect(readerStore.book?.durChapterPos).toBe(0)
+    expect(getBookContent).toHaveBeenCalledWith({
+      chapterUrl: 'chapter-1',
+      bookSourceUrl: 'source-1',
+      refresh: 0,
+    })
+  })
 })
 
 describe('reader summary display config', () => {

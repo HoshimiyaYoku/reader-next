@@ -440,6 +440,7 @@ export const useReaderStore = defineStore('reader', () => {
     const session = getPersistedReaderSession()
     if (!session?.book || !session.chapters?.length) return false
 
+    loading.value = true
     let restoredBook = session.book
     let restoredChapters = session.chapters
     let nextIndex = Math.max(0, Math.min(session.currentIndex || 0, restoredChapters.length - 1))
@@ -460,6 +461,7 @@ export const useReaderStore = defineStore('reader', () => {
     }
 
     book.value = restoredBook
+    currentIndex.value = nextIndex
     chapters.value = restoredChapters
     loadReadChapterHistory(restoredBook)
 
@@ -471,6 +473,8 @@ export const useReaderStore = defineStore('reader', () => {
       return true
     } catch {
       return false
+    } finally {
+      loading.value = false
     }
   }
 
