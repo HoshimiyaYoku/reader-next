@@ -37,5 +37,14 @@ test-results/
 AGENTS.local.md
 /storage-docker/
 
+# Local agent tooling
+.agents/
+.claude/
+.codex/
+.trellis/
+.lean-ctx/
+LEAN-CTX.md
+AGENTS.md.bak
+
 # Production environment secrets
 .env.prod
