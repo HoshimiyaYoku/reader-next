@@ -240,8 +240,8 @@ async fn smoke_source(
         .clone()
         .filter(|url| !url.trim().is_empty())
         .unwrap_or_else(|| book.book_url.clone());
-    let (chapters, _) = service
-        .get_chapter_list_first_page("yckceo-live", source, &toc_url)
+    let chapters = service
+        .get_chapter_list("yckceo-live", source, &toc_url)
         .await
         .map_err(|err| format!("toc failed for {toc_url}: {err:?}"))?;
     let chapter = chapters

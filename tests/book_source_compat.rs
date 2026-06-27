@@ -3,7 +3,7 @@ use reader_next::crawler::fetcher::HttpMethod;
 use reader_next::crawler::http_client::HttpClient;
 use reader_next::crawler::url_analyzer::analyze_url;
 use reader_next::model::book_source::{book_source_from_value, BookSource};
-use reader_next::model::rule::{ContentRule, SearchRule, TocRule};
+use reader_next::model::rule::{BookInfoRule, ContentRule, SearchRule, TocRule};
 use reader_next::parser::rule_engine::RuleEngine;
 use reader_next::parser::{html, jsonpath};
 use reader_next::service::book_service::BookService;
@@ -83,6 +83,59 @@ fn legacy_book_source_fields_are_migrated_to_current_shape() {
             .and_then(|rule| rule.content.as_deref()),
         Some("#content@text")
     );
+}
+
+#[test]
+fn search_last_chapter_extracts_latest_from_toc_text() {
+    let engine = RuleEngine::new().unwrap();
+    let source = BookSource {
+        book_source_name: "TOC text".to_string(),
+        book_source_url: "https://toc-text.example".to_string(),
+        rule_search: Some(SearchRule {
+            book_list: Some(".book".to_string()),
+            name: Some(".name@text".to_string()),
+            book_url: Some("a@href".to_string()),
+            last_chapter: Some(".latest@text".to_string()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let results = engine.search_books(
+        &source,
+        r#"<div class="book"><a href="/b"><span class="name">没钱修什么仙？</span></a><p class="latest">第1章 面试
+第2章 学校
+第924章 代价</p></div>"#,
+        "https://toc-text.example",
+    );
+
+    assert_eq!(results[0].last_chapter.as_deref(), Some("第924章 代价"));
+}
+
+#[test]
+fn book_info_last_chapter_extracts_latest_from_toc_text() {
+    let engine = RuleEngine::new().unwrap();
+    let source = BookSource {
+        book_source_name: "TOC text".to_string(),
+        book_source_url: "https://toc-text.example".to_string(),
+        rule_book_info: Some(BookInfoRule {
+            name: Some("h1@text".to_string()),
+            last_chapter: Some(".latest@text".to_string()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let book = engine.book_info(
+        &source,
+        r#"<h1>没钱修什么仙？</h1><p class="latest">第1章 面试
+第2章 学校
+第924章 代价</p>"#,
+        "https://toc-text.example",
+        "https://toc-text.example/b",
+    );
+
+    assert_eq!(book.latest_chapter_title.as_deref(), Some("第924章 代价"));
 }
 
 #[test]
@@ -256,6 +309,80 @@ fn chapter_list_strips_css_mode_prefix() {
     assert_eq!(chapters.len(), 1);
     assert_eq!(chapters[0].title, "第一章");
     assert_eq!(chapters[0].url, "https://toc.example/c1.html");
+}
+
+#[test]
+fn chapter_list_follows_nested_at_selectors() {
+    let engine = RuleEngine::new().unwrap();
+    let source = BookSource {
+        book_source_name: "Nested TOC".to_string(),
+        book_source_url: "https://toc.example".to_string(),
+        rule_toc: Some(TocRule {
+            chapter_list: Some(".chapter.1@li@a".to_string()),
+            chapter_name: Some("text".to_string()),
+            chapter_url: Some("href".to_string()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let (chapters, _) = engine.chapter_list(
+        &source,
+        r#"
+        <ul class="chapter"><li><a href="/old.html">旧章</a></li></ul>
+        <ul class="chapter">
+          <li><a href="/c1.html">第1章 面试</a></li>
+          <li><a href="/c2.html">第2章 学校</a></li>
+        </ul>
+        "#,
+        "https://toc.example/book/",
+    );
+
+    assert_eq!(chapters.len(), 2);
+    assert_eq!(chapters[0].title, "第1章 面试");
+    assert_eq!(chapters[0].url, "https://toc.example/c1.html");
+    assert_eq!(chapters[1].title, "第2章 学校");
+    assert_eq!(chapters[1].url, "https://toc.example/c2.html");
+}
+
+#[test]
+fn chapter_list_keeps_duplicate_chapter_at_full_catalog_position() {
+    let engine = RuleEngine::new().unwrap();
+    let source = BookSource {
+        book_source_name: "Duplicated TOC".to_string(),
+        book_source_url: "https://toc.example".to_string(),
+        rule_toc: Some(TocRule {
+            chapter_list: Some("#list@dd".to_string()),
+            chapter_name: Some("a@text".to_string()),
+            chapter_url: Some("a@href".to_string()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let (chapters, _) = engine.chapter_list(
+        &source,
+        r#"
+        <dl id="list">
+          <dt>最新章节</dt>
+          <dd><a href="/c3.html">第3章</a></dd>
+          <dd><a href="/c2.html">第2章</a></dd>
+          <dt>全部章节</dt>
+          <dd><a href="/c1.html">第1章</a></dd>
+          <dd><a href="/c2.html">第2章</a></dd>
+          <dd><a href="/c3.html">第3章</a></dd>
+        </dl>
+        "#,
+        "https://toc.example/book/",
+    );
+
+    assert_eq!(
+        chapters
+            .iter()
+            .map(|chapter| chapter.title.as_str())
+            .collect::<Vec<_>>(),
+        vec!["第1章", "第2章", "第3章"]
+    );
 }
 
 #[test]
