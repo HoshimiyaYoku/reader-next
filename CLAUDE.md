@@ -1,102 +1,72 @@
-# CLAUDE.md
+This file provides guidance to claude when working with code in this repository.
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Build and Run Commands
+## Development Workflow
+
+Run the narrowest relevant local checks before pushing. Common checks:
+   - Backend: `cargo test` or a focused `cargo test <name>`
+   - Frontend: `cd frontend && npm test` / `npm run build` as relevant
+   - Formatting/sanity: `git diff --check`
+
+## Commands
 
 ### Rust Backend
 ```bash
-cargo run                    # Run in development mode
-cargo build --release        # Build for release
-cargo test                   # Run tests
-cargo test --lib <test_name> # Run a specific test
+cargo run                    # Dev mode
+cargo build --release        # Release build
+cargo test                   # All tests
+cargo test --lib <test_name> # Single test
 ```
 
-### Web Frontend (Vue 2)
+### Local Dev
+- Default to single-port mode: build the frontend, run the Rust server, and open `http://localhost:18080`.
+- Do not start the Vite dev server (`5173`) unless the user explicitly asks for frontend hot reload/debugging.
+- Default backend port is `18080`; check it before starting: `lsof -i :18080`.
+- If `18080` is occupied, use the next available port instead of reclaiming the process blindly.
+- Prefer explicit port override for local runs: `SERVER_PORT=18080 cargo run`.
+
+### Frontend
 ```bash
-cd web
-npm install                   # Install dependencies
-npm run serve                # Development server
-npm run build                # Production build
-npm run lint                 # Lint code
+cd frontend && npm install && npm run dev    # Hot-reload frontend only; keep proxy aligned with SERVER_PORT
+cd frontend && npm run build                 # Builds to frontend/dist/
 ```
 
 ## Configuration
 
-Configuration is loaded from environment variables. Default values are defined in `src/app/config.rs`. Key settings:
+Loaded from `.env` file (via `dotenvy`) or environment variables. Separator is `__` for nested keys. See `.env.example` for all options.
 
-- `SERVER_HOST` / `SERVER_PORT` - Server binding (default: `0.0.0.0:8080`)
-- `DATABASE_URL` - SQLite path (default: `sqlite:storage/reader.db?mode=rwc`)
-- `WEB_ROOT` - Static web files directory (default: `../reader/web`)
-- `STORAGE_DIR` / `ASSETS_DIR` - Storage paths
-- `LOG_LEVEL` - Logging verbosity (default: `info`)
-- `REQUEST_TIMEOUT_SECS` - HTTP request timeout (default: 15)
+Key settings:
+- `SERVER_HOST` / `SERVER_PORT` — default `0.0.0.0:18080`
+- `DATABASE_URL` — SQLite path, default `sqlite:storage/reader.db?mode=rwc`
+- `WEB_ROOT` — static files path, default `frontend/dist`
+- `SECURE` / `SECURE_KEY` — security mode toggle
+- `INVITE_CODE` — registration gate
+- `USER_LIMIT` / `USER_BOOK_LIMIT` — default 50 / 2000
+- `LOG_LEVEL` — default `info`
+- `REQUEST_TIMEOUT_SECS` — default 15
+<!-- TRELLIS:START -->
+# Trellis Instructions
 
-Environment variable separator is `__` (double underscore).
+These instructions are for AI assistants working in this project.
 
-## Architecture Overview
+This project is managed by Trellis. The working knowledge you need lives under `.trellis/`:
 
-This is a Rust implementation of "阅读3.0" (Reader 3.0) - a book reading API server. It provides book source management, search, chapter retrieval, and content parsing.
+- `.trellis/workflow.md` — development phases, when to create tasks, skill routing
+- `.trellis/spec/` — package- and layer-scoped coding guidelines (read before writing code in a given layer)
+- `.trellis/workspace/` — per-developer journals and session traces
+- `.trellis/tasks/` — active and archived tasks (PRDs, research, jsonl context)
 
-### Module Structure
+If a Trellis command is available on your platform (e.g. `/trellis:finish-work`, `/trellis:continue`), prefer it over manual steps. Not every platform exposes every command.
 
-- **`src/api/`** - HTTP handlers and routing (axum)
-  - `router.rs` - Route definitions for all `/reader3/*` endpoints
-  - `handlers/` - Request handlers by domain (book, bookmark, rss, user, etc.)
-  - `AppState` - Shared application state (config, services)
+Managed by Trellis. Edits outside this block are preserved; edits inside may be overwritten by a future `trellis update`.
 
-- **`src/service/`** - Business logic layer
-  - `book_service.rs` - Book search, info, chapters, content
-  - `book_source_service.rs` - CRUD for book sources (stored in SQLite)
-  - `user_service.rs` - User management and authentication
+<!-- TRELLIS:END -->
 
-- **`src/parser/`** - Content extraction engine
-  - `rule_engine.rs` - Main entry point, auto-detects content type
-  - `html.rs` - CSS selector parsing (using scraper crate)
-  - `jsonpath.rs` - JSONPath queries (using jsonpath_lib)
-  - `js.rs` - JavaScript execution (rquickjs) for `js:` prefixed rules
+<!-- lean-ctx -->
+## lean-ctx
 
-- **`src/crawler/`** - HTTP fetching
-  - `http_client.rs` - Configurable reqwest client with compression support
-  - `fetcher.rs` - Page fetching with URL resolution
-
-- **`src/model/`** - Data structures
-  - `book_source.rs` - Book source JSON schema with rule definitions
-  - `rule.rs` - SearchRule, BookInfoRule, TocRule, ContentRule types
-
-- **`src/storage/`** - Persistence
-  - `db/` - SQLite via sqlx, with `BookSourceRepo`
-  - `cache/` - File-based chapter content cache (MD5 key)
-  - `fs/` - Filesystem operations for storage/assets
-
-### Request Flow
-
-1. `api/handlers/` receives HTTP request
-2. Handler calls `service/` layer
-3. Service fetches remote content via `crawler/http_client.rs`
-4. Content is parsed using `parser/rule_engine.rs` with rules from `BookSource`
-5. Results returned as JSON
-
-### Rule Parsing
-
-Book sources define parsing rules in JSON. The `RuleEngine` auto-detects parsing mode:
-
-- **CSS selectors** - Default for HTML (`.class`, `#id`, `tag`)
-- **JSONPath** - Auto-detected for JSON content (`$.data.list`)
-- **XPath** - Lines starting with `/` or `./`
-- **JavaScript** - Rules prefixed with `js:` or `@js:`
-- **Regex** - Rules starting with `:`
-
-Rule prefixes can be explicit: `@css:`, `@json:`, `@xpath:`, `@regex:`.
-
-### Book Source Format
-
-Book sources are JSON objects containing:
-- `bookSourceUrl` / `bookSourceName` - Source identity
-- `searchUrl` / `exploreUrl` - Search/discovery URLs with `${key}` placeholders
-- `ruleSearch` / `ruleBookInfo` / `ruleToc` / `ruleContent` - Parsing rules for each stage
-- Each rule has fields like `bookList`, `name`, `author`, `bookUrl`, etc.
-
-## Web Frontend
-
-The `web/` directory contains a Vue 2 frontend (阅读3.0 web client). It connects to the Rust backend API. Build output goes to `web/dist/`, which the backend serves as static files.
+Prefer lean-ctx MCP tools over native equivalents for token savings:
+`ctx_read` > Read/cat, `ctx_search` > Grep/rg, `ctx_shell` > bash, `ctx_tree` > ls/find.
+Native Edit/Write/Glob stay as-is; use `ctx_edit` only when Edit needs an unavailable Read.
+Full rules: LEAN-CTX.md (open on demand — do not auto-load).
+<!-- /lean-ctx -->
