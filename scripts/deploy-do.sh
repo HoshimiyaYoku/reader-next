@@ -17,7 +17,7 @@ git reset --hard "origin/$BRANCH"
 
 mkdir -p /opt/reader/storage /opt/reader/caddy-data /opt/reader/caddy-config
 if [[ ! -f .env.prod ]]; then
-  cp .env.prod.example .env.prod
+  cp deploy/env.prod.example .env.prod
   secure_key="$(openssl rand -hex 32)"
   invite_code="$(openssl rand -hex 8)"
   sed -i "s/^SECURE_KEY=.*/SECURE_KEY=${secure_key}/" .env.prod
@@ -26,6 +26,6 @@ if [[ ! -f .env.prod ]]; then
   echo "Created .env.prod with generated SECURE_KEY and INVITE_CODE=${invite_code}"
 fi
 
-docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f deploy/compose.caddy.yml up -d
 
-docker compose -f docker-compose.prod.yml ps
+docker compose -f deploy/compose.caddy.yml ps

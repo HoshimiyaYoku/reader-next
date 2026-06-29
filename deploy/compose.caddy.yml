@@ -4,7 +4,7 @@ services:
     container_name: reader-next-prod
     restart: unless-stopped
     env_file:
-      - path: .env.prod
+      - path: ../.env.prod
         required: false
     environment:
       SERVER_HOST: 0.0.0.0
@@ -35,7 +35,7 @@ services:
     ports:
       - "80:80"
     volumes:
-      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - /opt/reader/caddy-data:/data
       - /opt/reader/caddy-config:/config
     networks:

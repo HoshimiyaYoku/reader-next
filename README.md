@@ -72,7 +72,7 @@ http://localhost:18080
 推荐用 Compose 管理：
 
 ```bash
-cp .env.docker.example .env.docker
+cp deploy/env.docker.example .env.docker
 docker compose up -d
 ```
 
@@ -91,6 +91,8 @@ docker compose up -d
 - `ghcr.io/maple0517/reader-next:vX.Y.Z`：固定版本。
 - `ghcr.io/maple0517/reader-next:X.Y.Z`：同一个固定版本，不带 `v`。
 - `ghcr.io/maple0517/reader-next:X.Y`：同一 minor 的最新版本。
+
+完整 Docker 部署和发布说明见 [docs/deploy/docker.md](docs/deploy/docker.md)。
 
 ## 常用命令
 
