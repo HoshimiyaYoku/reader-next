@@ -1,7 +1,7 @@
 {
   "name": "reader-next-e2e",
   "private": true,
-  "version": "1.0.6",
+  "version": "1.0.9",
   "scripts": {
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",

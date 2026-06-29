@@ -1,69 +1,50 @@
 # Release Workflow
 
-Use this workflow when publishing a new version (backend + frontend + GitHub release + Docker Hub images).
+Use this workflow when publishing a new version of the backend, frontend, GitHub release, and Docker image.
 
-## One-Command Release
+## Preferred flow
 
-From repo root:
+1. Finish and verify code changes.
+2. Run the local release helper:
 
 ```bash
-./scripts/release.sh
+./scripts/release.sh v1.0.7
 ```
 
-Default behavior with no version argument:
-- Read latest git tag `vX.Y.Z`
-- Auto-bump patch to `vX.Y.(Z+1)`
-- Sync versions to:
-- `Cargo.toml` (`[package].version`)
-- `package.json` (root)
-- `frontend/package.json`
-- Build + publish everything
+3. The helper updates versions, builds frontend/backend locally, commits version files, creates a git tag, pushes it, and creates the GitHub Release.
+4. Pushing the `vX.Y.Z` tag triggers `.github/workflows/docker-publish.yml`, which builds and pushes the multi-arch Docker image to GHCR.
 
-## Optional Version Controls
+## Docker image
+
+Default image repo: `ghcr.io/maple0517/reader-next`.
+
+Published tags:
+
+- `latest`
+- `vX.Y.Z`
+- `X.Y.Z`
+- `X.Y`
+
+Users upgrade with:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+## Version controls
 
 ```bash
 # Exact version
-./scripts/release.sh v1.0.3
-./scripts/release.sh 1.0.3
+./scripts/release.sh v1.0.7
+./scripts/release.sh 1.0.7
 
 # Auto-bump modes
-./scripts/release.sh --patch   # default
+./scripts/release.sh --patch
 ./scripts/release.sh --minor
 ./scripts/release.sh --major
 ```
 
-## What the Script Does
+## Manual Docker publish fallback
 
-1. Validate environment (`git/cargo/npm/podman/gh`) and authentication.
-2. Require a clean working tree.
-3. Resolve target version (explicit or auto-bumped).
-4. Update versions in Rust + frontend + root package files.
-5. Build frontend (`frontend/dist`).
-6. Build backend binaries:
-- `x86_64-unknown-linux-musl`
-- `aarch64-unknown-linux-musl`
-7. Commit and tag:
-- commit message: `release: vX.Y.Z`
-- annotated tag: `vX.Y.Z`
-- If version files already match the target version, skip the release commit and tag the current commit.
-8. Push branch and tag to GitHub.
-9. Build Docker images (explicit platforms):
-- `--platform linux/amd64` -> `docker.io/maple0517/reader-next:vX.Y.Z-x86_64`
-- `--platform linux/arm64` -> `docker.io/maple0517/reader-next:vX.Y.Z-aarch64`
-10. Verify image architecture locally.
-11. Push versioned image tags.
-12. Update and push rolling tags:
-- `latest` (x86_64)
-- `latest-aarch64` (arm64)
-13. Create GitHub Release using generated notes.
-
-## Notes
-
-- Docker repository defaults to `docker.io/maple0517/reader-next`.
-- Override repository if needed:
-
-```bash
-DOCKER_REPO=docker.io/yourname/reader-next ./scripts/release.sh
-```
-
-- If release already exists or tag exists, script exits early to avoid accidental overwrite.
+See `DOCKER_RELEASE.md` for manual Docker Buildx commands.

@@ -1,99 +1,74 @@
-# Docker Release Runbook (Podman)
+# Docker Release Runbook
 
-This runbook is the default flow for publishing `reader-next` images to Docker Hub.
+Default image repo: `ghcr.io/maple0517/reader-next`.
 
-Repository: `docker.io/maple0517/reader-next`
+## Published tags
 
-## Release Tags
+- `latest`: newest tagged release.
+- `vX.Y.Z`: exact release tag.
+- `X.Y.Z`: exact release tag without the leading `v`.
+- `X.Y`: newest patch release in a minor line.
 
-- x86_64 image tag: `vX.Y.Z-x86_64`
-- arm64 image tag: `vX.Y.Z-aarch64`
-- rolling tags:
-- `latest` -> x86_64 image
-- `latest-aarch64` -> arm64 image
+## Automatic release through GitHub Actions
 
-## Prerequisites
-
-- `podman` is available and logged in to Docker Hub:
+1. Make sure repo Actions can write GitHub Packages:
+   - repository Settings → Actions → General → Workflow permissions → Read and write permissions.
+2. Create and push a semver tag:
 
 ```bash
-podman login docker.io
+git tag v1.0.7
+git push origin v1.0.7
 ```
 
-- Build artifacts are generated on host first (Dockerfiles do not compile Rust in-container).
-
-## Standard Commands
-
-Run from repo root.
-
-1. Set release version:
+3. Watch the `Publish Docker image` workflow.
+4. Verify the image:
 
 ```bash
-export TAG=v1.0.2
+docker buildx imagetools inspect ghcr.io/maple0517/reader-next:v1.0.7
+docker buildx imagetools inspect ghcr.io/maple0517/reader-next:1.0.7
+docker pull ghcr.io/maple0517/reader-next:latest
 ```
 
-2. Build frontend:
+## Manual local build
+
+Use this when testing the image before tagging.
 
 ```bash
-cd frontend && npm run build && cd ..
+docker build -t reader-next:local .
+docker run --rm -p 18080:18080 -v reader-storage-test:/app/storage reader-next:local
 ```
 
-3. Build Rust binaries:
+Open `http://localhost:18080`.
+
+## Manual multi-arch publish
+
+Use Docker Buildx when GitHub Actions is unavailable.
 
 ```bash
-cargo build --release --target x86_64-unknown-linux-musl
-cargo build --release --target aarch64-unknown-linux-musl
+export IMAGE=ghcr.io/maple0517/reader-next
+export TAG=v1.0.7
+
+docker login ghcr.io
+docker buildx create --use --name reader-release || docker buildx use reader-release
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -t ${IMAGE}:${TAG} \
+  -t ${IMAGE}:latest \
+  --push \
+  .
 ```
 
-4. Build images:
+## Runtime contract
+
+- Container port: `18080`.
+- Persistent data: `/app/storage`.
+- Static frontend: `/app/web/dist`.
+- Default database URL: `sqlite:/app/storage/reader.db?mode=rwc`.
+- Secrets stay in runtime env files; never bake `SECURE_KEY` or `INVITE_CODE` into images.
+
+## User upgrade
 
 ```bash
-podman build --platform linux/amd64 -t docker.io/maple0517/reader-next:${TAG}-x86_64 -f Dockerfile.x86 .
-podman build --platform linux/arm64 -t docker.io/maple0517/reader-next:${TAG}-aarch64 -f Dockerfile .
-```
-
-5. Verify architecture:
-
-```bash
-podman image inspect docker.io/maple0517/reader-next:${TAG}-x86_64 --format '{{.Architecture}} {{.Os}}'
-podman image inspect docker.io/maple0517/reader-next:${TAG}-aarch64 --format '{{.Architecture}} {{.Os}}'
-```
-
-Expected:
-- `${TAG}-x86_64` => `amd64 linux`
-- `${TAG}-aarch64` => `arm64 linux`
-
-6. Push versioned tags:
-
-```bash
-podman push docker.io/maple0517/reader-next:${TAG}-x86_64
-podman push docker.io/maple0517/reader-next:${TAG}-aarch64
-```
-
-7. Update rolling tags:
-
-```bash
-podman tag docker.io/maple0517/reader-next:${TAG}-x86_64 docker.io/maple0517/reader-next:latest
-podman tag docker.io/maple0517/reader-next:${TAG}-aarch64 docker.io/maple0517/reader-next:latest-aarch64
-
-podman push docker.io/maple0517/reader-next:latest
-podman push docker.io/maple0517/reader-next:latest-aarch64
-```
-
-## Optional: Multi-Arch Unified Tag
-
-If you need `docker.io/maple0517/reader-next:${TAG}` as a multi-arch manifest:
-
-```bash
-podman manifest create docker.io/maple0517/reader-next:${TAG}
-podman manifest add docker.io/maple0517/reader-next:${TAG} docker.io/maple0517/reader-next:${TAG}-x86_64
-podman manifest add docker.io/maple0517/reader-next:${TAG} docker.io/maple0517/reader-next:${TAG}-aarch64
-podman manifest push --all docker.io/maple0517/reader-next:${TAG}
-```
-
-## Quick Verification
-
-```bash
-podman manifest inspect docker.io/maple0517/reader-next:${TAG}
-podman search docker.io/maple0517/reader-next
+docker compose pull
+docker compose up -d
 ```

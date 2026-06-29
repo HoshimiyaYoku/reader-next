@@ -1,33 +1,48 @@
-# Dockerfile for aarch64 - using pre-built binary
-# Build binary first: cargo build --release --target aarch64-unknown-linux-musl
-# Build frontend first: cd frontend && npm install && npm run build
+# syntax=docker/dockerfile:1.7
 
-FROM alpine:3.19
+FROM node:22-bookworm-slim AS frontend-builder
+WORKDIR /app/frontend
+COPY frontend/package*.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
 
-RUN apk add --no-cache ca-certificates tzdata
+FROM rust:1-bookworm AS backend-builder
+WORKDIR /app
+RUN apt-get -o Acquire::Retries=3 update \
+    && apt-get install -y -o Acquire::Retries=3 --no-install-recommends pkg-config libsqlite3-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo build --release --locked \
+    && cp /app/target/release/reader-next /app/reader-next
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get -o Acquire::Retries=3 update \
+    && apt-get install -y -o Acquire::Retries=3 --no-install-recommends ca-certificates curl libsqlite3-0 tzdata \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+RUN useradd --system --uid 10001 --create-home --home-dir /app reader
+COPY --from=backend-builder /app/reader-next /app/reader-next
+COPY --from=frontend-builder /app/frontend/dist /app/web/dist
+RUN mkdir -p /app/storage/assets \
+    && chown -R reader:reader /app/storage
 
-# Copy pre-built binary
-COPY target/aarch64-unknown-linux-musl/release/reader-next /app/reader-next
+ENV SERVER_HOST=0.0.0.0 \
+    SERVER_PORT=18080 \
+    DATABASE_URL=sqlite:/app/storage/reader.db?mode=rwc \
+    STORAGE_DIR=/app/storage \
+    ASSETS_DIR=/app/storage/assets \
+    WEB_ROOT=/app/web/dist \
+    LOG_LEVEL=info \
+    REQUEST_TIMEOUT_SECS=15
 
-# Copy frontend dist
-COPY frontend/dist /app/web/dist
-
-# Create storage directory
-RUN mkdir -p /app/storage/assets
-
-# Environment defaults
-ENV SERVER_HOST=0.0.0.0
-ENV SERVER_PORT=8080
-ENV DATABASE_URL=sqlite:/app/storage/reader.db?mode=rwc
-ENV STORAGE_DIR=/app/storage
-ENV ASSETS_DIR=/app/storage/assets
-ENV WEB_ROOT=/app/web/dist
-ENV LOG_LEVEL=info
-
-EXPOSE 8080
-
+EXPOSE 18080
 VOLUME ["/app/storage"]
-
-CMD ["./reader-next"]
+USER reader
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \
+    CMD curl -fsS http://127.0.0.1:18080/ >/dev/null || exit 1
+CMD ["/app/reader-next"]

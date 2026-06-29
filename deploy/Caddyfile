@@ -1,4 +1,4 @@
 :80 {
     encode gzip zstd
-    reverse_proxy reader:8080
+    reverse_proxy reader:18080
 }

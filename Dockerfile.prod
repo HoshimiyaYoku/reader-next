@@ -9,24 +9,29 @@ RUN npm run build
 
 FROM rust:1-bookworm AS backend-builder
 WORKDIR /app
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends pkg-config libsqlite3-dev \
+RUN apt-get -o Acquire::Retries=3 update \
+    && apt-get install -y -o Acquire::Retries=3 --no-install-recommends pkg-config libsqlite3-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-RUN cargo build --release --locked
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo build --release --locked \
+    && cp /app/target/release/reader-next /app/reader-next
 
 FROM debian:bookworm-slim AS runtime
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates tzdata curl \
+RUN apt-get -o Acquire::Retries=3 update \
+    && apt-get install -y -o Acquire::Retries=3 --no-install-recommends ca-certificates curl libsqlite3-0 tzdata \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=backend-builder /app/target/release/reader-next /app/reader-next
+RUN useradd --system --uid 10001 --create-home --home-dir /app reader
+COPY --from=backend-builder /app/reader-next /app/reader-next
 COPY --from=frontend-builder /app/frontend/dist /app/web/dist
-RUN mkdir -p /app/storage/assets
+RUN mkdir -p /app/storage/assets \
+    && chown -R reader:reader /app/storage
 
 ENV SERVER_HOST=0.0.0.0 \
-    SERVER_PORT=8080 \
+    SERVER_PORT=18080 \
     DATABASE_URL=sqlite:/app/storage/reader.db?mode=rwc \
     STORAGE_DIR=/app/storage \
     ASSETS_DIR=/app/storage/assets \
@@ -34,6 +39,9 @@ ENV SERVER_HOST=0.0.0.0 \
     LOG_LEVEL=info \
     REQUEST_TIMEOUT_SECS=15
 
-EXPOSE 8080
+EXPOSE 18080
 VOLUME ["/app/storage"]
-CMD ["./reader-next"]
+USER reader
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \
+    CMD curl -fsS http://127.0.0.1:18080/ >/dev/null || exit 1
+CMD ["/app/reader-next"]

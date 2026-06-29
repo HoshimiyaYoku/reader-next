@@ -4,7 +4,9 @@ target/
 !target/x86_64-unknown-linux-musl/release/reader-next
 !target/aarch64-unknown-linux-musl/release/reader-next
 # Dependencies
-web/node_modules/
+node_modules/
+frontend/node_modules/
+docs/node_modules/
 
 # Git
 .git/
@@ -18,17 +20,27 @@ web/node_modules/
 
 # Storage (will be created at runtime)
 storage/
+storage-docker/
 
 # Environment files
 .env
 .env.*
 
 # Documentation
-*.md
-!README.md
+docs/.vitepress/cache/
+docs/.vitepress/dist/
 
 # Claude
 .claude/
+.codex/
+.agents/
+.trellis/
+.lean-ctx/
+
+# Test / local reports
+playwright-report/
+test-results/
+release-assets/
 
 # OS files
 .DS_Store
