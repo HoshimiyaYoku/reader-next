@@ -30,7 +30,7 @@
             <path
               v-for="link in graph.links"
               :key="link.id"
-              :class="['relationship-link', `tone-${link.tone}`, `strength-${link.strength}`]"
+              :class="['relationship-link', `group-${link.group}`, `strength-${link.strength}`]"
               :d="link.path"
             />
           </g>
@@ -49,9 +49,9 @@
 
       <!-- 分组胶囊 -->
       <div class="relationship-groups">
-        <section v-for="group in graph.groupedRows" :key="group.tone" class="relationship-group">
-          <div :class="['relationship-group-header', `tone-${group.tone}`]">
-            <span :class="['relationship-dot', `tone-${group.tone}`]" aria-hidden="true"></span>
+        <section v-for="group in graph.groupedRows" :key="group.group" class="relationship-group">
+          <div :class="['relationship-group-header', `group-${group.group}`]">
+            <span :class="['relationship-dot', `group-${group.group}`]" aria-hidden="true"></span>
             <strong>{{ group.label }}</strong>
             <span class="relationship-group-count">{{ group.rows.length }}</span>
           </div>
@@ -59,7 +59,7 @@
             <button
               v-for="row in group.rows"
               :key="row.id"
-              :class="['relationship-pill', `tone-${row.tone}`, { active: selectedId === row.id }]"
+              :class="['relationship-pill', `group-${row.group}`, { active: selectedId === row.id }]"
               @click="selectNode(row.id)"
             >
               <span class="pill-name">{{ row.name }}</span>
@@ -71,9 +71,9 @@
 
       <!-- 选中角色详情 popover -->
       <Transition name="detail-pop">
-        <div v-if="selectedRow" class="relationship-popover" :class="`tone-${selectedRow.tone}`">
+        <div v-if="selectedRow" class="relationship-popover" :class="`group-${selectedRow.group}`">
           <div class="popover-head">
-            <span :class="['relationship-dot', `tone-${selectedRow.tone}`]" aria-hidden="true"></span>
+            <span :class="['relationship-dot', `group-${selectedRow.group}`]" aria-hidden="true"></span>
             <strong>{{ selectedRow.name }}</strong>
             <span class="popover-tag">{{ selectedRow.label }}</span>
             <button class="popover-close" @click="selectedId = null" aria-label="关闭">×</button>
@@ -404,34 +404,35 @@ function selectNode(id: string) {
   transform: translateY(-4px);
 }
 
-/* ── Tone 颜色 ── */
+/* ── Group 颜色 ── */
 
-.tone-family {
+.group-family {
   color: #5f7fc8;
   stroke: #5f7fc8;
 }
 
-.tone-romance {
+.group-romance {
   color: #c86a8e;
   stroke: #c86a8e;
 }
 
-.tone-ally {
+.group-companion {
   color: #5d9d72;
   stroke: #5d9d72;
 }
 
-.tone-conflict {
+.group-opposition {
   color: #c66a5d;
   stroke: #c66a5d;
 }
 
-.tone-affiliation {
+.group-authority {
   color: #7f6bc8;
   stroke: #7f6bc8;
 }
 
-.tone-neutral {
+.group-association,
+.group-unknown {
   color: currentColor;
   stroke: currentColor;
 }

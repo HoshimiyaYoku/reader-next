@@ -65,10 +65,13 @@ pub struct AiBookCharacterStatePatchV3 {
 pub struct AiBookCharacterRelationPatchV3 {
     pub source: String,
     pub target: String,
-    pub kind: String,
+    pub group: String,
+    pub label: String,
     pub polarity: String,
     pub strength: String,
     pub status: String,
+    pub direction: String,
+    pub summary: Option<String>,
     pub description: Option<String>,
 }
 

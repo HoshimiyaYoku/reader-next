@@ -202,7 +202,7 @@ pub struct AiBookCharacterStateV3 {
 pub struct AiBookCharacterRelationV3 {
     pub source: String,
     pub target: String,
-    pub kind: AiBookRelationKind,
+    pub group: AiBookRelationshipGroup,
     pub polarity: AiBookRelationPolarity,
     pub strength: AiBookRelationStrength,
     pub status: AiBookRelationStatus,
@@ -211,17 +211,15 @@ pub struct AiBookCharacterRelationV3 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
-pub enum AiBookRelationKind {
+pub enum AiBookRelationshipGroup {
     #[default]
     Unknown,
     Family,
     Romance,
-    Friendship,
-    Rivalry,
-    Alliance,
-    Conflict,
-    Affiliation,
-    Supervision,
+    Companion,
+    Authority,
+    Opposition,
+    Association,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -430,8 +428,7 @@ pub struct AiBookRelationView {
     pub id: String,
     pub source_character_id: String,
     pub target_character_id: String,
-    pub kind: AiBookRelationKind,
-    pub subtype: Option<String>,
+    pub group: AiBookRelationshipGroup,
     pub label: String,
     pub polarity: AiBookRelationPolarity,
     pub strength: AiBookRelationStrength,
@@ -439,7 +436,6 @@ pub struct AiBookRelationView {
     pub direction: String,
     pub summary: String,
     pub current_dynamics: Vec<String>,
-    pub facets: Vec<AiBookRelationFacetView>,
     pub first_seen_chapter_index: Option<i32>,
     pub last_updated_chapter_index: Option<i32>,
     pub evidence: Vec<AiBookEvidenceV3>,
@@ -448,21 +444,11 @@ pub struct AiBookRelationView {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
-pub struct AiBookRelationFacetView {
-    pub kind: AiBookRelationKind,
-    pub subtype: Option<String>,
-    pub polarity: AiBookRelationPolarity,
-    pub status: AiBookRelationStatus,
-    pub summary: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-#[serde(default, rename_all = "camelCase")]
 pub struct AiBookRelationChangeView {
     pub chapter_index: i32,
     pub chapter_title: String,
-    pub previous_kind: Option<AiBookRelationKind>,
-    pub next_kind: AiBookRelationKind,
+    pub previous_group: Option<AiBookRelationshipGroup>,
+    pub next_group: AiBookRelationshipGroup,
     pub previous_polarity: Option<AiBookRelationPolarity>,
     pub next_polarity: AiBookRelationPolarity,
     pub previous_status: Option<AiBookRelationStatus>,

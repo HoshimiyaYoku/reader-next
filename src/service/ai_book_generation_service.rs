@@ -693,6 +693,9 @@ fn short_fact_title(text: &str) -> String {
 
 fn coerce_model_strings(value: &mut Value, field: Option<&str>) {
     match value {
+        Value::Null if field.is_some_and(is_model_string_field) => {
+            *value = Value::String(String::new());
+        }
         Value::Array(items) => {
             for item in items {
                 coerce_model_strings(item, field);
@@ -730,9 +733,12 @@ fn is_model_string_field(field: &str) -> bool {
             | "lastSeenChapterTitle"
             | "source"
             | "target"
+            | "group"
+            | "label"
             | "kind"
             | "polarity"
             | "strength"
+            | "direction"
             | "title"
             | "content"
             | "category"
@@ -1012,7 +1018,7 @@ fn build_patch_generation_prompt(
     mode: AiBookGenerationMode,
 ) -> Result<String, AppError> {
     Ok(format!(
-        "generationMode: {}\n只输出裸 patch JSON，不要包 patch/chapterDigest 外层。\n根字段固定为 chapterIndex、summary、characters、characterStates、characterRelations、knowledgeFacts、locations、locationEdges。\n所有数组元素必须是对象，严禁字符串数组；字段缺失用空数组，不要用 null。\ncharacters 每项：{{\"name\":\"人物名\",\"aliases\":[],\"status\":\"状态或null\",\"faction\":\"所属或null\",\"location\":\"地点或null\",\"description\":\"身份说明或null\",\"lastSeenChapter\":\"章节标题或null\"}}\ncharacterStates 每项：{{\"name\":\"人物名\",\"status\":\"简短状态\",\"description\":\"本章证据细节\",\"lastSeenChapterIndex\":数字,\"lastSeenChapterTitle\":\"章节标题\"}}\ncharacterRelations 每项：{{\"source\":\"主动方\",\"target\":\"承受方\",\"kind\":\"亲属|师生|同学|朋友|借贷|压迫|冲突|帮助|竞争|同伴|敌对|上下级|交易|其他\",\"polarity\":\"positive|negative|neutral|mixed\",\"strength\":\"weak|moderate|strong|critical\",\"status\":\"active|developing|distant|broken\",\"description\":\"本章证据\"}}\nknowledgeFacts 每项：{{\"title\":\"事实标题\",\"content\":\"事实内容\",\"category\":\"世界观|制度|修炼|科技|经济|组织|历史|规则|其他\",\"confidence\":\"low|medium|high\",\"importance\":\"low|medium|high\"}}，严禁直接写字符串。\nlocations 每项：{{\"name\":\"地点名\",\"kind\":\"中文地点类型\",\"description\":\"地点说明\",\"status\":\"当前状态或null\",\"relatedCharacters\":[],\"firstSeenChapter\":\"章节标题\"}}\nlocationEdges 每项：{{\"source\":\"上级/起点地点\",\"target\":\"下级/终点地点\",\"kind\":\"contains|partOf|adjacent|leadsTo|near\",\"description\":\"本章证据\"}}\n通用约束：只基于本章证据更新；不要回传未变化的大数组；能直接归纳的信息必须结构化，不要写 Markdown/解释。\n人物：本章重要人物写 characters；若人物有身份、处境、身体、能力、成绩、排名、债务、心理、立场、目标、压力变化，必须同时写 characterStates，不能只写 characters.status。若本章正文中某角色的主要称呼与 currentMemory 中该角色的 name 不同（如穿越改名、化名、昵称变化等），必须更新 characters 中该角色的 name 为本章正文使用的主要称呼，旧名放入 aliases；同时 characterStates 和 characterRelations 中的 name/source/target 也必须使用更新后的称呼。\n关系：本章有亲属、师生、同学、朋友、借贷、压迫、冲突、帮助、竞争、同伴、敌对、上下级、交易等明确文本证据时，必须写 characterRelations；不要只因同章出现而写关系。\n地点：本章重要地点写 locations；kind 必须是中文稳定类型，不能空、unknown 或英文。建议类型：区域、学校、宗门、机构、建筑、房间、设施、道路、室外地点、层级、入口、其他地点。名称含第一层/第二层/内层/外层/上层/下层/楼层用 层级；含学校/高中/学院/大学用 学校；含教室/食堂/宿舍/公寓/出租房/练功场/办公室用 设施；实在只能确定是地点用 其他地点。\n地点关系：能判断包含、层级、相邻、通往关系时必须写 locationEdges；例如“某地第一层”属于“某地”、“学校食堂”属于“学校”。\n输出前自检：重要人物是否都有 characters；明确状态是否有 characterStates；明确互动关系是否有 characterRelations；所有地点 kind 是否非空非 unknown 非英文；明显地点层级是否有 locationEdges；所有数组元素是否都是对象。\nchapter: {}\nchapterDigest: {}\ncurrentMemory: {}\nchapterText:\n{}",
+        "generationMode: {}\n只输出裸 patch JSON，不要包 patch/chapterDigest 外层。\n根字段固定为 chapterIndex、summary、characters、characterStates、characterRelations、knowledgeFacts、locations、locationEdges。\n所有数组元素必须是对象，严禁字符串数组；字段缺失用空数组，不要用 null。\ncharacters 每项：{{\"name\":\"人物名\",\"aliases\":[],\"status\":\"状态或null\",\"faction\":\"所属或null\",\"location\":\"地点或null\",\"description\":\"身份说明或null\",\"lastSeenChapter\":\"章节标题或null\"}}\ncharacterStates 每项：{{\"name\":\"人物名\",\"status\":\"简短状态\",\"description\":\"本章证据细节\",\"lastSeenChapterIndex\":数字,\"lastSeenChapterTitle\":\"章节标题\"}}\ncharacterRelations 每项：{{\"source\":\"主动方\",\"target\":\"承受方\",\"group\":\"family|romance|companion|authority|opposition|association|unknown\",\"label\":\"2-8字显示标签\",\"polarity\":\"positive|negative|neutral|mixed\",\"strength\":\"weak|moderate|strong|critical\",\"status\":\"active|developing|distant|broken\",\"direction\":\"directed|undirected\",\"summary\":\"关系说明\",\"description\":\"本章证据\"}}\n关系 group 只用于稳定分组：family=血亲/收养/监护/长期照料/被当作家人；romance=恋爱/婚恋/暧昧/旧情；companion=朋友/同伴/队友/盟友/支持者；authority=师长/导师/上级/雇主/指挥/长辈权威；opposition=敌人/竞争者/压迫者/背叛者/严重威胁；association=同学/同门/同事/邻居/熟人/弱关联；unknown=关系不明。\n关系优先级：opposition > family > romance > companion > authority > association > unknown。polarity 只是立场/情绪色彩，绝不能决定 group；友好老师仍是 authority，正向亲人仍是 family。帮助、交易、借贷、救援、打斗、给信息等一次性事件不要当 group，写进 summary/description/evidence。\nknowledgeFacts 每项：{{\"title\":\"事实标题\",\"content\":\"事实内容\",\"category\":\"世界观|制度|修炼|科技|经济|组织|历史|规则|其他\",\"confidence\":\"low|medium|high\",\"importance\":\"low|medium|high\"}}，严禁直接写字符串。\nlocations 每项：{{\"name\":\"地点名\",\"kind\":\"中文地点类型\",\"description\":\"地点说明\",\"status\":\"当前状态或null\",\"relatedCharacters\":[],\"firstSeenChapter\":\"章节标题\"}}\nlocationEdges 每项：{{\"source\":\"上级/起点地点\",\"target\":\"下级/终点地点\",\"kind\":\"contains|partOf|adjacent|leadsTo|near\",\"description\":\"本章证据\"}}\n通用约束：只基于本章证据更新；不要回传未变化的大数组；能直接归纳的信息必须结构化，不要写 Markdown/解释。\n人物：本章重要人物写 characters；若人物有身份、处境、身体、能力、成绩、排名、债务、心理、立场、目标、压力变化，必须同时写 characterStates，不能只写 characters.status。若本章正文中某角色的主要称呼与 currentMemory 中该角色的 name 不同（如穿越改名、化名、昵称变化等），必须更新 characters 中该角色的 name 为本章正文使用的主要称呼，旧名放入 aliases；同时 characterStates 和 characterRelations 中的 name/source/target 也必须使用更新后的称呼。\n关系：本章有明确、持续或重要的人物关系证据时，必须写 characterRelations；不要只因同章出现而写关系。\n地点：本章重要地点写 locations；kind 必须是中文稳定类型，不能空、unknown 或英文。建议类型：区域、学校、宗门、机构、建筑、房间、设施、道路、室外地点、层级、入口、其他地点。名称含第一层/第二层/内层/外层/上层/下层/楼层用 层级；含学校/高中/学院/大学用 学校；含教室/食堂/宿舍/公寓/出租房/练功场/办公室用 设施；实在只能确定是地点用 其他地点。\n地点关系：能判断包含、层级、相邻、通往关系时必须写 locationEdges；例如“某地第一层”属于“某地”、“学校食堂”属于“学校”。\n输出前自检：重要人物是否都有 characters；明确状态是否有 characterStates；明确互动关系是否有 characterRelations；所有关系 group 是否为七选一且未使用一次性事件词；所有地点 kind 是否非空非 unknown 非英文；明显地点层级是否有 locationEdges；所有数组元素是否都是对象。\nchapter: {}\nchapterDigest: {}\ncurrentMemory: {}\nchapterText:\n{}",
         generation_mode_label(mode),
         serde_json::to_string_pretty(chapter).map_err(|e| AppError::BadRequest(e.to_string()))?,
         serde_json::to_string_pretty(digest).map_err(|e| AppError::BadRequest(e.to_string()))?,
@@ -1331,6 +1337,35 @@ mod tests {
         );
         assert_eq!(patch.locations[0].name, "昆墟第一层");
         assert!(patch.location_edges.is_empty());
+    }
+
+    #[test]
+    fn ai_book_generation_tolerates_null_string_fields_in_patch() {
+        let patch = deserialize_patch_generation_value(serde_json::json!({
+            "patch": {
+                "chapterIndex": 5,
+                "characterRelations": [{
+                    "source": "陆欣",
+                    "target": "约翰",
+                    "group": "family",
+                    "label": null,
+                    "polarity": "positive",
+                    "strength": "strong",
+                    "status": "active",
+                    "direction": null,
+                    "summary": null,
+                    "description": null
+                }]
+            }
+        }))
+        .unwrap();
+
+        let relation = &patch.character_relations[0];
+        assert_eq!(relation.group, "family");
+        assert!(relation.label.is_empty());
+        assert!(relation.direction.is_empty());
+        assert_eq!(relation.summary.as_deref(), Some(""));
+        assert_eq!(relation.description.as_deref(), Some(""));
     }
 
     #[test]

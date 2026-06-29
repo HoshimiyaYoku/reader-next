@@ -198,7 +198,7 @@
             </div>
             <p>{{ relationship.summary || relationship.status || '暂无说明' }}</p>
             <div class="meta-line">
-              <span>kind：{{ relationship.kind }}</span>
+              <span>group：{{ relationship.group }}</span>
               <span>polarity：{{ relationship.polarity }}</span>
               <span>strength：{{ relationship.strength }}</span>
             </div>
@@ -222,8 +222,8 @@
               </div>
             </div>
             <ul class="bullet-list">
-              <li v-for="item in currentChapterRelations" :key="`${item.source}-${item.target}-${item.kind}-${item.status}`">
-                {{ item.source }} · {{ item.target }} · {{ item.kind }} · {{ item.status }}
+              <li v-for="item in currentChapterRelations" :key="`${item.source}-${item.target}-${item.group}-${item.status}`">
+                {{ item.source }} · {{ item.target }} · {{ item.group }} · {{ item.status }}
                 <span v-if="item.description"> — {{ item.description }}</span>
               </li>
             </ul>
@@ -326,7 +326,7 @@ type DisplayRelationship = {
   targetName: string
   label: string
   summary: string
-  kind: string
+  group: string
   polarity: string
   strength: string
   status: string
@@ -437,7 +437,7 @@ const displayRelationships = computed<DisplayRelationship[]>(() => (memoryView.v
   targetName: characterNameById.value.get(relationship.targetCharacterId) || relationship.targetCharacterId,
   label: relationship.label,
   summary: relationship.summary,
-  kind: relationship.kind,
+  group: relationship.group,
   polarity: relationship.polarity,
   strength: relationship.strength,
   status: relationship.status,

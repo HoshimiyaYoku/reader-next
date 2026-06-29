@@ -1,11 +1,9 @@
 import type {
   AiBookMemoryViewModel,
-  AiBookRelationKind,
+  AiBookRelationshipGroup,
   AiBookRelationStrength,
   AiBookRelationView,
 } from '../types'
-
-export type SummaryRelationshipTone = 'family' | 'romance' | 'ally' | 'conflict' | 'affiliation' | 'neutral'
 
 export interface SummaryRelationshipGraphNode {
   id: string
@@ -22,22 +20,22 @@ export interface SummaryRelationshipGraphLink {
   targetId: string
   label: string
   summary: string
-  tone: SummaryRelationshipTone
+  group: AiBookRelationshipGroup
   strength: AiBookRelationStrength
   path: string
 }
 
 export interface SummaryRelationshipGraphGroupedRow {
-  tone: SummaryRelationshipTone
+  group: AiBookRelationshipGroup
   label: string
-  rows: Array<{ id: string; name: string; label: string; summary: string; tone: SummaryRelationshipTone; strength: AiBookRelationStrength }>
+  rows: Array<{ id: string; name: string; label: string; summary: string; group: AiBookRelationshipGroup; strength: AiBookRelationStrength }>
 }
 
 export interface SummaryRelationshipGraphView {
   protagonist: SummaryRelationshipGraphNode | null
   nodes: SummaryRelationshipGraphNode[]
   links: SummaryRelationshipGraphLink[]
-  rows: Array<{ id: string; name: string; label: string; summary: string; tone: SummaryRelationshipTone; strength: AiBookRelationStrength }>
+  rows: Array<{ id: string; name: string; label: string; summary: string; group: AiBookRelationshipGroup; strength: AiBookRelationStrength }>
   groupedRows: SummaryRelationshipGraphGroupedRow[]
   emptyReason: string
 }
@@ -80,7 +78,7 @@ export function buildSummaryRelationshipGraph(input: {
   const totalLimit = input.limit ?? 15
   const graphNodeLimit = input.graphLimit ?? 5
   const allRelated = related.slice(0, totalLimit)
-  const graphRelated = related.slice(0, graphNodeLimit)
+  const graphRelated = allRelated.slice(0, graphNodeLimit)
 
   if (allRelated.length === 0) return empty('人物关系不足，继续阅读后会补全。')
 
@@ -122,7 +120,7 @@ export function buildSummaryRelationshipGraph(input: {
       targetId: item.characterId,
       label,
       summary,
-      tone: toneFor(item.relations),
+      group: primaryGroup(item.relations),
       strength: strongest(item.relations.map((relation) => relation.strength)),
       path: `M 50 50 L ${node.x} ${node.y}`,
     }
@@ -140,7 +138,7 @@ export function buildSummaryRelationshipGraph(input: {
     name: allCharacterById.get(item.characterId)?.name || item.characterId,
     label: aggregateLabel(item.relations),
     summary: aggregateSummary(item.relations),
-    tone: toneFor(item.relations),
+    group: primaryGroup(item.relations),
     strength: strongest(item.relations.map((relation) => relation.strength)),
   }))
 
@@ -215,9 +213,8 @@ function strengthScore(strength: AiBookRelationStrength) {
 
 function aggregateLabel(relations: AiBookRelationView[]) {
   return unique(relations.flatMap((relation) => [
-    ...relation.facets.map((facet) => facet.subtype || labelForKind(facet.kind)),
     relation.label,
-    relation.label ? '' : labelForKind(relation.kind),
+    relation.label ? '' : labelForGroup(relation.group),
   ])).slice(0, 3).join(' / ')
 }
 
@@ -225,60 +222,59 @@ function aggregateSummary(relations: AiBookRelationView[]) {
   return relations.flatMap((relation) => [...relation.currentDynamics, relation.summary]).find(Boolean) || '关系仍在发展'
 }
 
-function toneFor(relations: AiBookRelationView[]): SummaryRelationshipTone {
-  if (relations.some((relation) => relation.kind === 'family')) return 'family'
-  if (relations.some((relation) => relation.kind === 'romance')) return 'romance'
-  if (relations.some((relation) => relation.kind === 'conflict' || relation.kind === 'rivalry' || relation.polarity === 'negative')) return 'conflict'
-  if (relations.some((relation) => relation.kind === 'alliance' || relation.kind === 'friendship' || relation.polarity === 'positive')) return 'ally'
-  if (relations.some((relation) => relation.kind === 'affiliation' || relation.kind === 'supervision')) return 'affiliation'
-  return 'neutral'
+function primaryGroup(relations: AiBookRelationView[]): AiBookRelationshipGroup {
+  return [...relations].sort((a, b) => groupScore(b.group) - groupScore(a.group))[0]?.group || 'unknown'
 }
 
 function strongest(strengths: AiBookRelationStrength[]) {
   return strengths.sort((a, b) => strengthScore(b) - strengthScore(a))[0] || 'unknown'
 }
 
-function labelForKind(kind: AiBookRelationKind) {
+function labelForGroup(group: AiBookRelationshipGroup) {
   return {
-    family: '家族',
-    romance: '情感',
-    friendship: '友情',
-    rivalry: '竞争',
-    alliance: '盟友',
-    conflict: '冲突',
-    affiliation: '阵营',
-    supervision: '师承',
-    unknown: '关联',
-  }[kind]
+    opposition: '对立 / 威胁',
+    family: '家庭 / 照料',
+    romance: '情感 / 爱恋',
+    companion: '伙伴 / 友方',
+    authority: '师长 / 权威',
+    association: '关联 / 中立',
+    unknown: '未明',
+  }[group]
 }
 
 function unique(values: string[]) {
   return [...new Set(values.filter(Boolean))]
 }
 
-const TONE_ORDER: SummaryRelationshipTone[] = ['family', 'romance', 'ally', 'conflict', 'affiliation', 'neutral']
+const GROUP_ORDER: AiBookRelationshipGroup[] = ['opposition', 'family', 'romance', 'companion', 'authority', 'association', 'unknown']
 
-const TONE_LABELS: Record<SummaryRelationshipTone, string> = {
-  family: '家族',
-  romance: '情感',
-  ally: '盟友',
-  conflict: '冲突',
-  affiliation: '阵营',
-  neutral: '中立',
+const GROUP_LABELS: Record<AiBookRelationshipGroup, string> = {
+  opposition: '对立 / 威胁',
+  family: '家庭 / 照料',
+  romance: '情感 / 爱恋',
+  companion: '伙伴 / 友方',
+  authority: '师长 / 权威',
+  association: '关联 / 中立',
+  unknown: '未明',
+}
+
+function groupScore(group: AiBookRelationshipGroup) {
+  const index = GROUP_ORDER.indexOf(group)
+  return index === -1 ? 0 : GROUP_ORDER.length - index
 }
 
 function buildGroupedRows(rows: SummaryRelationshipGraphView['rows']): SummaryRelationshipGraphGroupedRow[] {
-  const byTone = new Map<SummaryRelationshipTone, typeof rows>()
+  const byGroup = new Map<AiBookRelationshipGroup, typeof rows>()
   for (const row of rows) {
-    const list = byTone.get(row.tone) || []
+    const list = byGroup.get(row.group) || []
     list.push(row)
-    byTone.set(row.tone, list)
+    byGroup.set(row.group, list)
   }
-  return TONE_ORDER
-    .filter((tone) => byTone.has(tone))
-    .map((tone) => ({
-      tone,
-      label: TONE_LABELS[tone],
-      rows: byTone.get(tone)!.sort((a, b) => strengthScore(b.strength) - strengthScore(a.strength)),
+  return GROUP_ORDER
+    .filter((group) => byGroup.has(group))
+    .map((group) => ({
+      group,
+      label: GROUP_LABELS[group],
+      rows: byGroup.get(group)!.sort((a, b) => strengthScore(b.strength) - strengthScore(a.strength)),
     }))
 }

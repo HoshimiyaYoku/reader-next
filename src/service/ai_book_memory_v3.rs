@@ -9,8 +9,8 @@ use crate::model::ai_book::{
     AiBookDroppedFactsSummary, AiBookEvidenceV3, AiBookFactCategory, AiBookFactConfidence,
     AiBookFactImportance, AiBookKnowledgeFactV3, AiBookKnowledgeFactView, AiBookLocationEdgeKind,
     AiBookLocationEdgeV3, AiBookLocationV3, AiBookLocationView, AiBookMapView, AiBookMemoryV3,
-    AiBookMemoryViewModel, AiBookRelationChangeView, AiBookRelationFacetView, AiBookRelationKind,
-    AiBookRelationPolarity, AiBookRelationStatus, AiBookRelationStrength, AiBookRelationView,
+    AiBookMemoryViewModel, AiBookRelationChangeView, AiBookRelationshipGroup, AiBookRelationPolarity,
+    AiBookRelationStatus, AiBookRelationStrength, AiBookRelationView,
 };
 use crate::model::ai_book_generation::{
     AiBookCharacterPatchV3, AiBookCharacterRelationPatchV3, AiBookCharacterStatePatchV3,
@@ -65,8 +65,7 @@ pub struct WorkingContextRelationV3 {
     pub source_name: String,
     pub target_character_id: String,
     pub target_name: String,
-    pub kind: String,
-    pub subtype: Option<String>,
+    pub group: String,
     pub label: String,
     pub polarity: String,
     pub status: String,
@@ -134,8 +133,7 @@ pub struct NormalizedCharacterRelationV3 {
     pub source_name: String,
     pub target_character_id: String,
     pub target_name: String,
-    pub kind: AiBookRelationKind,
-    pub subtype: Option<String>,
+    pub group: AiBookRelationshipGroup,
     pub label: String,
     pub polarity: AiBookRelationPolarity,
     pub strength: AiBookRelationStrength,
@@ -196,10 +194,13 @@ impl Default for RelationDirectionV3 {
 pub struct RelationCandidateV3 {
     pub source_name: String,
     pub target_name: String,
-    pub kind_raw: String,
+    pub group_raw: String,
+    pub label: Option<String>,
     pub polarity_raw: String,
     pub strength_raw: String,
     pub status_raw: String,
+    pub direction_raw: String,
+    pub summary: Option<String>,
     pub description: Option<String>,
     pub evidence: Vec<AiBookEvidenceV3>,
 }
@@ -225,7 +226,6 @@ struct RelationStorageMetaV3 {
     target_character_id: String,
     source_name: String,
     target_name: String,
-    subtype: Option<String>,
     label: String,
     direction: String,
     summary: String,
@@ -398,7 +398,7 @@ pub fn classify_relation_candidate_v3(
 ) -> RelationClassificationV3 {
     let preview = format!(
         "{} -> {} ({})",
-        candidate.source_name, candidate.target_name, candidate.kind_raw
+        candidate.source_name, candidate.target_name, candidate.group_raw
     );
     if candidate.evidence.is_empty() {
         return RelationClassificationV3::Drop(make_dropped_fact(
@@ -413,11 +413,11 @@ pub fn classify_relation_candidate_v3(
     let target_character = find_character_ref(context, &candidate.target_name);
     let source_location = find_location_ref(context, &candidate.source_name);
     let target_location = find_location_ref(context, &candidate.target_name);
-    let kind_key = canonical_key(&candidate.kind_raw);
+    let group_key = canonical_key(&candidate.group_raw);
 
     if (source_character.is_some() && target_location.is_some())
         || (source_location.is_some() && target_character.is_some())
-        || matches_location_relation(&kind_key)
+        || matches_location_relation(&group_key)
     {
         return RelationClassificationV3::Drop(make_dropped_fact(
             "person_location_relation",
@@ -429,7 +429,7 @@ pub fn classify_relation_candidate_v3(
 
     if source_location.is_some() && target_location.is_some() {
         if let (Some(source_location), Some(target_location)) = (source_location, target_location) {
-            let edge_kind = normalize_location_edge_kind(&candidate.kind_raw);
+            let edge_kind = normalize_location_edge_kind(&candidate.group_raw);
             if edge_kind == AiBookLocationEdgeKind::Unknown {
                 return RelationClassificationV3::Drop(make_dropped_fact(
                     "location_edge_relation",
@@ -453,7 +453,7 @@ pub fn classify_relation_candidate_v3(
     }
 
     if is_person_ability_relation(
-        &kind_key,
+        &group_key,
         &candidate.target_name,
         source_character.is_some(),
     ) {
@@ -476,7 +476,7 @@ pub fn classify_relation_candidate_v3(
         }
     }
 
-    if is_person_item_relation(&kind_key) {
+    if is_person_item_relation(&group_key) {
         return RelationClassificationV3::Drop(make_dropped_fact(
             "person_item_relation",
             preview,
@@ -485,7 +485,7 @@ pub fn classify_relation_candidate_v3(
         ));
     }
 
-    if is_transient_relation(&kind_key, candidate.description.as_deref()) {
+    if is_transient_relation(&group_key, candidate.description.as_deref()) {
         return RelationClassificationV3::Drop(make_dropped_fact(
             "transient_action",
             preview,
@@ -494,7 +494,7 @@ pub fn classify_relation_candidate_v3(
         ));
     }
 
-    if is_low_value_relation(&kind_key, candidate.description.as_deref()) {
+    if is_low_value_relation(&group_key, candidate.description.as_deref()) {
         return RelationClassificationV3::Drop(make_dropped_fact(
             "low_value_relation",
             preview,
@@ -520,9 +520,9 @@ pub fn classify_relation_candidate_v3(
         ));
     };
 
-    let Some((kind, direction)) = normalize_relation_kind(&kind_key) else {
+    let Some(group) = normalize_relationship_group(&candidate.group_raw) else {
         return RelationClassificationV3::Drop(make_dropped_fact(
-            "invalid_relation_kind",
+            "invalid_relationship_group",
             preview,
             None,
             context.current_chapter_index,
@@ -532,21 +532,22 @@ pub fn classify_relation_candidate_v3(
     let polarity = normalize_relation_polarity(&candidate.polarity_raw);
     let strength = normalize_relation_strength(&candidate.strength_raw);
     let status = normalize_relation_status(&candidate.status_raw);
-    let summary = clean_optional(candidate.description.clone())
-        .unwrap_or_else(|| kind_label(&kind).to_string());
-    let label = kind_label(&kind).to_string();
+    let direction = normalize_relation_direction(&candidate.direction_raw, &group);
+    let label = clean_optional(candidate.label.clone()).unwrap_or_else(|| group_label(&group).to_string());
+    let summary = clean_optional(candidate.summary.clone())
+        .or_else(|| clean_optional(candidate.description.clone()))
+        .unwrap_or_else(|| label.clone());
     let id = stable_relation_id(
         &source_character.id,
         &target_character.id,
-        &kind,
-        None,
+        &group,
         &direction,
     );
     let history = vec![AiBookRelationChangeView {
         chapter_index: context.current_chapter_index.unwrap_or_default(),
         chapter_title: context.current_chapter_title.clone().unwrap_or_default(),
-        previous_kind: None,
-        next_kind: kind.clone(),
+        previous_group: None,
+        next_group: group.clone(),
         previous_polarity: None,
         next_polarity: polarity.clone(),
         previous_status: None,
@@ -561,8 +562,7 @@ pub fn classify_relation_candidate_v3(
         source_name: source_character.name,
         target_character_id: target_character.id,
         target_name: target_character.name,
-        kind,
-        subtype: None,
+        group,
         label,
         polarity,
         strength,
@@ -644,7 +644,7 @@ pub fn merge_ai_book_memory_v3(
         let description = Some(encode_relation_meta(&relation));
         if let Some(index) = relation_index.get(&relation.id).copied() {
             let existing = &mut memory.character_relations[index];
-            existing.kind = relation.kind.clone();
+            existing.group = relation.group.clone();
             existing.polarity = relation.polarity.clone();
             existing.strength = relation.strength.clone();
             existing.status = relation.status.clone();
@@ -653,7 +653,7 @@ pub fn merge_ai_book_memory_v3(
             memory.character_relations.push(AiBookCharacterRelationV3 {
                 source: relation.source_name.clone(),
                 target: relation.target_name.clone(),
-                kind: relation.kind.clone(),
+                group: relation.group.clone(),
                 polarity: relation.polarity.clone(),
                 strength: relation.strength.clone(),
                 status: relation.status.clone(),
@@ -795,7 +795,7 @@ pub fn sync_processed_chapter_from_digests(memory: &mut AiBookMemoryV3) {
 pub fn select_ai_book_display_memory_v3(memory: &AiBookMemoryV3) -> AiBookMemoryViewModel {
     let characters = select_character_views(&memory.characters);
     let locations = select_location_views(&memory.locations, &memory.location_edges);
-    let relationships = select_relationship_views(&memory.characters, &memory.character_relations);
+    let relationships = select_relationship_views(&memory.character_relations);
     let knowledge_facts = memory
         .knowledge_facts
         .iter()
@@ -960,7 +960,7 @@ pub fn select_working_context_v3(
         .map(|item| (item.id.clone(), item.name.clone()))
         .collect();
     let relevant_relations =
-        select_relationship_views(&memory.characters, &memory.character_relations)
+        select_relationship_views(&memory.character_relations)
             .into_iter()
             .filter(|relation| {
                 allowed_character_ids.contains(&relation.source_character_id)
@@ -978,8 +978,7 @@ pub fn select_working_context_v3(
                     .unwrap_or_else(|| relation.target_character_id.clone()),
                 source_character_id: relation.source_character_id,
                 target_character_id: relation.target_character_id,
-                kind: format!("{:?}", relation.kind),
-                subtype: relation.subtype,
+                group: format!("{:?}", relation.group),
                 label: relation.label,
                 polarity: format!("{:?}", relation.polarity),
                 status: format!("{:?}", relation.status),
@@ -1089,26 +1088,13 @@ fn select_location_views(
         .collect()
 }
 
-fn select_relationship_views(
-    characters: &[AiBookCharacterV3],
-    relations: &[AiBookCharacterRelationV3],
-) -> Vec<AiBookRelationView> {
-    let character_name_map: HashMap<String, String> = characters
-        .iter()
-        .map(|character| {
-            (
-                stable_character_id(&character.name, &character.aliases),
-                character.name.clone(),
-            )
-        })
-        .collect();
-
+fn select_relationship_views(relations: &[AiBookCharacterRelationV3]) -> Vec<AiBookRelationView> {
     let mut grouped: BTreeMap<String, Vec<AiBookRelationView>> = BTreeMap::new();
     for relation in relations {
         if relation.status == AiBookRelationStatus::Broken {
             continue;
         }
-        let view = relation_to_view(relation, &character_name_map);
+        let view = relation_to_view(relation);
         let group_key = canonical_pair_key(&view.source_character_id, &view.target_character_id);
         grouped.entry(group_key).or_default().push(view);
     }
@@ -1116,25 +1102,19 @@ fn select_relationship_views(
     grouped
         .into_values()
         .map(|group| {
-            let primary = group.first().cloned().unwrap_or_default();
+            let primary = group
+                .iter()
+                .max_by_key(|relation| relationship_group_rank(&relation.group))
+                .cloned()
+                .unwrap_or_default();
             let mut current_dynamics = Vec::new();
             let mut evidence = Vec::new();
             let mut history = Vec::new();
-            let facets = group
-                .iter()
-                .map(|relation| {
-                    current_dynamics.extend(relation.current_dynamics.clone());
-                    evidence.extend(relation.evidence.clone());
-                    history.extend(relation.history.clone());
-                    AiBookRelationFacetView {
-                        kind: relation.kind.clone(),
-                        subtype: relation.subtype.clone(),
-                        polarity: relation.polarity.clone(),
-                        status: relation.status.clone(),
-                        summary: relation.summary.clone(),
-                    }
-                })
-                .collect();
+            for relation in &group {
+                current_dynamics.extend(relation.current_dynamics.clone());
+                evidence.extend(relation.evidence.clone());
+                history.extend(relation.history.clone());
+            }
             AiBookRelationView {
                 id: format!(
                     "pair:{}",
@@ -1142,8 +1122,7 @@ fn select_relationship_views(
                 ),
                 source_character_id: primary.source_character_id.clone(),
                 target_character_id: primary.target_character_id.clone(),
-                kind: primary.kind.clone(),
-                subtype: primary.subtype.clone(),
+                group: primary.group.clone(),
                 label: primary.label.clone(),
                 polarity: primary.polarity.clone(),
                 strength: primary.strength.clone(),
@@ -1155,7 +1134,6 @@ fn select_relationship_views(
                 },
                 summary: primary.summary.clone(),
                 current_dynamics: dedupe_strings(current_dynamics),
-                facets,
                 first_seen_chapter_index: primary.first_seen_chapter_index,
                 last_updated_chapter_index: primary.last_updated_chapter_index,
                 evidence: dedupe_evidence(evidence),
@@ -1165,10 +1143,7 @@ fn select_relationship_views(
         .collect()
 }
 
-fn relation_to_view(
-    relation: &AiBookCharacterRelationV3,
-    character_name_map: &HashMap<String, String>,
-) -> AiBookRelationView {
+fn relation_to_view(relation: &AiBookCharacterRelationV3) -> AiBookRelationView {
     let meta = decode_relation_meta(relation);
     let fallback_source_id = stable_character_id(&relation.source, &[]);
     let fallback_target_id = stable_character_id(&relation.target, &[]);
@@ -1180,19 +1155,11 @@ fn relation_to_view(
         .as_ref()
         .map(|item| item.target_character_id.clone())
         .unwrap_or(fallback_target_id.clone());
-    let source_name = character_name_map
-        .get(&source_id)
-        .cloned()
-        .unwrap_or_else(|| relation.source.clone());
-    let target_name = character_name_map
-        .get(&target_id)
-        .cloned()
-        .unwrap_or_else(|| relation.target.clone());
     let label = meta
         .as_ref()
         .map(|item| item.label.clone())
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| format!("{} · {}", source_name, target_name));
+        .unwrap_or_else(|| group_label(&relation.group).to_string());
     let summary = meta
         .as_ref()
         .map(|item| item.summary.clone())
@@ -1205,9 +1172,8 @@ fn relation_to_view(
                 stable_relation_id(
                     &source_id,
                     &target_id,
-                    &relation.kind,
-                    None,
-                    &if is_directed_relation_kind(&relation.kind) {
+                    &relation.group,
+                    &if is_directed_relationship_group(&relation.group) {
                         RelationDirectionV3::Directed
                     } else {
                         RelationDirectionV3::Undirected
@@ -1216,8 +1182,7 @@ fn relation_to_view(
             }),
         source_character_id: source_id,
         target_character_id: target_id,
-        kind: relation.kind.clone(),
-        subtype: meta.as_ref().and_then(|item| item.subtype.clone()),
+        group: relation.group.clone(),
         label,
         polarity: relation.polarity.clone(),
         strength: relation.strength.clone(),
@@ -1226,7 +1191,7 @@ fn relation_to_view(
             .as_ref()
             .map(|item| item.direction.clone())
             .unwrap_or_else(|| {
-                if is_directed_relation_kind(&relation.kind) {
+                if is_directed_relationship_group(&relation.group) {
                     "directed".to_string()
                 } else {
                     "undirected".to_string()
@@ -1237,7 +1202,6 @@ fn relation_to_view(
             .as_ref()
             .map(|item| item.current_dynamics.clone())
             .unwrap_or_else(|| vec![summary.clone()]),
-        facets: Vec::new(),
         first_seen_chapter_index: meta
             .as_ref()
             .and_then(|item| item.history.first().map(|history| history.chapter_index)),
@@ -1486,14 +1450,17 @@ fn relation_candidate_from_patch(
     let description = clean_optional(patch.description.clone());
     let fallback_note = description
         .clone()
-        .unwrap_or_else(|| format!("{} {} {}", patch.source, patch.kind, patch.target));
+        .unwrap_or_else(|| format!("{} {} {}", patch.source, patch.group, patch.target));
     RelationCandidateV3 {
         source_name: patch.source.clone(),
         target_name: patch.target.clone(),
-        kind_raw: patch.kind.clone(),
+        group_raw: patch.group.clone(),
+        label: clean_optional(Some(patch.label.clone())),
         polarity_raw: patch.polarity.clone(),
         strength_raw: patch.strength.clone(),
         status_raw: patch.status.clone(),
+        direction_raw: patch.direction.clone(),
+        summary: patch.summary.clone(),
         description,
         evidence: if evidence.is_empty() {
             patch_evidence(context, 0)
@@ -1637,7 +1604,6 @@ fn encode_relation_meta(relation: &NormalizedCharacterRelationV3) -> String {
         target_character_id: relation.target_character_id.clone(),
         source_name: relation.source_name.clone(),
         target_name: relation.target_name.clone(),
-        subtype: relation.subtype.clone(),
         label: relation.label.clone(),
         direction: relation.direction.as_str().to_string(),
         summary: relation.summary.clone(),
@@ -1664,9 +1630,8 @@ fn relation_storage_id(relation: &AiBookCharacterRelationV3) -> String {
             stable_relation_id(
                 &stable_character_id(&relation.source, &[]),
                 &stable_character_id(&relation.target, &[]),
-                &relation.kind,
-                None,
-                &if is_directed_relation_kind(&relation.kind) {
+                &relation.group,
+                &if is_directed_relationship_group(&relation.group) {
                     RelationDirectionV3::Directed
                 } else {
                     RelationDirectionV3::Undirected
@@ -1684,45 +1649,44 @@ impl RelationDirectionV3 {
     }
 }
 
-fn is_directed_relation_kind(kind: &AiBookRelationKind) -> bool {
-    matches!(kind, AiBookRelationKind::Supervision)
+fn is_directed_relationship_group(group: &AiBookRelationshipGroup) -> bool {
+    matches!(
+        group,
+        AiBookRelationshipGroup::Authority | AiBookRelationshipGroup::Opposition
+    )
 }
 
-fn normalize_relation_kind(raw: &str) -> Option<(AiBookRelationKind, RelationDirectionV3)> {
-    let value = raw.replace('_', "-");
-    match value.as_str() {
-        "family" | "亲属" | "家人" => {
-            Some((AiBookRelationKind::Family, RelationDirectionV3::Undirected))
+fn normalize_relationship_group(raw: &str) -> Option<AiBookRelationshipGroup> {
+    match canonical_key(raw).as_str() {
+        "family" | "家庭" | "家人" | "亲属" | "照料" => Some(AiBookRelationshipGroup::Family),
+        "romance" | "romantic" | "情感" | "爱恋" | "恋爱" | "感情" => {
+            Some(AiBookRelationshipGroup::Romance)
         }
-        "romantic" | "romance" | "恋爱" | "感情" => {
-            Some((AiBookRelationKind::Romance, RelationDirectionV3::Undirected))
+        "companion" | "伙伴" | "友方" | "朋友" | "同伴" | "盟友" | "ally" | "friend"
+        | "friendship" => Some(AiBookRelationshipGroup::Companion),
+        "authority" | "师长" | "权威" | "师生" | "老师" | "上下级" | "superior-subordinate"
+        | "teacher" | "mentor-student" | "mentorstudent" | "supervision" => {
+            Some(AiBookRelationshipGroup::Authority)
         }
-        "friend" | "friendship" | "ally" | "peer" | "朋友" | "互助" | "借贷互助" => Some((
-            AiBookRelationKind::Friendship,
-            RelationDirectionV3::Undirected,
-        )),
-        "alliance" | "盟友" => Some((
-            AiBookRelationKind::Alliance,
-            RelationDirectionV3::Undirected,
-        )),
-        "enemy" | "conflict" | "hostile" | "敌对" => Some((
-            AiBookRelationKind::Conflict,
-            RelationDirectionV3::Undirected,
-        )),
-        "rival" | "rivalry" | "竞争" => {
-            Some((AiBookRelationKind::Rivalry, RelationDirectionV3::Undirected))
+        "opposition" | "对立" | "威胁" | "敌对" | "冲突" | "竞争" | "enemy" | "conflict"
+        | "hostile" | "rival" | "rivalry" => Some(AiBookRelationshipGroup::Opposition),
+        "association" | "关联" | "中立" | "同学" | "同门" | "同事" | "邻居" | "peer" => {
+            Some(AiBookRelationshipGroup::Association)
         }
-        "mentor-student"
-        | "mentorstudent"
-        | "superior-subordinate"
-        | "teacher"
-        | "supervision"
-        | "师生"
-        | "诱导" => Some((
-            AiBookRelationKind::Supervision,
-            RelationDirectionV3::Directed,
-        )),
+        "unknown" | "未明" | "其他" => Some(AiBookRelationshipGroup::Unknown),
         _ => None,
+    }
+}
+
+fn normalize_relation_direction(
+    raw: &str,
+    group: &AiBookRelationshipGroup,
+) -> RelationDirectionV3 {
+    match canonical_key(raw).as_str() {
+        "directed" | "有向" => RelationDirectionV3::Directed,
+        "undirected" | "无向" => RelationDirectionV3::Undirected,
+        _ if is_directed_relationship_group(group) => RelationDirectionV3::Directed,
+        _ => RelationDirectionV3::Undirected,
     }
 }
 
@@ -1793,17 +1757,27 @@ fn normalize_fact_importance(raw: &str) -> AiBookFactImportance {
     }
 }
 
-fn kind_label(kind: &AiBookRelationKind) -> &'static str {
-    match kind {
-        AiBookRelationKind::Family => "family",
-        AiBookRelationKind::Romance => "romantic",
-        AiBookRelationKind::Friendship => "friend",
-        AiBookRelationKind::Rivalry => "rival",
-        AiBookRelationKind::Alliance => "ally",
-        AiBookRelationKind::Conflict => "enemy",
-        AiBookRelationKind::Supervision => "superior_subordinate",
-        AiBookRelationKind::Affiliation => "affiliation",
-        AiBookRelationKind::Unknown => "unknown_significant",
+fn group_label(group: &AiBookRelationshipGroup) -> &'static str {
+    match group {
+        AiBookRelationshipGroup::Family => "家庭 / 照料",
+        AiBookRelationshipGroup::Romance => "情感 / 爱恋",
+        AiBookRelationshipGroup::Companion => "伙伴 / 友方",
+        AiBookRelationshipGroup::Authority => "师长 / 权威",
+        AiBookRelationshipGroup::Opposition => "对立 / 威胁",
+        AiBookRelationshipGroup::Association => "关联 / 中立",
+        AiBookRelationshipGroup::Unknown => "未明",
+    }
+}
+
+fn relationship_group_rank(group: &AiBookRelationshipGroup) -> u8 {
+    match group {
+        AiBookRelationshipGroup::Opposition => 7,
+        AiBookRelationshipGroup::Family => 6,
+        AiBookRelationshipGroup::Romance => 5,
+        AiBookRelationshipGroup::Companion => 4,
+        AiBookRelationshipGroup::Authority => 3,
+        AiBookRelationshipGroup::Association => 2,
+        AiBookRelationshipGroup::Unknown => 1,
     }
 }
 
@@ -1917,11 +1891,9 @@ fn stable_fact_id(category: &AiBookFactCategory, title: &str) -> String {
 fn stable_relation_id(
     source_character_id: &str,
     target_character_id: &str,
-    kind: &AiBookRelationKind,
-    subtype: Option<&str>,
+    group: &AiBookRelationshipGroup,
     direction: &RelationDirectionV3,
 ) -> String {
-    let subtype = subtype.map(canonical_key).unwrap_or_default();
     let direction_key = direction.as_str();
     let (left, right) = match direction {
         RelationDirectionV3::Directed => (
@@ -1943,8 +1915,8 @@ fn stable_relation_id(
         }
     };
     format!(
-        "relation:{left}:{right}:{:?}:{subtype}:{direction_key}",
-        kind
+        "relation:{left}:{right}:{:?}:{direction_key}",
+        group
     )
 }
 
@@ -2366,7 +2338,7 @@ mod tests {
             RelationCandidateV3 {
                 source_name: "张羽".to_string(),
                 target_name: "嵩阳高中".to_string(),
-                kind_raw: "located_in".to_string(),
+                group_raw: "located_in".to_string(),
                 description: Some("张羽在嵩阳高中".to_string()),
                 evidence: vec![test_evidence()],
                 ..RelationCandidateV3::default()
@@ -2389,7 +2361,7 @@ mod tests {
             RelationCandidateV3 {
                 source_name: "张羽".to_string(),
                 target_name: "健体三十六式".to_string(),
-                kind_raw: "cultivate".to_string(),
+                group_raw: "cultivate".to_string(),
                 description: Some("张羽修炼健体三十六式".to_string()),
                 evidence: vec![test_evidence()],
                 ..RelationCandidateV3::default()
@@ -2416,7 +2388,7 @@ mod tests {
             RelationCandidateV3 {
                 source_name: "嵩阳高中".to_string(),
                 target_name: "法力教室".to_string(),
-                kind_raw: "contains".to_string(),
+                group_raw: "contains".to_string(),
                 description: Some("嵩阳高中包含法力教室".to_string()),
                 evidence: vec![test_evidence()],
                 ..RelationCandidateV3::default()
@@ -2444,7 +2416,7 @@ mod tests {
             RelationCandidateV3 {
                 source_name: "嵩阳高中".to_string(),
                 target_name: "训练馆".to_string(),
-                kind_raw: "adjacent".to_string(),
+                group_raw: "adjacent".to_string(),
                 description: Some("嵩阳高中与训练馆相邻".to_string()),
                 evidence: vec![test_evidence()],
                 ..RelationCandidateV3::default()
@@ -2582,10 +2554,13 @@ mod tests {
             character_relations: vec![AiBookCharacterRelationPatchV3 {
                 source: "张羽".to_string(),
                 target: "白真真".to_string(),
-                kind: "friend".to_string(),
+                group: "companion".to_string(),
+                label: "朋友".to_string(),
                 polarity: "positive".to_string(),
                 strength: "major".to_string(),
                 status: "active".to_string(),
+                direction: "undirected".to_string(),
+                summary: Some("两人继续合作".to_string()),
                 description: Some("两人继续合作".to_string()),
             }],
             ..AiBookKnowledgePatchV3::default()
@@ -2597,7 +2572,7 @@ mod tests {
             select_working_context_v3(&memory, Some(&digest), "张羽与白真真继续合作");
 
         assert_eq!(next_context.relevant_relations.len(), 1);
-        assert_eq!(next_context.relevant_relations[0].label, "friend");
+        assert_eq!(next_context.relevant_relations[0].label, "朋友");
         assert_eq!(next_context.relevant_relations[0].source_name, "张羽");
         assert_eq!(next_context.relevant_relations[0].target_name, "白真真");
     }
@@ -2620,10 +2595,13 @@ mod tests {
                 character_relations: vec![AiBookCharacterRelationPatchV3 {
                     source: "苏海峰".to_string(),
                     target: "张羽".to_string(),
-                    kind: "superior_subordinate".to_string(),
+                    group: "authority".to_string(),
+                    label: "师长".to_string(),
                     polarity: "negative".to_string(),
                     strength: "major".to_string(),
                     status: "active".to_string(),
+                    direction: "directed".to_string(),
+                    summary: Some("苏海峰诱导张羽签债务合同".to_string()),
                     description: Some("苏海峰诱导张羽签债务合同".to_string()),
                 }],
                 ..AiBookKnowledgePatchV3::default()
@@ -2638,10 +2616,13 @@ mod tests {
                 character_relations: vec![AiBookCharacterRelationPatchV3 {
                     source: "张羽".to_string(),
                     target: "苏海峰".to_string(),
-                    kind: "superior_subordinate".to_string(),
+                    group: "authority".to_string(),
+                    label: "反制对象".to_string(),
                     polarity: "negative".to_string(),
                     strength: "major".to_string(),
                     status: "active".to_string(),
+                    direction: "directed".to_string(),
+                    summary: Some("张羽反制苏海峰".to_string()),
                     description: Some("张羽反制苏海峰".to_string()),
                 }],
                 ..AiBookKnowledgePatchV3::default()
@@ -2732,14 +2713,14 @@ mod tests {
                 stored_relation(
                     "白真真",
                     "张羽",
-                    AiBookRelationKind::Friendship,
+                    AiBookRelationshipGroup::Companion,
                     AiBookRelationStatus::Active,
                     "借贷互助",
                 ),
                 stored_relation(
                     "张羽",
                     "白真真",
-                    AiBookRelationKind::Conflict,
+                    AiBookRelationshipGroup::Opposition,
                     AiBookRelationStatus::Active,
                     "彼此试探",
                 ),
@@ -2750,7 +2731,8 @@ mod tests {
         let view = select_ai_book_display_memory_v3(&memory);
 
         assert_eq!(view.relationships.len(), 1);
-        assert_eq!(view.relationships[0].facets.len(), 2);
+        assert_eq!(view.relationships[0].group, AiBookRelationshipGroup::Opposition);
+        assert_eq!(view.relationships[0].current_dynamics.len(), 2);
     }
 
     #[test]
@@ -2770,7 +2752,7 @@ mod tests {
             character_relations: vec![stored_relation(
                 "白真真",
                 "张羽",
-                AiBookRelationKind::Friendship,
+                AiBookRelationshipGroup::Companion,
                 AiBookRelationStatus::Broken,
                 "关系结束",
             )],
@@ -2836,7 +2818,7 @@ mod tests {
                 stored_relation(
                     &format!("角色{}", index),
                     &format!("角色{}", index + 1),
-                    AiBookRelationKind::Friendship,
+                    AiBookRelationshipGroup::Companion,
                     AiBookRelationStatus::Active,
                     "关系",
                 )
@@ -2932,10 +2914,13 @@ mod tests {
             character_relations: vec![AiBookCharacterRelationPatchV3 {
                 source: "张羽".to_string(),
                 target: "白真真".to_string(),
-                kind: "friend".to_string(),
+                group: "companion".to_string(),
+                label: "朋友".to_string(),
                 polarity: "positive".to_string(),
                 strength: "major".to_string(),
                 status: "active".to_string(),
+                direction: "undirected".to_string(),
+                summary: Some("两人互相信任".to_string()),
                 description: Some("两人互相信任".to_string()),
             }],
             knowledge_facts: vec![AiBookKnowledgeFactPatchV3 {
@@ -2975,7 +2960,7 @@ mod tests {
             RelationCandidateV3 {
                 source_name: "张羽".to_string(),
                 target_name: "白真真".to_string(),
-                kind_raw: "friend".to_string(),
+                group_raw: "companion".to_string(),
                 description: Some("两人只是同校认识，同屏出现".to_string()),
                 evidence: vec![test_evidence()],
                 ..RelationCandidateV3::default()
@@ -3056,44 +3041,40 @@ mod tests {
     fn stored_relation(
         source: &str,
         target: &str,
-        kind: AiBookRelationKind,
+        group: AiBookRelationshipGroup,
         status: AiBookRelationStatus,
         summary: &str,
     ) -> AiBookCharacterRelationV3 {
+        let direction = if is_directed_relationship_group(&group) {
+            RelationDirectionV3::Directed
+        } else {
+            RelationDirectionV3::Undirected
+        };
         let normalized = NormalizedCharacterRelationV3 {
             id: stable_relation_id(
                 &stable_character_id(source, &[]),
                 &stable_character_id(target, &[]),
-                &kind,
-                None,
-                &if is_directed_relation_kind(&kind) {
-                    RelationDirectionV3::Directed
-                } else {
-                    RelationDirectionV3::Undirected
-                },
+                &group,
+                &direction,
             ),
             source_character_id: stable_character_id(source, &[]),
             source_name: source.to_string(),
             target_character_id: stable_character_id(target, &[]),
             target_name: target.to_string(),
-            kind: kind.clone(),
+            group: group.clone(),
             label: format!("{} · {}", source, target),
             polarity: AiBookRelationPolarity::Neutral,
             strength: AiBookRelationStrength::Moderate,
             status: status.clone(),
-            direction: if is_directed_relation_kind(&kind) {
-                RelationDirectionV3::Directed
-            } else {
-                RelationDirectionV3::Undirected
-            },
+            direction,
             summary: summary.to_string(),
             current_dynamics: vec![summary.to_string()],
             evidence: vec![test_evidence()],
             history: vec![AiBookRelationChangeView {
                 chapter_index: 1,
                 chapter_title: "第一章".to_string(),
-                previous_kind: None,
-                next_kind: kind.clone(),
+                previous_group: None,
+                next_group: group.clone(),
                 previous_polarity: None,
                 next_polarity: AiBookRelationPolarity::Neutral,
                 previous_status: None,
@@ -3106,7 +3087,7 @@ mod tests {
         AiBookCharacterRelationV3 {
             source: source.to_string(),
             target: target.to_string(),
-            kind,
+            group,
             polarity: AiBookRelationPolarity::Neutral,
             strength: AiBookRelationStrength::Moderate,
             status,

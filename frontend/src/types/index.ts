@@ -483,34 +483,24 @@ export interface AiBookCharacterStateView {
   evidence: AiBookEvidence[]
 }
 
-export type AiBookRelationKind =
+export type AiBookRelationshipGroup =
   | 'unknown'
   | 'family'
   | 'romance'
-  | 'friendship'
-  | 'rivalry'
-  | 'alliance'
-  | 'conflict'
-  | 'affiliation'
-  | 'supervision'
+  | 'companion'
+  | 'authority'
+  | 'opposition'
+  | 'association'
 
 export type AiBookRelationPolarity = 'neutral' | 'positive' | 'negative' | 'mixed'
 export type AiBookRelationStrength = 'unknown' | 'weak' | 'moderate' | 'strong' | 'critical'
 export type AiBookRelationStatus = 'unknown' | 'active' | 'distant' | 'broken' | 'developing'
 
-export interface AiBookRelationFacetView {
-  kind: AiBookRelationKind
-  subtype?: string | null
-  polarity: AiBookRelationPolarity
-  status: AiBookRelationStatus
-  summary: string
-}
-
 export interface AiBookRelationChangeView {
   chapterIndex: number
   chapterTitle: string
-  previousKind?: AiBookRelationKind | null
-  nextKind: AiBookRelationKind
+  previousGroup?: AiBookRelationshipGroup | null
+  nextGroup: AiBookRelationshipGroup
   previousPolarity?: AiBookRelationPolarity | null
   nextPolarity: AiBookRelationPolarity
   previousStatus?: AiBookRelationStatus | null
@@ -523,8 +513,7 @@ export interface AiBookRelationView {
   id: string
   sourceCharacterId: string
   targetCharacterId: string
-  kind: AiBookRelationKind
-  subtype?: string | null
+  group: AiBookRelationshipGroup
   label: string
   polarity: AiBookRelationPolarity
   strength: AiBookRelationStrength
@@ -532,7 +521,6 @@ export interface AiBookRelationView {
   direction: string
   summary: string
   currentDynamics: string[]
-  facets: AiBookRelationFacetView[]
   firstSeenChapterIndex?: number | null
   lastUpdatedChapterIndex?: number | null
   evidence: AiBookEvidence[]
@@ -682,10 +670,13 @@ export interface AiBookChapterDigestView {
   characterRelations: Array<{
     source: string
     target: string
-    kind: AiBookRelationKind
+    group: AiBookRelationshipGroup
+    label: string
     polarity: AiBookRelationPolarity
     strength: AiBookRelationStrength
     status: AiBookRelationStatus
+    direction: string
+    summary?: string | null
     description?: string | null
   }>
   knowledgeFacts: Array<{
