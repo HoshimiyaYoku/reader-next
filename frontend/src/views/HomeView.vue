@@ -31,7 +31,7 @@
               <span class="shelf-btn-label">取消全选</span>
             </button>
           </template>
-          <button class="shelf-btn" type="button" title="上传 TXT" aria-label="上传 TXT" @click="triggerTxtUpload" :disabled="txtUploading">
+          <button class="shelf-btn" type="button" title="上传书籍" aria-label="上传书籍" @click="triggerTxtUpload" :disabled="txtUploading">
             <svg v-if="!txtUploading" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M12 3v12" />
               <path d="m7 8 5-5 5 5" />
@@ -41,7 +41,7 @@
               <path d="M21 12a9 9 0 0 0-15.55-6.2L3 8" />
               <path d="M3 3v5h5" />
             </svg>
-            <span class="shelf-btn-label">{{ txtUploading ? '上传中' : '上传 TXT' }}</span>
+            <span class="shelf-btn-label">{{ txtUploading ? '上传中' : '上传书籍' }}</span>
           </button>
           <button class="shelf-btn" type="button" title="刷新书架" aria-label="刷新书架" @click="handleRefreshBooks" :disabled="shelfStore.refreshing">
             <svg :class="{ spinning: shelfStore.refreshing }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -90,7 +90,7 @@
       <input
         ref="txtFileInputRef"
         type="file"
-        accept=".txt,text/plain"
+        accept=".txt,.epub,.pdf,text/plain,application/epub+zip,application/pdf"
         class="hidden-input"
         @change="handleTxtFileChange"
       />
@@ -171,7 +171,7 @@ import { useRouter } from 'vue-router'
 import { useBookshelfStore } from '../stores/bookshelf'
 import { useReaderStore } from '../stores/reader'
 import { useAppStore } from '../stores/app'
-import { uploadTxtBook } from '../api/bookshelf'
+import { uploadTxtBook, uploadEpubBook, uploadPdfBook } from '../api/bookshelf'
 import BookGrid from '../components/BookGrid.vue'
 import BookDetailModal from '../components/BookDetailModal.vue'
 import GroupSelectModal from '../components/bookshelf/GroupSelectModal.vue'
@@ -220,19 +220,31 @@ async function handleTxtFileChange(event: Event) {
   input.value = ''
   if (!file) return
 
-  if (!file.name.toLowerCase().endsWith('.txt')) {
-    appStore.showToast('只支持上传 .txt 文件', 'warning')
+  const name = file.name.toLowerCase()
+  let uploadFn: (file: File) => Promise<Book>
+  let formatLabel: string
+  if (name.endsWith('.epub')) {
+    uploadFn = uploadEpubBook
+    formatLabel = 'EPUB'
+  } else if (name.endsWith('.pdf')) {
+    uploadFn = uploadPdfBook
+    formatLabel = 'PDF'
+  } else if (name.endsWith('.txt')) {
+    uploadFn = uploadTxtBook
+    formatLabel = 'TXT'
+  } else {
+    appStore.showToast('仅支持上传 .txt / .epub / .pdf 文件', 'warning')
     return
   }
 
   txtUploading.value = true
   try {
-    const book = await uploadTxtBook(file)
+    const book = await uploadFn(file)
     await shelfStore.fetchBooks()
     appStore.showToast(`已导入《${book.name}》`, 'success')
     await handleBookClick(book)
   } catch (e: unknown) {
-    appStore.showToast((e as Error).message || 'TXT 上传失败', 'error')
+    appStore.showToast((e as Error).message || `${formatLabel} 上传失败`, 'error')
   } finally {
     txtUploading.value = false
   }

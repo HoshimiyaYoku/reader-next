@@ -1,7 +1,7 @@
 import type { AiBookCatchupStatus } from '../types'
 
 export function formatCatchupChapter(index?: number | null): string {
-  return typeof index === 'number' ? `第${index + 1}章` : '当前阅读章节'
+  return typeof index === 'number' ? `第 ${index + 1} 章` : '当前阅读章节'
 }
 
 export function describeCatchupProgress(status: AiBookCatchupStatus): string {

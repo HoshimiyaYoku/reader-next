@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
-const source = readFileSync(new URL('../src/views/ReaderView.vue', import.meta.url), 'utf8')
+import { resolve } from 'node:path'
+
+const source = readFileSync(resolve(process.cwd(), 'src/views/ReaderView.vue'), 'utf8')
 describe('ReaderView summary management UI', () => {
  it('owns the summary management tabs and prompt editor', () => {
   expect(source).toContain("'content'")

@@ -43,7 +43,7 @@
 
       <div v-else class="cache-sections">
         <div v-if="isLocalTxt" class="info-card">
-          <p>本地 TXT 已存放在服务端书架文件中，不需要额外缓存；阅读时会直接读取上传后的本地文件。</p>
+          <p>本地书已存放在服务端书架文件中，不需要额外缓存；阅读时会直接读取上传后的本地文件。</p>
         </div>
 
         <template v-else>

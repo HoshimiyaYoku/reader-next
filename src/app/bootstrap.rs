@@ -13,6 +13,7 @@ use crate::service::{
     ai_model_service::AiModelService, book_group_service::BookGroupService,
     book_service::BookService, book_source_service::BookSourceService,
     chapter_summary_service::ChapterSummaryService, json_document_service::JsonDocumentService,
+    local_epub_book::LocalEpubBookService, local_pdf_book::LocalPdfBookService,
     local_txt_book::LocalTxtBookService, update_service::UpdateService, user_service::UserService,
 };
 use crate::storage::{cache::file_cache::FileCache, db, fs::storage_fs::StorageFs};
@@ -45,6 +46,8 @@ pub async fn run() -> anyhow::Result<()> {
     let book_service = Arc::new(BookService::new(http, parser, cache, &cfg.storage_dir));
     let book_source_service = Arc::new(BookSourceService::new(repo, &cfg.storage_dir));
     let local_txt_book_service = Arc::new(LocalTxtBookService::new(&cfg.storage_dir));
+    let local_epub_book_service = Arc::new(LocalEpubBookService::new(&cfg.storage_dir));
+    let local_pdf_book_service = Arc::new(LocalPdfBookService::new(&cfg.storage_dir));
     let json_document_service = Arc::new(JsonDocumentService::new(pool.clone(), &cfg.storage_dir));
     let user_service = Arc::new(UserService::new(cfg.clone(), pool.clone()));
     user_service.migrate_legacy_users_from_json().await?;
@@ -77,6 +80,8 @@ pub async fn run() -> anyhow::Result<()> {
         user_service,
         book_group_service,
         local_txt_book_service,
+        local_epub_book_service,
+        local_pdf_book_service,
         json_document_service,
         ai_book_service,
         ai_book_generation_service,

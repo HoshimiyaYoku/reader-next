@@ -20,8 +20,8 @@ describe('aiBookCatchupStatus', () => {
     }
 
     expect(describeCatchupProgress(status)).toBe(
-      '本次 6/1032 · 累计到 第43章 · 目标 第1032章',
+      '本次 6/1032 · 累计到 第 43 章 · 目标 第 1032 章',
     )
-    expect(describeCatchupDetail(status)).toBe('失败在 第44章 · 第44章 飞剑：bad request')
+    expect(describeCatchupDetail(status)).toBe('失败在 第 44 章 · 第44章 飞剑：bad request')
   })
 })

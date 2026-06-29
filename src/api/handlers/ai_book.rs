@@ -811,6 +811,12 @@ mod tests {
             &cfg.storage_dir,
         ));
         let local_txt_book_service = Arc::new(LocalTxtBookService::new(&cfg.storage_dir));
+        let local_epub_book_service = Arc::new(
+            crate::service::local_epub_book::LocalEpubBookService::new(&cfg.storage_dir),
+        );
+        let local_pdf_book_service = Arc::new(
+            crate::service::local_pdf_book::LocalPdfBookService::new(&cfg.storage_dir),
+        );
         let json_document_service =
             Arc::new(JsonDocumentService::new(pool.clone(), &cfg.storage_dir));
         let user_service = Arc::new(UserService::new(cfg.clone(), pool.clone()));
@@ -846,6 +852,8 @@ mod tests {
             user_service,
             book_group_service,
             local_txt_book_service,
+            local_epub_book_service,
+            local_pdf_book_service,
             json_document_service,
             ai_book_service,
             ai_book_generation_service,

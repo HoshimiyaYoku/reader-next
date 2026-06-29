@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
-const source = readFileSync(new URL('../src/components/reader/ReadSettings.vue', import.meta.url), 'utf8')
+import { resolve } from 'node:path'
+
+const source = readFileSync(resolve(process.cwd(), 'src/components/reader/ReadSettings.vue'), 'utf8')
 describe('ReadSettings summary ownership', () => {
  it('does not expose duplicate chapter summary management', () => {
   expect(source).not.toContain('chapter-summary-settings')
