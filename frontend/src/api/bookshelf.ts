@@ -45,6 +45,14 @@ export function uploadPdfBook(file: File) {
   }).then((r) => r.data)
 }
 
+export function uploadMobiBook(file: File) {
+  const formData = new FormData()
+  formData.append('file', file)
+  return http.post<Book>('/uploadMobiBook', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then((r) => r.data)
+}
+
 export function deleteBook(book: Partial<Book>) {
   return http.post<string>('/deleteBook', book).then((r) => r.data)
 }

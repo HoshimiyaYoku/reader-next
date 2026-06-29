@@ -814,6 +814,9 @@ mod tests {
         let local_epub_book_service = Arc::new(
             crate::service::local_epub_book::LocalEpubBookService::new(&cfg.storage_dir),
         );
+        let local_mobi_book_service = Arc::new(
+            crate::service::local_mobi_book::LocalMobiBookService::new(&cfg.storage_dir),
+        );
         let local_pdf_book_service = Arc::new(
             crate::service::local_pdf_book::LocalPdfBookService::new(&cfg.storage_dir),
         );
@@ -853,6 +856,7 @@ mod tests {
             book_group_service,
             local_txt_book_service,
             local_epub_book_service,
+            local_mobi_book_service,
             local_pdf_book_service,
             json_document_service,
             ai_book_service,

@@ -18,6 +18,11 @@ describe('isLocalBook', () => {
     expect(isLocalBook({ origin: 'local-pdf', bookUrl: 'anything' })).toBe(true)
     expect(isLocalBook({ origin: 'remote', bookUrl: 'local-pdf:abc' })).toBe(true)
   })
+
+  it('detects uploaded local mobi books by origin or url', () => {
+    expect(isLocalBook({ origin: 'local-mobi', bookUrl: 'anything' })).toBe(true)
+    expect(isLocalBook({ origin: 'remote', bookUrl: 'local-mobi:abc' })).toBe(true)
+  })
 })
 
 describe('isLocalTxtBook (backward-compatible alias)', () => {

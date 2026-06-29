@@ -7,6 +7,7 @@ use crate::model::{
     search::SearchBook,
 };
 use crate::service::local_epub_book::{is_local_epub_origin, is_local_epub_url};
+use crate::service::local_mobi_book::{is_local_mobi_origin, is_local_mobi_url};
 use crate::service::local_pdf_book::{is_local_pdf_origin, is_local_pdf_url};
 use crate::service::local_txt_book::{is_local_txt_origin, is_local_txt_url, LOCAL_TXT_ORIGIN};
 use crate::service::search_relevance::{filter_strong_search_results, score_search_book};
@@ -900,6 +901,20 @@ pub async fn get_book_info(
             serde_json::to_value(book).unwrap_or_default(),
         )));
     }
+    if is_local_mobi_url(&url)
+        || req
+            .book_source_url
+            .as_deref()
+            .is_some_and(is_local_mobi_origin)
+    {
+        let book = state
+            .local_mobi_book_service
+            .get_book_info(&user_ns, &url)
+            .await?;
+        return Ok(Json(ApiResponse::ok(
+            serde_json::to_value(book).unwrap_or_default(),
+        )));
+    }
     let source = resolve_book_source(
         &state,
         &user_ns,
@@ -1002,6 +1017,26 @@ pub async fn get_chapter_list(
             .ok_or_else(|| AppError::BadRequest("tocUrl or bookUrl required".to_string()))?;
         let chapters = state
             .local_pdf_book_service
+            .get_chapter_list(&user_ns, &repair_encoded_url(book_url))
+            .await?;
+        return Ok(Json(ApiResponse::ok(
+            serde_json::to_value(chapters).unwrap_or_default(),
+        )));
+    }
+    if req
+        .book_source_url
+        .as_deref()
+        .is_some_and(is_local_mobi_origin)
+        || req.book_url.as_deref().is_some_and(is_local_mobi_url)
+        || req.toc_url.as_deref().is_some_and(is_local_mobi_url)
+    {
+        let book_url = req
+            .book_url
+            .as_deref()
+            .or(req.toc_url.as_deref())
+            .ok_or_else(|| AppError::BadRequest("tocUrl or bookUrl required".to_string()))?;
+        let chapters = state
+            .local_mobi_book_service
             .get_chapter_list(&user_ns, &repair_encoded_url(book_url))
             .await?;
         return Ok(Json(ApiResponse::ok(
@@ -1184,6 +1219,32 @@ pub async fn get_book_content(
         };
         let content = state
             .local_pdf_book_service
+            .get_content(&user_ns, &chapter_url)
+            .await?;
+        return Ok(Json(ApiResponse::ok(serde_json::Value::String(content))));
+    }
+    if req
+        .book_source_url
+        .as_deref()
+        .is_some_and(is_local_mobi_origin)
+        || req.chapter_url.as_deref().is_some_and(is_local_mobi_url)
+    {
+        let url = req
+            .chapter_url
+            .as_deref()
+            .ok_or_else(|| AppError::BadRequest("chapterUrl required".to_string()))?;
+        let chapter_url = if is_local_mobi_url(url) && !url.contains('#') {
+            let index = req.index.unwrap_or(0).max(0) as usize;
+            format!(
+                "{}#{}",
+                repair_encoded_url(url).trim_end_matches('#'),
+                index
+            )
+        } else {
+            repair_encoded_url(url)
+        };
+        let content = state
+            .local_mobi_book_service
             .get_content(&user_ns, &chapter_url)
             .await?;
         return Ok(Json(ApiResponse::ok(serde_json::Value::String(content))));
@@ -1516,6 +1577,49 @@ pub async fn upload_pdf_book(
     )))
 }
 
+pub async fn upload_mobi_book(
+    State(state): State<AppState>,
+    auth: AuthContext,
+    mut multipart: Multipart,
+) -> Result<Json<ApiResponse<Value>>, AppError> {
+    let user_ns = state
+        .user_service
+        .resolve_user_ns_with_override(auth.access_token(), auth.secure_key(), auth.user_ns())
+        .await
+        .map_err(|_| AppError::BadRequest("NEED_LOGIN".to_string()))?;
+
+    let mut file_name = String::new();
+    let mut bytes: Option<Bytes> = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::BadRequest(e.to_string()))?
+    {
+        let field_name = field.name().unwrap_or_default().to_string();
+        if field_name != "file" {
+            continue;
+        }
+        file_name = field.file_name().unwrap_or("book.mobi").to_string();
+        bytes = Some(
+            field
+                .bytes()
+                .await
+                .map_err(|e| AppError::BadRequest(e.to_string()))?,
+        );
+        break;
+    }
+
+    let bytes = bytes.ok_or_else(|| AppError::BadRequest("file required".to_string()))?;
+    let book = state
+        .local_mobi_book_service
+        .import_mobi_book(&user_ns, &file_name, &bytes)
+        .await?;
+    let saved = state.book_service.save_book(&user_ns, book).await?;
+    Ok(Json(ApiResponse::ok(
+        serde_json::to_value(saved).unwrap_or_default(),
+    )))
+}
+
 pub async fn save_book(
     State(state): State<AppState>,
     auth: AuthContext,
@@ -1784,9 +1888,7 @@ pub async fn save_book_progress(
                 updated.latest_chapter_title = Some(last.title.clone());
             }
         }
-    } else if is_local_epub_origin(&shelf_book.origin)
-        || is_local_epub_url(&shelf_book.book_url)
-    {
+    } else if is_local_epub_origin(&shelf_book.origin) || is_local_epub_url(&shelf_book.book_url) {
         if let Ok(chapters) = state
             .local_epub_book_service
             .get_chapter_list(&user_ns, &shelf_book.book_url)
@@ -1800,9 +1902,7 @@ pub async fn save_book_progress(
                 updated.latest_chapter_title = Some(last.title.clone());
             }
         }
-    } else if is_local_pdf_origin(&shelf_book.origin)
-        || is_local_pdf_url(&shelf_book.book_url)
-    {
+    } else if is_local_pdf_origin(&shelf_book.origin) || is_local_pdf_url(&shelf_book.book_url) {
         if let Ok(chapters) = state
             .local_pdf_book_service
             .get_chapter_list(&user_ns, &shelf_book.book_url)
@@ -3183,6 +3283,18 @@ async fn cleanup_local_txt_book_files(state: &AppState, user_ns: &str, books: &[
             {
                 tracing::warn!(
                     "failed to delete local pdf book files for {}: {:?}",
+                    book.book_url,
+                    err
+                );
+            }
+        } else if is_local_mobi_origin(&book.origin) || is_local_mobi_url(&book.book_url) {
+            if let Err(err) = state
+                .local_mobi_book_service
+                .delete_book_files(user_ns, &book.book_url)
+                .await
+            {
+                tracing::warn!(
+                    "failed to delete local mobi book files for {}: {:?}",
                     book.book_url,
                     err
                 );

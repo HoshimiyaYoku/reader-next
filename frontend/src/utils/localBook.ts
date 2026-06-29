@@ -9,6 +9,7 @@ export function isLocalBook(book?: BookLike | null) {
   if (origin === 'local-txt' || bookUrl?.startsWith('local-txt:')) return true
   if (origin === 'local-epub' || bookUrl?.startsWith('local-epub:')) return true
   if (origin === 'local-pdf' || bookUrl?.startsWith('local-pdf:')) return true
+  if (origin === 'local-mobi' || bookUrl?.startsWith('local-mobi:')) return true
   return false
 }
 

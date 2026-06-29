@@ -90,7 +90,7 @@
       <input
         ref="txtFileInputRef"
         type="file"
-        accept=".txt,.epub,.pdf,text/plain,application/epub+zip,application/pdf"
+        accept=".txt,.epub,.pdf,.mobi,text/plain,application/epub+zip,application/pdf,application/x-mobipocket-ebook"
         class="hidden-input"
         @change="handleTxtFileChange"
       />
@@ -171,7 +171,7 @@ import { useRouter } from 'vue-router'
 import { useBookshelfStore } from '../stores/bookshelf'
 import { useReaderStore } from '../stores/reader'
 import { useAppStore } from '../stores/app'
-import { uploadTxtBook, uploadEpubBook, uploadPdfBook } from '../api/bookshelf'
+import { uploadTxtBook, uploadEpubBook, uploadPdfBook, uploadMobiBook } from '../api/bookshelf'
 import BookGrid from '../components/BookGrid.vue'
 import BookDetailModal from '../components/BookDetailModal.vue'
 import GroupSelectModal from '../components/bookshelf/GroupSelectModal.vue'
@@ -229,11 +229,14 @@ async function handleTxtFileChange(event: Event) {
   } else if (name.endsWith('.pdf')) {
     uploadFn = uploadPdfBook
     formatLabel = 'PDF'
+  } else if (name.endsWith('.mobi')) {
+    uploadFn = uploadMobiBook
+    formatLabel = 'MOBI'
   } else if (name.endsWith('.txt')) {
     uploadFn = uploadTxtBook
     formatLabel = 'TXT'
   } else {
-    appStore.showToast('仅支持上传 .txt / .epub / .pdf 文件', 'warning')
+    appStore.showToast('仅支持上传 .txt / .epub / .pdf / .mobi 文件', 'warning')
     return
   }
 

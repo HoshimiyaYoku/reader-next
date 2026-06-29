@@ -134,6 +134,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/reader3/uploadTxtBook", post(handlers::upload_txt_book))
         .route("/reader3/uploadEpubBook", post(handlers::upload_epub_book))
+        .route("/reader3/uploadMobiBook", post(handlers::upload_mobi_book))
         .route("/reader3/uploadPdfBook", post(handlers::upload_pdf_book))
         .route("/reader3/saveBook", post(handlers::save_book))
         .route("/reader3/saveBooks", post(handlers::save_books))
@@ -367,6 +368,7 @@ mod tests {
     use crate::service::chapter_summary_service::ChapterSummaryService;
     use crate::service::json_document_service::JsonDocumentService;
     use crate::service::local_epub_book::LocalEpubBookService;
+    use crate::service::local_mobi_book::LocalMobiBookService;
     use crate::service::local_pdf_book::LocalPdfBookService;
     use crate::service::local_txt_book::LocalTxtBookService;
     use crate::service::update_service::UpdateService;
@@ -402,6 +404,7 @@ mod tests {
         ));
         let local_txt_book_service = Arc::new(LocalTxtBookService::new(&cfg.storage_dir));
         let local_epub_book_service = Arc::new(LocalEpubBookService::new(&cfg.storage_dir));
+        let local_mobi_book_service = Arc::new(LocalMobiBookService::new(&cfg.storage_dir));
         let local_pdf_book_service = Arc::new(LocalPdfBookService::new(&cfg.storage_dir));
         let json_document_service =
             Arc::new(JsonDocumentService::new(pool.clone(), &cfg.storage_dir));
@@ -440,6 +443,7 @@ mod tests {
             book_group_service,
             local_txt_book_service,
             local_epub_book_service,
+            local_mobi_book_service,
             local_pdf_book_service,
             json_document_service,
             ai_book_service,

@@ -45,3 +45,4 @@ sxd-document = "0.3"
 quick-xml = "0.31"
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 lopdf = "0.34"
+mobi = "0.8"
