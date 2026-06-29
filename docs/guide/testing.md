@@ -30,30 +30,31 @@ cd frontend && npm run build
 
 ### 2. Playwright 自动冒烟
 
-Playwright 目录在仓库根目录：
+Playwright 配置和依赖在 `tests/e2e/`：
 
-- `playwright.config.ts`
+- `tests/e2e/playwright.config.ts`
+- `tests/e2e/package.json`
 - `tests/e2e/app-shell.spec.ts`
 - `tests/e2e/standard-flow.spec.ts`
 
 安装依赖：
 
 ```bash
-npm install
-npx playwright install
+npm --prefix tests/e2e install
+npm --prefix tests/e2e exec playwright install
 ```
 
 执行：
 
 ```bash
-npm run test:e2e
+npm --prefix tests/e2e run test:e2e
 ```
 
 可视化调试：
 
 ```bash
-npm run test:e2e:headed
-npm run test:e2e:ui
+npm --prefix tests/e2e run test:e2e:headed
+npm --prefix tests/e2e run test:e2e:ui
 ```
 
 默认测试地址：
@@ -65,7 +66,7 @@ http://127.0.0.1:18080/#/
 如果服务地址不同：
 
 ```bash
-PLAYWRIGHT_BASE_URL=http://127.0.0.1:9000/#/ npm run test:e2e
+PLAYWRIGHT_BASE_URL=http://127.0.0.1:9000/#/ npm --prefix tests/e2e run test:e2e
 ```
 
 ### 3. 手工全量回归
@@ -94,7 +95,7 @@ PLAYWRIGHT_BASE_URL=http://127.0.0.1:9000/#/ npm run test:e2e
 ```bash
 E2E_USERNAME=admin \
 E2E_PASSWORD=12345678 \
-npm run test:e2e
+npm --prefix tests/e2e run test:e2e
 ```
 
 ### 搜索结果详情回归
@@ -102,14 +103,14 @@ npm run test:e2e
 ```bash
 E2E_SEARCH_KEYWORD=凡人修仙传 \
 E2E_EXPECTED_BOOK_NAME=凡人修仙传 \
-npm run test:e2e
+npm --prefix tests/e2e run test:e2e
 ```
 
 ### 书源导入回归
 
 ```bash
 E2E_SOURCE_IMPORT_FILE=/absolute/path/to/book-sources.json \
-npm run test:e2e
+npm --prefix tests/e2e run test:e2e
 ```
 
 ## 标准手工回归清单
@@ -187,7 +188,7 @@ npm run test:e2e
 1. `cargo check`
 2. `cargo test`
 3. `cd frontend && npm run build`
-4. `npm run test:e2e`
+4. `npm --prefix tests/e2e run test:e2e`
 5. 按“标准手工回归清单”执行一次完整人工检查
 
 如果这次改动涉及以下模块，必须追加专项回归：

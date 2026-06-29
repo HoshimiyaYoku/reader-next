@@ -73,14 +73,14 @@ http://localhost:18080
 
 ```bash
 cp deploy/env.docker.example .env.docker
-docker compose up -d
+docker compose -f deploy/compose.yml up -d
 ```
 
 升级：
 
 ```bash
-docker compose pull
-docker compose up -d
+docker compose -f deploy/compose.yml pull
+docker compose -f deploy/compose.yml up -d
 ```
 
 重要：SQLite 数据库、上传文件和缓存都在 `/app/storage`，必须挂载 volume 或宿主机目录，否则删容器会丢数据。

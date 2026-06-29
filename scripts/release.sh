@@ -135,9 +135,12 @@ update_cargo_version() {
 
 update_cargo_version "$SEMVER"
 
-npm version "$SEMVER" --no-git-tag-version --allow-same-version >/dev/null
 (
   cd frontend
+  npm version "$SEMVER" --no-git-tag-version --allow-same-version >/dev/null
+)
+(
+  cd tests/e2e
   npm version "$SEMVER" --no-git-tag-version --allow-same-version >/dev/null
 )
 
@@ -152,7 +155,7 @@ echo "Building Rust binary..."
 cargo build --release --locked
 
 echo "Creating commit and tag..."
-git add Cargo.toml Cargo.lock package.json package-lock.json frontend/package.json frontend/package-lock.json
+git add Cargo.toml Cargo.lock frontend/package.json frontend/package-lock.json tests/e2e/package.json tests/e2e/package-lock.json
 if git diff --cached --quiet; then
   echo "Version files already match ${TAG}; tagging current commit."
 else

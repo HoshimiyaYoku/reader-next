@@ -6,11 +6,11 @@ This document is the single Docker runbook for Reader Next.
 
 ```text
 Dockerfile                         # canonical image build entrypoint
-compose.yml                        # simple user deployment
 deploy/
+  compose.yml                      # simple user deployment
   Caddyfile                        # optional Caddy reverse proxy config
   compose.caddy.yml                # production sample with Caddy
-  env.docker.example               # compose.yml environment template
+  env.docker.example               # deploy/compose.yml environment template
   env.prod.example                 # VPS deployment environment template
 .github/workflows/docker-publish.yml # multi-arch GHCR publishing
 ```
@@ -39,14 +39,14 @@ Run from the repository root:
 
 ```bash
 cp deploy/env.docker.example .env.docker
-docker compose up -d
+docker compose -f deploy/compose.yml up -d
 ```
 
 Upgrade:
 
 ```bash
-docker compose pull
-docker compose up -d
+docker compose -f deploy/compose.yml pull
+docker compose -f deploy/compose.yml up -d
 ```
 
 Runtime contract:
