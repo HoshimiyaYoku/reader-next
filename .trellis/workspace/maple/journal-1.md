@@ -38,3 +38,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: Local EPUB/PDF upload support
+
+**Date**: 2026-06-29
+**Task**: Local EPUB/PDF upload support
+**Branch**: `main`
+
+### Summary
+
+Implemented local EPUB/PDF upload support, fixed PDF text extraction, repaired frontend tests, verified cargo test, frontend tests, and build, then pushed main.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `24a31017` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
