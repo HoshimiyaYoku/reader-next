@@ -99,3 +99,107 @@ POST /reader3/saveUserConfig
   "lineHeight": 1.8
 }
 ```
+
+## 用户登出
+
+```
+POST /reader3/logout
+```
+
+## 获取用户列表
+
+```
+GET /reader3/getUserList
+```
+
+仅管理员可用。
+
+## 添加用户
+
+```
+POST /reader3/addUser
+```
+
+请求体:
+```json
+{
+  "username": "用户名",
+  "password": "密码"
+}
+```
+
+仅管理员可用。
+
+## 删除用户
+
+```
+POST /reader3/deleteUsers
+```
+
+请求体:
+```json
+{
+  "usernames": ["user1", "user2"]
+}
+```
+
+仅管理员可用。
+
+## 重置密码
+
+```
+POST /reader3/resetPassword
+```
+
+请求体:
+```json
+{
+  "username": "用户名",
+  "newPassword": "新密码"
+}
+```
+
+仅管理员可用。
+
+## 更新用户
+
+```
+POST /reader3/updateUser
+```
+
+请求体:
+```json
+{
+  "username": "用户名",
+  "permissions": ["permission1", "permission2"]
+}
+```
+
+仅管理员可用。
+
+## 上传文件
+
+```
+POST /reader3/uploadFile
+```
+
+请求体: `multipart/form-data`
+
+## 删除文件
+
+```
+POST /reader3/deleteFile
+```
+
+请求体:
+```json
+{
+  "fileName": "文件名"
+}
+```
+
+## 获取 TXT 目录规则
+
+```
+GET /reader3/getTxtTocRules
+```

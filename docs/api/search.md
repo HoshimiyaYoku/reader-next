@@ -59,6 +59,73 @@ GET /reader3/getBookInfo
 }
 ```
 
+## 搜索书籍 (多源)
+
+```
+GET /reader3/searchBookMulti
+```
+
+查询参数:
+- `key` - 搜索关键词
+- `page` - 页码，默认1
+
+## 搜索书籍 (多源 SSE)
+
+```
+GET /reader3/searchBookMultiSSE
+```
+
+SSE 实时返回搜索结果。
+
+## 搜索书源 (SSE)
+
+```
+GET /reader3/searchBookSourceSSE
+```
+
+查询参数:
+- `url` - 书籍URL
+
+SSE 实时返回可用书源。
+
+## 探索书籍
+
+```
+GET /reader3/exploreBook
+```
+
+查询参数:
+- `ruleFindUrl` - 发现规则URL
+- `bookSourceUrl` - 书源URL (可选)
+- `page` - 页码 (可选)
+
+## 全局探索书籍
+
+```
+POST /reader3/exploreBookGlobal
+```
+
+请求体:
+```json
+{
+  "keyword": "分类关键词",
+  "page": 1
+}
+```
+
+## 获取发现分类
+
+```
+POST /reader3/getExploreKinds
+```
+
+请求体:
+```json
+{
+  "bookSourceUrl": "书源URL"
+}
+```
+
 ## 获取目录
 
 ```
