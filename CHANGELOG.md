@@ -12,7 +12,3 @@
 - 阅读设置迁移更稳：字体、行高、段距、页面宽度、滚动速度、AI 面板宽度/字号等数值会做 finite/min 校验，旧配置或坏数据不会把设置写成非法值。
 - 朗读设置迁移更稳：provider、OpenAI source、音频格式、请求模式和语速/音调/停止时间会回退到合法默认值。
 - 设置抽屉把“服务端版本更新”和“浏览器前端缓存更新”拆开显示：服务端更新提示为“需手动部署”，前端缓存更新只负责刷新浏览器资源，不再让这两个概念混在一起。
-- 新增本地双实例开发流程：`.env.dev.example` + `scripts/run-dev.sh` 默认使用 `dev-storage/reader.db`，避免开发 server 写到日常使用的 Docker 数据库。
-- 新增本地常驻 Docker compose：`deploy/compose.local.yml` 默认把仓库 `storage/` 挂进容器、监听 `28080`，README 和 Docker 文档补了对应启动说明。
-- 发布版本号更新到 `1.0.12`，同步 Rust、frontend、e2e package 及 lockfile 里的版本字段。
-- 暂停 VPS 自动部署：`.github/workflows/deploy-vps.yml` 改名为 `.yml.disabled`，GitHub Actions 不会再加载或触发这个 workflow，但部署脚本内容保留，后续恢复时可改回 `.yml`。
