@@ -177,10 +177,10 @@
           <section v-if="showInlineChapterSummary" class="chapter-summary-card">
             <div class="chapter-summary-header reader-ui-font">
               <div>
-                <div class="summary-kicker">摘要</div>
+                <div class="summary-kicker">AI 面板</div>
                 <div class="summary-muted">{{ store.currentChapter?.title || '当前章节' }}</div>
               </div>
-              <div class="summary-tabs" role="tablist" aria-label="摘要面板">
+              <div class="summary-tabs" role="tablist" aria-label="AI 面板">
                 <button
                   class="summary-tab"
                   :class="{ active: chapterSummaryActiveTab === 'content' }"
@@ -188,7 +188,7 @@
                   role="tab"
                   type="button"
                   @click="chapterSummaryActiveTab = 'content'"
-                >正文</button>
+                >摘要</button>
                 <button
                   class="summary-tab"
                   :class="{ active: chapterSummaryActiveTab === 'relationships' }"
@@ -405,10 +405,10 @@
           >
             <div class="chapter-summary-header reader-ui-font">
               <div>
-                <div class="summary-kicker">摘要</div>
+                <div class="summary-kicker">AI 面板</div>
                 <div class="summary-muted">{{ chapter.title || '当前章节' }}</div>
               </div>
-              <div class="summary-tabs" role="tablist" aria-label="摘要面板">
+              <div class="summary-tabs" role="tablist" aria-label="AI 面板">
                 <button
                   class="summary-tab"
                   :class="{ active: chapterSummaryActiveTab === 'content' }"
@@ -416,7 +416,7 @@
                   role="tab"
                   type="button"
                   @click="chapterSummaryActiveTab = 'content'"
-                >正文</button>
+                >摘要</button>
                 <button
                   class="summary-tab"
                   :class="{ active: chapterSummaryActiveTab === 'relationships' }"
@@ -603,10 +603,10 @@
       <div class="chapter-summary-resize-handle" @pointerdown="startChapterSummarySiderResize"></div>
       <div class="chapter-summary-sider-head reader-ui-font">
         <div>
-          <div class="summary-kicker">摘要</div>
+          <div class="summary-kicker">AI 面板</div>
           <div class="summary-muted">{{ store.currentChapter?.title || '当前章节' }}</div>
         </div>
-        <div class="summary-tabs" role="tablist" aria-label="摘要面板">
+        <div class="summary-tabs" role="tablist" aria-label="AI 面板">
           <button
             class="summary-tab"
             :class="{ active: chapterSummaryActiveTab === 'content' }"
@@ -614,7 +614,7 @@
             role="tab"
             type="button"
             @click="chapterSummaryActiveTab = 'content'"
-          >正文</button>
+          >摘要</button>
           <button
             class="summary-tab"
             :class="{ active: chapterSummaryActiveTab === 'relationships' }"
@@ -839,7 +839,8 @@ import { createReaderProgressAutoSaveScheduler, createReaderProgressExitSaver } 
 import { buildChapterSummaryIdentity, isCurrentChapterSummaryIdentity } from '../utils/chapterSummaryState'
 import { buildSummaryRelationshipGraph } from '../utils/summaryRelationshipGraph'
 import { chooseChapterSummaryPlacement, clampChapterSummarySiderWidth, getChapterSummaryFontSize } from '../utils/chapterSummaryLayout'
-import type { AiBookMemoryViewModel, Book, ChapterSummaryConfigResponse, ChapterSummaryRecord } from '../types'
+import { getAiModelConfig, saveAiModelConfig } from '../api/aiModel'
+import type { AiBookMemoryViewModel, AiServerModelConfig, Book, ChapterSummaryConfigResponse, ChapterSummaryRecord } from '../types'
 
 import ReaderSidebar from '../components/reader/ReaderSidebar.vue'
 import ReaderToolbar from '../components/reader/ReaderToolbar.vue'
@@ -949,7 +950,7 @@ const chapterSummaryStatus = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
 const chapterSummaryError = ref('')
 const showChapterSummary = ref(config.value.showChapterSummary)
 type ChapterSummaryTab = 'content' | 'relationships' | 'settings'
-const chapterSummaryActiveTab = ref<ChapterSummaryTab>('content')
+const chapterSummaryActiveTab = ref<ChapterSummaryTab>(config.value.chapterSummaryActiveTab)
 const chapterSummaryRelationshipMemory = ref<AiBookMemoryViewModel | null>(null)
 const chapterSummaryRelationshipStatus = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
 const chapterSummaryConfig = ref<ChapterSummaryConfigResponse | null>(null)
@@ -964,6 +965,16 @@ const chapterSummaryConfigDraft = reactive({
   prompt: '',
 })
 const chapterSummarySiderWidth = ref(clampChapterSummarySiderWidth(config.value.chapterSummarySiderWidth))
+const aiModelConfig = reactive<AiServerModelConfig>({
+  text: { enabled: false, baseUrl: '', apiKey: '', model: '', path: '/v1/chat/completions', useFullUrl: false },
+  image: { enabled: false, baseUrl: '', apiKey: '', model: 'gpt-image-1', path: '/v1/images/generations', useFullUrl: false, imageSize: '1024x1024' },
+  speech: { enabled: false, baseUrl: '', apiKey: '', model: 'gpt-4o-mini-tts', path: '/v1/audio/speech', useFullUrl: false, voice: 'alloy', responseFormat: 'mp3' },
+})
+const aiModelLoading = ref(false)
+const aiModelSaving = ref(false)
+const aiModelIsAdmin = ref(false)
+const aiModelCanUse = ref(false)
+const aiModelLoaded = ref(false)
 const chapterSummarySiderResizing = ref(false)
 let chapterSummaryResizeStartX = 0
 let chapterSummaryResizeStartWidth = 0
@@ -2429,7 +2440,7 @@ function toggleChapterSummary() {
   } else if (!showChapterSummary.value) {
     clearChapterSummaryTimer()
   }
-  appStore.showToast(showChapterSummary.value ? '已显示摘要' : '已隐藏摘要', 'success')
+  appStore.showToast(showChapterSummary.value ? '已显示 AI 面板' : '已隐藏 AI 面板', 'success')
 }
 
 function hideChapterSummary() {
@@ -2447,13 +2458,55 @@ function openAiBook() {
 }
 
 function openAiBackendSettings() {
-  const bookUrl = store.book?.bookUrl
-  const query = bookUrl
-    ? { bookUrl, tab: 'settings', section: 'server-model' }
-    : { tab: 'settings', section: 'server-model' }
-  void '打开 AI 后端设置'
-  void router.push({ name: 'ai-book', query })
+  chapterSummaryActiveTab.value = 'settings'
 }
+
+function cloneAiModelConfig(config: AiServerModelConfig): AiServerModelConfig {
+  return JSON.parse(JSON.stringify(config))
+}
+
+async function loadAiModelConfig() {
+  aiModelLoading.value = true
+  try {
+    const response = await getAiModelConfig()
+    Object.assign(aiModelConfig, cloneAiModelConfig(response.config))
+    aiModelIsAdmin.value = response.isAdmin
+    aiModelCanUse.value = response.canUseServerModel
+    aiModelLoaded.value = true
+  } catch (error) {
+    appStore.showToast((error as Error).message || '后端模型配置读取失败', 'error')
+  } finally {
+    aiModelLoading.value = false
+  }
+}
+
+async function handleSaveAiModelConfig() {
+  if (!aiModelIsAdmin.value) return
+  aiModelSaving.value = true
+  try {
+    const response = await saveAiModelConfig(cloneAiModelConfig(aiModelConfig))
+    Object.assign(aiModelConfig, cloneAiModelConfig(response.config))
+    aiModelIsAdmin.value = response.isAdmin
+    aiModelCanUse.value = response.canUseServerModel
+    appStore.showToast('后端模型配置已保存', 'success')
+  } catch (error) {
+    appStore.showToast((error as Error).message || '后端模型配置保存失败', 'error')
+  } finally {
+    aiModelSaving.value = false
+  }
+}
+
+const aiModelStatusTitle = computed(() => {
+  if (aiModelLoading.value) return '正在读取后端模型配置'
+  if (aiModelIsAdmin.value) return '管理员可编辑后端模型配置'
+  return aiModelCanUse.value ? '当前账号可使用后端模型' : '当前账号未开启 AI 模型权限'
+})
+
+const aiModelStatusMessage = computed(() => {
+  if (aiModelLoading.value) return '加载中...'
+  if (aiModelIsAdmin.value) return '配置保存到服务器，AI资料生成会使用这里的文本模型。'
+  return aiModelCanUse.value ? '当前账号可使用后端模型' : '请让管理员在用户管理中开启"AI 模型"权限'
+})
 
 onBeforeRouteLeave(() => {
   clearChapterSummaryTimer()
@@ -2586,8 +2639,12 @@ watch(() => store.book?.bookUrl, () => {
 })
 
 watch(chapterSummaryActiveTab, (tab) => {
+  store.updateConfig('chapterSummaryActiveTab', tab)
   if (tab === 'relationships' && chapterSummaryRelationshipStatus.value === 'idle') {
     void loadChapterSummaryRelationshipMemory()
+  }
+  if (tab === 'settings' && !aiModelLoaded.value) {
+    void loadAiModelConfig()
   }
 })
 

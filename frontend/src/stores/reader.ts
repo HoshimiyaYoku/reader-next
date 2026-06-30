@@ -65,6 +65,7 @@ export interface ReadConfig {
   chapterSummarySiderWidth: number
   chapterSummaryFontSize: number
   chapterSummaryKeyPointStyle: 'card' | 'list'
+  chapterSummaryActiveTab: 'content' | 'relationships' | 'settings'
 }
 
 const defaultConfig: ReadConfig = {
@@ -93,6 +94,7 @@ const defaultConfig: ReadConfig = {
   chapterSummarySiderWidth: 360,
   chapterSummaryFontSize: 16,
   chapterSummaryKeyPointStyle: 'card',
+  chapterSummaryActiveTab: 'content',
 }
 
 function loadConfig(): ReadConfig {
