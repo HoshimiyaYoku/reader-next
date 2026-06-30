@@ -1,5 +1,10 @@
 name: Deploy Reader to VPS
 
+# Temporarily disabled for v1.0.12.
+# GitHub Actions only loads workflow files ending in .yml/.yaml from this
+# directory, so this .disabled file preserves the deploy recipe without
+# allowing push or manual runs.
+
 on:
   push:
     branches:
