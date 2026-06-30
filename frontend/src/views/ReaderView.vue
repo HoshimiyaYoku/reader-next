@@ -2737,6 +2737,9 @@ onBeforeRouteLeave(() => {
 onMounted(async () => {
   syncViewportSize()
   void loadChapterSummaryConfigForSider()
+  if (chapterSummaryActiveTab.value === 'settings') {
+    void loadAiModelConfig()
+  }
   appStore.startReadingSession()
   if (!store.book) {
     const restored = await store.restorePersistedSession()
