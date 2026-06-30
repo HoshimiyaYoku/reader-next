@@ -78,6 +78,27 @@ cp deploy/env.docker.example .env.docker
 docker compose -f deploy/compose.yml up -d
 ```
 
+如果你想把当前仓库里的 `storage/reader.db` 挂给 Docker，当作日常常驻实例，同时把本地开发隔离到另一份 dev DB，可以直接用：
+
+```bash
+docker compose -f deploy/compose.local.yml up -d
+```
+
+这个本地 compose 会把仓库的 `./storage` 挂到容器里的 `/app/storage`，默认监听 `28080`，也就是你的日常 Reader 走：
+
+```text
+http://localhost:28080
+```
+
+开发时再单独启动本地 server，固定走 `dev-storage/reader.db`：
+
+```bash
+cp .env.dev.example .env.dev
+./scripts/run-dev.sh
+```
+
+这样 Docker 常驻实例和本地开发实例不会共用同一个 SQLite 库。
+
 升级：
 
 ```bash

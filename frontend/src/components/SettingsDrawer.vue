@@ -175,10 +175,13 @@
             </div>
             <template v-if="appStore.canCheckVersionUpdate">
               <div
-                class="status-card"
-                :class="{ accent: appStore.hasVersionUpdateReminder, muted: appStore.versionUpdateLoading }"
+                class="status-card deploy-status-card"
+                :class="{ muted: appStore.versionUpdateLoading, 'deploy-status-card-active': appStore.hasVersionUpdateReminder }"
               >
-                <span>{{ versionUpdateTitle }}</span>
+                <div class="status-card-header">
+                  <span>{{ versionUpdateTitle }}</span>
+                  <span v-if="appStore.versionUpdate?.updateAvailable" class="status-badge">需手动部署</span>
+                </div>
                 <small>{{ versionUpdateMessage }}</small>
               </div>
               <div class="btn-group version-actions">
@@ -197,16 +200,16 @@
                 </button>
               </div>
             </template>
-            <div v-if="appStore.pwaUpdateAvailable" class="status-card accent">
-              <span>&#21457;&#29616;&#26032;&#29256;&#26412;</span>
-              <small>&#21047;&#26032;&#21518;&#21487;&#20351;&#29992;&#26368;&#26032;&#31163;&#32447;&#36164;&#28304;</small>
+            <div v-if="appStore.pwaUpdateAvailable" class="status-card accent frontend-update-card">
+              <span>发现前端缓存更新</span>
+              <small>仅刷新浏览器里的前端资源，不会更新 Docker 或服务端。</small>
             </div>
             <div class="btn-group">
               <button class="action-btn" :disabled="!appStore.deferredInstallPrompt" @click="handleInstallPwa">
                 &#23433;&#35013;&#21040;&#20027;&#23631;&#24149;
               </button>
               <button class="action-btn primary" :disabled="!appStore.pwaUpdateAvailable" @click="handleApplyUpdate">
-                &#26356;&#26032;&#24212;&#29992;
+                应用前端更新
               </button>
             </div>
           </section>
@@ -368,10 +371,10 @@ const versionUpdateMessage = computed(() => {
   if (!info) return '管理员可检查 GitHub Release，发现新版后会在设置入口提示。'
   if (info.error && !info.latestVersion) return info.error
   if (info.updateAvailable && info.shouldRemind) {
-    return `当前 ${info.currentVersion}，最新 ${info.latestVersion}。`
+    return `当前 ${info.currentVersion}，最新 ${info.latestVersion}。请查看 Release 并手动更新 Docker / 服务端。`
   }
   if (info.updateAvailable) {
-    return `当前 ${info.currentVersion}，最新 ${info.latestVersion}，本版本已设置不再提醒。`
+    return `当前 ${info.currentVersion}，最新 ${info.latestVersion}，本版本已设置不再提醒。请查看 Release 并手动更新 Docker / 服务端。`
   }
   if (info.error) return `当前 ${info.currentVersion}，上次检查失败：${info.error}`
   return `当前 ${info.currentVersion}。`
@@ -486,7 +489,7 @@ async function handleInstallPwa() {
 function handleApplyUpdate() {
   const ok = appStore.applyPwaUpdate()
   if (!ok) {
-    appStore.showToast('\u5f53\u524d\u6ca1\u6709\u53ef\u5e94\u7528\u7684\u65b0\u7248\u672c', 'warning')
+    appStore.showToast('当前没有可应用的前端缓存更新', 'warning')
   }
 }
 
@@ -781,6 +784,13 @@ async function handleCheckVersionUpdate() {
   font-weight: 600;
 }
 
+.status-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
 .status-card small {
   color: var(--color-text-tertiary);
 }
@@ -788,6 +798,30 @@ async function handleCheckVersionUpdate() {
 .status-card.accent {
   background: rgba(201, 127, 58, 0.12);
   border: 1px solid rgba(201, 127, 58, 0.18);
+}
+
+.deploy-status-card {
+  border: 1px solid var(--color-border-light);
+  background: linear-gradient(180deg, rgba(201, 127, 58, 0.08), rgba(201, 127, 58, 0.03));
+}
+
+.deploy-status-card-active {
+  border-color: rgba(201, 127, 58, 0.28);
+}
+
+.frontend-update-card {
+  box-shadow: inset 0 0 0 1px rgba(201, 127, 58, 0.12);
+}
+
+.status-badge {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: rgba(201, 127, 58, 0.16);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
 }
 
 .status-card.muted {

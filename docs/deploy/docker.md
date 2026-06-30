@@ -8,6 +8,7 @@ This document is the single Docker runbook for Reader Next.
 Dockerfile                         # canonical image build entrypoint
 deploy/
   compose.yml                      # simple user deployment
+  compose.local.yml                # local always-on container bound to repo storage/
   Caddyfile                        # optional Caddy reverse proxy config
   compose.caddy.yml                # production sample with Caddy
   env.docker.example               # deploy/compose.yml environment template
@@ -56,6 +57,28 @@ Runtime contract:
 - Static frontend: `/app/web/dist`.
 - Default database URL: `sqlite:/app/storage/reader.db?mode=rwc`.
 - Secrets stay in `.env.docker` or `.env.prod`; never bake `SECURE_KEY` or `INVITE_CODE` into the image.
+
+## Local dual-db workflow
+
+If you want an always-on local container for day-to-day reading while keeping development writes isolated, run:
+
+```bash
+docker compose -f deploy/compose.local.yml up -d
+```
+
+Contract:
+
+- Host port defaults to `28080`.
+- Repo `storage/` is bind-mounted into `/app/storage`.
+- The container uses the repo's current `storage/reader.db`.
+- Local development should use a separate db such as `dev-storage/reader.db`.
+
+Recommended dev startup:
+
+```bash
+cp .env.dev.example .env.dev
+./scripts/run-dev.sh
+```
 
 ## Production sample with Caddy
 

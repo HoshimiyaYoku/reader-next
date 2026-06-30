@@ -1,5 +1,6 @@
 # Environment variables (contains secrets)
 .env
+.env.dev
 AGENTS.local.md
 
 # Rust build artifacts
@@ -22,6 +23,7 @@ Thumbs.db
 
 # Storage data (if contains user data)
 /storage/
+/dev-storage/
 /storage-docker/
 
 release-assets/
@@ -36,6 +38,7 @@ test-results/
 # Local agent secrets/context
 AGENTS.local.md
 /storage-docker/
+/dev-storage/
 
 # Local agent tooling
 .agents/

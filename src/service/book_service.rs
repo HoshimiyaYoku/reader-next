@@ -351,6 +351,18 @@ impl BookService {
             .filter(|v| !v.trim().is_empty())
             .ok_or_else(|| AppError::BadRequest("missing loginUrl".to_string()))?;
 
+        if let Some(target_url) = resolve_login_preview_target(source)? {
+            let body_html = build_login_preview_html(source, &target_url).unwrap_or_default();
+            return Ok(serde_json::json!({
+                "success": true,
+                "status": 200,
+                "url": target_url,
+                "checkResult": "脚本型 loginUrl：已提取登录入口，未执行 App 专用 JS",
+                "bodyPreview": "",
+                "bodyHtml": body_html
+            }));
+        }
+
         let spec = analyze_url(&login_url, "", 1, &source.book_source_url, source)?;
 
         let res = self.fetch_with_rate(source, spec).await?;
@@ -1257,6 +1269,348 @@ fn parse_window_rate(rate: &str) -> Option<(usize, u64)> {
     Some((limit, window))
 }
 
+fn resolve_login_preview_target(source: &BookSource) -> Result<Option<String>, AppError> {
+    let Some(login_url) = source
+        .login_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    else {
+        return Ok(None);
+    };
+    let script = login_url.strip_prefix("@js:").unwrap_or(login_url).trim();
+    if !looks_like_login_script(script) {
+        return Ok(None);
+    }
+    let search_area = extract_login_function_body(script).unwrap_or(script);
+    let target_expression = extract_start_browser_argument(search_area)
+        .or_else(|| extract_login_url_assignment(search_area));
+    let Some(target_expression) = target_expression else {
+        return Err(AppError::BadRequest(
+            "脚本型 loginUrl 暂不支持自动执行：未找到登录页或登录接口入口".to_string(),
+        ));
+    };
+    let Some(target) = eval_login_url_expression(&target_expression, &source.book_source_url)
+    else {
+        return Err(AppError::BadRequest(
+            "脚本型 loginUrl 暂不支持自动执行：无法解析登录页或登录接口入口".to_string(),
+        ));
+    };
+    let base = normalize_source_url(&source.book_source_url);
+    url::Url::parse(&base)
+        .and_then(|base| base.join(&target))
+        .map(|url| Some(url.to_string()))
+        .map_err(|e| AppError::BadRequest(format!("invalid login target url: {}", e)))
+}
+
+fn build_login_preview_html(source: &BookSource, target_url: &str) -> Option<String> {
+    let login_ui = source.login_ui.as_deref()?.trim();
+    if login_ui.is_empty() || !login_ui.contains("邮箱") || !login_ui.contains("密码") {
+        return None;
+    }
+    let target = html_escape_attr(target_url);
+    let title = html_escape_text(&source.book_source_name);
+    Some(format!(
+        r#"<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    :root {{ color-scheme: light dark; }}
+    body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; font: 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #171717; color: #f5f5f5; }}
+    main {{ width: min(420px, calc(100vw - 40px)); padding: 28px; border: 1px solid #333; border-radius: 18px; background: #202020; box-shadow: 0 18px 50px rgba(0,0,0,.28); }}
+    h1 {{ margin: 0 0 6px; font-size: 22px; }}
+    p {{ margin: 0 0 20px; color: #aaa; line-height: 1.6; }}
+    label {{ display: block; margin: 14px 0 6px; color: #ddd; }}
+    input {{ width: 100%; box-sizing: border-box; padding: 12px 13px; border-radius: 12px; border: 1px solid #3a3a3a; background: #111; color: #fff; font: inherit; }}
+    button {{ margin-top: 18px; width: 100%; padding: 12px 14px; border: 0; border-radius: 12px; background: #b87822; color: white; font: inherit; font-weight: 700; cursor: pointer; }}
+    pre {{ margin-top: 18px; white-space: pre-wrap; word-break: break-word; color: #d7ffd7; background: #101010; border-radius: 12px; padding: 12px; }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>{title}</h1>
+    <p>此书源使用表单登录。账号密码只会提交给：<br>{target}</p>
+    <form id="login-form">
+      <label>邮箱</label>
+      <input name="email" type="email" autocomplete="username" required>
+      <label>密码</label>
+      <input name="password" type="password" autocomplete="current-password" required>
+      <button type="submit">登录</button>
+    </form>
+    <pre id="result"></pre>
+  </main>
+  <script>
+    const form = document.getElementById('login-form');
+    const result = document.getElementById('result');
+    form.addEventListener('submit', async (event) => {{
+      event.preventDefault();
+      result.textContent = '正在登录...';
+      const body = new URLSearchParams(new FormData(form));
+      try {{
+        const res = await fetch("{target}", {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }},
+          body
+        }});
+        const text = await res.text();
+        try {{
+          const data = JSON.parse(text);
+          const apiKey = data && data.data && data.data.user && data.data.user.api_key;
+          result.textContent = apiKey
+            ? '登录成功。api_key：\n' + apiKey + '\n\n完整响应：\n' + JSON.stringify(data, null, 2)
+            : JSON.stringify(data, null, 2);
+        }} catch (_e) {{
+          result.textContent = text;
+        }}
+      }} catch (e) {{
+        result.textContent = '登录请求失败：' + (e && e.message ? e.message : e);
+      }}
+    }});
+  </script>
+</body>
+</html>"#
+    ))
+}
+
+fn html_escape_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn html_escape_attr(value: &str) -> String {
+    html_escape_text(value)
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+fn looks_like_login_script(value: &str) -> bool {
+    let trimmed = value.trim_start();
+    trimmed.starts_with("function")
+        || trimmed.starts_with("(()")
+        || trimmed.starts_with("(function")
+        || trimmed.contains("java.startBrowserAwait")
+        || trimmed.contains("cookie.getCookie")
+}
+
+fn extract_login_function_body(script: &str) -> Option<&str> {
+    let function_idx = script.find("function login")?;
+    let after_function = &script[function_idx..];
+    let params_start = after_function.find('(')? + function_idx;
+    let params_end = find_matching_delimiter(script, params_start, '(', ')')?;
+    let body_start = script[params_end + 1..]
+        .char_indices()
+        .find_map(|(idx, ch)| match ch {
+            '{' | '<' => Some((params_end + 1 + idx, ch)),
+            ch if ch.is_whitespace() => None,
+            _ => None,
+        })?;
+    let (open_idx, open_ch) = body_start;
+    let close_ch = if open_ch == '{' { '}' } else { '>' };
+    let close_idx = find_matching_delimiter(script, open_idx, open_ch, close_ch)?;
+    Some(&script[open_idx + open_ch.len_utf8()..close_idx])
+}
+
+fn find_matching_delimiter(
+    text: &str,
+    open_idx: usize,
+    open_ch: char,
+    close_ch: char,
+) -> Option<usize> {
+    let mut quote = None;
+    let mut escaped = false;
+    let mut depth = 0usize;
+    for (idx, ch) in text[open_idx..].char_indices() {
+        let absolute = open_idx + idx;
+        if let Some(q) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' | '`' => quote = Some(ch),
+            ch if ch == open_ch => depth += 1,
+            ch if ch == close_ch => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(absolute);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn extract_start_browser_argument(script: &str) -> Option<String> {
+    let call = "startBrowserAwait";
+    let start = script.find(call)? + call.len();
+    let open = script[start..].find('(')? + start;
+    let mut quote = None;
+    let mut escaped = false;
+    let mut depth = 0usize;
+    let mut end = open + 1;
+    for (idx, ch) in script[open + 1..].char_indices() {
+        let absolute = open + 1 + idx;
+        if let Some(q) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' | '`' => quote = Some(ch),
+            '(' => depth += 1,
+            ')' if depth == 0 => {
+                end = absolute;
+                break;
+            }
+            ')' => depth -= 1,
+            ',' if depth == 0 => {
+                end = absolute;
+                break;
+            }
+            _ => {}
+        }
+    }
+    let argument = script[open + 1..end].trim();
+    (!argument.is_empty()).then(|| argument.to_string())
+}
+
+fn extract_login_url_assignment(script: &str) -> Option<String> {
+    for marker in ["const url", "let url", "var url"] {
+        if let Some(expression) = extract_assignment_expression(script, marker) {
+            return Some(expression);
+        }
+    }
+    None
+}
+
+fn extract_assignment_expression(script: &str, marker: &str) -> Option<String> {
+    let marker_idx = script.find(marker)?;
+    let after_marker = &script[marker_idx + marker.len()..];
+    let equals_idx = after_marker.find('=')? + marker_idx + marker.len();
+    let expression_start = equals_idx + 1;
+    let mut quote = None;
+    let mut escaped = false;
+    for (idx, ch) in script[expression_start..].char_indices() {
+        let absolute = expression_start + idx;
+        if let Some(q) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' | '`' => quote = Some(ch),
+            ';' | '\n' | '\r' => {
+                let expression = script[expression_start..absolute].trim();
+                return (!expression.is_empty()).then(|| expression.to_string());
+            }
+            _ => {}
+        }
+    }
+    let expression = script[expression_start..].trim();
+    (!expression.is_empty()).then(|| expression.to_string())
+}
+
+fn eval_login_url_expression(expression: &str, source_url: &str) -> Option<String> {
+    let mut output = String::new();
+    for part in split_js_concat(expression) {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        if matches!(
+            part,
+            "source.bookSourceUrl"
+                | "String(source.bookSourceUrl)"
+                | "baseUrl"
+                | "host"
+                | "getServerHost()"
+        ) {
+            output.push_str(source_url);
+            continue;
+        }
+        if let Some(value) = decode_js_string_literal(part) {
+            output.push_str(&value);
+            continue;
+        }
+        return None;
+    }
+    (!output.trim().is_empty()).then_some(output)
+}
+
+fn split_js_concat(expression: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut quote = None;
+    let mut escaped = false;
+    for (idx, ch) in expression.char_indices() {
+        if let Some(q) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' | '`' => quote = Some(ch),
+            '+' => {
+                parts.push(&expression[start..idx]);
+                start = idx + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    parts.push(&expression[start..]);
+    parts
+}
+
+fn decode_js_string_literal(value: &str) -> Option<String> {
+    let value = value.trim();
+    let quote = value.chars().next()?;
+    if !matches!(quote, '\'' | '"' | '`') || !value.ends_with(quote) {
+        return None;
+    }
+    let inner = &value[quote.len_utf8()..value.len() - quote.len_utf8()];
+    let mut output = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            output.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => output.push('\n'),
+            Some('r') => output.push('\r'),
+            Some('t') => output.push('\t'),
+            Some(next) => output.push(next),
+            None => output.push('\\'),
+        }
+    }
+    Some(output)
+}
+
 fn should_follow_content_page(chapter_url: &str, current_url: &str, next_url: &str) -> bool {
     let next_url = strip_fragment(next_url);
     let current_url = strip_fragment(current_url);
@@ -1645,5 +1999,69 @@ mod tests {
 
         let _ = tokio::fs::remove_dir_all(&storage_dir).await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn login_script_start_browser_url_uses_source_base_url() {
+        let source = BookSource {
+            book_source_name: "Script login".to_string(),
+            book_source_url: "https://ycoo.net".to_string(),
+            login_url: Some(
+                r#"function login() {
+                    var baseUrl = String(source.bookSourceUrl);
+                    java.startBrowserAwait(baseUrl + '/user', '登录');
+                }"#
+                .to_string(),
+            ),
+            ..Default::default()
+        };
+
+        let login_target = resolve_login_preview_target(&source).unwrap();
+
+        assert_eq!(login_target.as_deref(), Some("https://ycoo.net/user"));
+    }
+
+    #[test]
+    fn login_script_ignores_helper_start_browser_calls_before_login_function() {
+        let source = BookSource {
+            book_source_name: "Script login".to_string(),
+            book_source_url: "https://dns.vossc.com".to_string(),
+            login_url: Some(
+                r#"function help() {
+                    java.startBrowserAwait('https://example.test/help', '帮助');
+                }
+                function login() {
+                    java.startBrowserAwait(source.bookSourceUrl + '/login', '登录');
+                }"#
+                .to_string(),
+            ),
+            ..Default::default()
+        };
+
+        let login_target = resolve_login_preview_target(&source).unwrap();
+
+        assert_eq!(login_target.as_deref(), Some("https://dns.vossc.com/login"));
+    }
+
+    #[test]
+    fn login_script_uses_login_url_assignment_when_no_browser_call_exists() {
+        let source = BookSource {
+            book_source_name: "Script login".to_string(),
+            book_source_url: "https://v1.vossc.com".to_string(),
+            login_url: Some(
+                r#"function login() {
+                    const host = getServerHost();
+                    const url = host + '/login';
+                    const body = "email=" + encodeURIComponent(email);
+                    const response = java.ajax(url + "," + JSON.stringify({ method: "POST", body: body }));
+                }"#
+                .to_string(),
+            ),
+            ..Default::default()
+        };
+
+        let login_target = resolve_login_preview_target(&source).unwrap();
+
+        assert_eq!(login_target.as_deref(), Some("https://v1.vossc.com/login"));
     }
 }

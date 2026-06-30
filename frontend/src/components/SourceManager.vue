@@ -110,7 +110,7 @@
               </svg>
             </button>
           </div>
-          <iframe class="login-preview-frame" :src="loginPreviewFrameUrl"></iframe>
+          <iframe class="login-preview-frame" :src="loginPreviewFrameUrl" :srcdoc="loginPreviewFrameHtml"></iframe>
         </div>
       </div>
     </Transition>
@@ -184,6 +184,7 @@ const sourceLoginLoading = ref(false)
 const loginPreviewVisible = ref(false)
 const loginPreviewUrl = ref('')
 const loginPreviewFrameUrl = ref('')
+const loginPreviewFrameHtml = ref('')
 
 const groupList = computed(() => getBookSourceGroups(sources.value))
 
@@ -456,8 +457,14 @@ async function handleSourceLogin() {
     const check = typeof result.checkResult === 'string' && result.checkResult.trim()
       ? `，校验结果：${result.checkResult}`
       : ''
-    if (result.url?.trim()) {
+    if (result.bodyHtml?.trim()) {
+      loginPreviewUrl.value = result.url?.trim() || '内置书源登录表单'
+      loginPreviewFrameHtml.value = result.bodyHtml
+      loginPreviewFrameUrl.value = ''
+      loginPreviewVisible.value = true
+    } else if (result.url?.trim()) {
       loginPreviewUrl.value = result.url
+      loginPreviewFrameHtml.value = ''
       loginPreviewFrameUrl.value = buildLoginProxyUrl(parsed.bookSourceUrl, result.url)
       loginPreviewVisible.value = true
     }
