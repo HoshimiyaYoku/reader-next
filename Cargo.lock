@@ -2350,6 +2350,7 @@ dependencies = [
  "hex",
  "http",
  "http-body-util",
+ "json5",
  "jsonpath_lib",
  "lopdf",
  "md-5",

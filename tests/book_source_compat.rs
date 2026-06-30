@@ -243,6 +243,30 @@ line2"
 }
 
 #[test]
+fn url_analyzer_accepts_js_object_style_url_options() {
+    let source = BookSource {
+        book_source_name: "JS object options".to_string(),
+        book_source_url: "https://login.example".to_string(),
+        ..Default::default()
+    };
+
+    let spec = analyze_url(
+        r#"https://login.example/signin,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'a=1',}"#,
+        "",
+        1,
+        &source.book_source_url,
+        &source,
+    )
+    .unwrap();
+
+    assert_eq!(spec.method, HttpMethod::POST);
+    assert_eq!(spec.body.as_deref(), Some("a=1"));
+    assert!(spec.headers.iter().any(|(name, value)| {
+        name == "Content-Type" && value == "application/x-www-form-urlencoded"
+    }));
+}
+
+#[test]
 fn url_analyzer_supports_single_brace_key_and_page_placeholders() {
     let source = BookSource {
         book_source_name: "Legacy placeholders".to_string(),

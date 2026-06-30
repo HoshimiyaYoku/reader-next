@@ -127,6 +127,8 @@ fn parse_url_options(options: &str) -> Result<Value, AppError> {
     let trimmed = options.trim();
     serde_json::from_str::<Value>(trimmed)
         .or_else(|_| serde_json::from_str::<Value>(&escape_control_chars_in_json_strings(trimmed)))
+        .or_else(|_| json5::from_str::<Value>(trimmed))
+        .or_else(|_| json5::from_str::<Value>(&escape_control_chars_in_json_strings(trimmed)))
         .map_err(|e| AppError::BadRequest(format!("invalid url options: {}", e)))
 }
 
