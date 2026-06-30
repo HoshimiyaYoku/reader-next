@@ -30,6 +30,14 @@ vi.mock('../utils/recentBooks', () => ({
 describe('bookshelf search state', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    const storage = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn((key: string) => storage.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => storage.set(key, value)),
+      removeItem: vi.fn((key: string) => storage.delete(key)),
+      clear: vi.fn(() => storage.clear()),
+    })
+    localStorage.clear()
     vi.mocked(getBookshelfWithCacheInfo).mockResolvedValue([])
     vi.mocked(listBrowserCacheSummary).mockResolvedValue([])
   })
@@ -82,5 +90,49 @@ describe('bookshelf search state', () => {
     expect(store.searchKey).toBe('星门')
     expect(store.searchScope).toBe('source')
     expect(store.searchSourceUrl).toBe('https://m.cuoceng.com')
+  })
+
+  it('remembers the last search scope for later searches', () => {
+    const store = useBookshelfStore()
+
+    store.searchScope = 'all'
+    store.persistSearchPreferences()
+    store.clearSearch()
+    store.startSearch('星门')
+
+    expect(store.searchScope).toBe('all')
+    expect(store.searchSourceUrl).toBe('')
+    expect(store.searchGroup).toBe('')
+  })
+
+  it('reuses cached search results for the same key and scope', () => {
+    const store = useBookshelfStore()
+    const book = {
+      name: '星门',
+      author: '老鹰吃小鸡',
+      bookUrl: 'https://book.example/xm',
+      origin: 'https://source.example',
+    }
+
+    store.cacheSearchResults({
+      key: '星门',
+      scope: 'source',
+      group: '',
+      sourceUrl: 'https://source.example',
+      results: [book],
+    })
+
+    expect(store.getCachedSearchResults({
+      key: '星门',
+      scope: 'source',
+      group: '',
+      sourceUrl: 'https://source.example',
+    })).toEqual([book])
+    expect(store.getCachedSearchResults({
+      key: '星门',
+      scope: 'all',
+      group: '',
+      sourceUrl: '',
+    })).toBeNull()
   })
 })

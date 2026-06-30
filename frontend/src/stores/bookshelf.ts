@@ -15,6 +15,53 @@ import { deleteBrowserBookCache, listBrowserCacheSummary } from '../utils/browse
 import { isLocalTxtBook } from '../utils/localBook'
 import { clearRecentReadBooks, getRecentReadBookKey, loadRecentReadBooks, removeRecentReadBook } from '../utils/recentBooks'
 
+type SearchScope = 'all' | 'group' | 'source'
+
+type SearchPreferences = {
+  scope: SearchScope
+  group: string
+  sourceUrl: string
+}
+
+type SearchCacheParams = SearchPreferences & {
+  key: string
+}
+
+type SearchCacheEntry = SearchCacheParams & {
+  results: SearchBook[]
+  updatedAt: number
+}
+
+const SEARCH_PREFERENCES_KEY = 'reader-search-preferences'
+const SEARCH_CACHE_TTL = 30 * 60 * 1000
+const SEARCH_CACHE_LIMIT = 20
+
+function loadSearchPreferences(): SearchPreferences {
+  try {
+    const raw = localStorage.getItem(SEARCH_PREFERENCES_KEY)
+    const parsed = raw ? JSON.parse(raw) as Partial<SearchPreferences> : {}
+    const scope = parsed.scope === 'all' || parsed.scope === 'group' || parsed.scope === 'source'
+      ? parsed.scope
+      : 'source'
+    return {
+      scope,
+      group: typeof parsed.group === 'string' ? parsed.group : '',
+      sourceUrl: typeof parsed.sourceUrl === 'string' ? parsed.sourceUrl : '',
+    }
+  } catch {
+    return { scope: 'source', group: '', sourceUrl: '' }
+  }
+}
+
+function buildSearchCacheKey(params: SearchCacheParams) {
+  return JSON.stringify({
+    key: params.key.trim(),
+    scope: params.scope,
+    group: params.group || '',
+    sourceUrl: params.sourceUrl || '',
+  })
+}
+
 export const useBookshelfStore = defineStore('bookshelf', () => {
   // ─── Bookshelf ───
   const books = ref<Book[]>([])
@@ -150,12 +197,23 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
   const searchResults = ref<SearchBook[]>([])
   const isSearching = ref(false)
   const searchKey = ref('')
-  const searchScope = ref<'all' | 'group' | 'source'>('source')
+  const searchPreferences = loadSearchPreferences()
+  const searchScope = ref<SearchScope>(searchPreferences.scope)
   const searchGroup = ref('')
   const searchSourceUrl = ref('')
+  const searchCache = ref<SearchCacheEntry[]>([])
+
+  function persistSearchPreferences() {
+    const preferences: SearchPreferences = {
+      scope: searchScope.value,
+      group: searchGroup.value,
+      sourceUrl: searchSourceUrl.value,
+    }
+    localStorage.setItem(SEARCH_PREFERENCES_KEY, JSON.stringify(preferences))
+  }
 
   function startSearch(key: string, options: {
-    scope?: 'all' | 'group' | 'source'
+    scope?: SearchScope
     group?: string
     sourceUrl?: string
   } = {}) {
@@ -165,19 +223,46 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
       return
     }
 
-    searchScope.value = options.scope || 'source'
-    searchGroup.value = options.group || ''
-    searchSourceUrl.value = options.sourceUrl || ''
+    const saved = loadSearchPreferences()
+    searchScope.value = options.scope || saved.scope
+    searchGroup.value = options.group ?? (searchScope.value === 'group' ? saved.group : '')
+    searchSourceUrl.value = options.sourceUrl ?? (searchScope.value === 'source' ? saved.sourceUrl : '')
     searchKey.value = nextKey
+    persistSearchPreferences()
   }
 
   function clearSearch() {
     searchResults.value = []
     searchKey.value = ''
     isSearching.value = false
-    searchScope.value = 'source'
-    searchGroup.value = ''
-    searchSourceUrl.value = ''
+  }
+
+  function getCachedSearchResults(params: SearchCacheParams) {
+    const cacheKey = buildSearchCacheKey(params)
+    const now = Date.now()
+    const entry = searchCache.value.find((item) => buildSearchCacheKey(item) === cacheKey)
+    if (!entry) return null
+    if (now - entry.updatedAt > SEARCH_CACHE_TTL) {
+      searchCache.value = searchCache.value.filter((item) => item !== entry)
+      return null
+    }
+    return entry.results.slice()
+  }
+
+  function cacheSearchResults(params: SearchCacheParams & { results: SearchBook[] }) {
+    const entry: SearchCacheEntry = {
+      key: params.key.trim(),
+      scope: params.scope,
+      group: params.group || '',
+      sourceUrl: params.sourceUrl || '',
+      results: params.results.slice(),
+      updatedAt: Date.now(),
+    }
+    const cacheKey = buildSearchCacheKey(entry)
+    searchCache.value = [
+      entry,
+      ...searchCache.value.filter((item) => buildSearchCacheKey(item) !== cacheKey),
+    ].slice(0, SEARCH_CACHE_LIMIT)
   }
 
   const isSearchMode = computed(() => searchKey.value.length > 0)
@@ -279,6 +364,7 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
     fetchGroups, saveGroup, removeGroup,
     searchResults, isSearching, searchKey,
     searchScope, searchGroup, searchSourceUrl, startSearch, clearSearch, isSearchMode,
+    persistSearchPreferences, getCachedSearchResults, cacheSearchResults,
     editMode,
     selectedBookUrls, toggleSelection, selectAll, clearSelection,
     bulkDelete, bulkSetGroup, reorderBooks, moveBookToFront,

@@ -6,14 +6,17 @@ import type { BookSource } from '../types'
 export const useSourceStore = defineStore('source', () => {
   const sources = ref<BookSource[]>([])
   const loading = ref(false)
+  const loaded = ref(false)
   let loadingTask: Promise<void> | null = null
 
-  async function fetchSources() {
+  async function fetchSources(options: { force?: boolean } = {}) {
+    if (loaded.value && !options.force) return
     if (loadingTask) return loadingTask
     loading.value = true
     loadingTask = getBookSources()
       .then((list) => {
         sources.value = list
+        loaded.value = true
       })
       .finally(() => {
         loading.value = false
@@ -25,6 +28,7 @@ export const useSourceStore = defineStore('source', () => {
   return {
     sources,
     loading,
+    loaded,
     fetchSources
   }
 })

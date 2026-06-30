@@ -114,10 +114,11 @@ function handleSearch() {
   const value = searchValue.value.trim()
   if (!value) return
 
-  shelfStore.startSearch(value, {
-    scope: 'source',
-    sourceUrl: route.path === '/explore' && !exploreStore.isGlobalMode ? exploreStore.activeSourceUrl : '',
-  })
+  const exploreSourceUrl = route.path === '/explore' && !exploreStore.isGlobalMode ? exploreStore.activeSourceUrl : ''
+  shelfStore.startSearch(value, exploreSourceUrl
+    ? { scope: 'source', sourceUrl: exploreSourceUrl }
+    : {}
+  )
 
   if (route.path !== '/') {
     router.push('/')

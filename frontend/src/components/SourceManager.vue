@@ -120,7 +120,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import {
-  getBookSources,
   deleteBookSource,
   deleteBookSources,
   deleteInvalidBookSources,
@@ -132,6 +131,7 @@ import {
   readSourceFile,
 } from '../api/source'
 import { useAppStore } from '../stores/app'
+import { useSourceStore } from '../stores/source'
 import type { BookSource } from '../types'
 import {
   filterBookSources,
@@ -147,6 +147,7 @@ import SourceFilterBar from './source-manager/SourceFilterBar.vue'
 import SourceList from './source-manager/SourceList.vue'
 import SourceManagerHeader from './source-manager/SourceManagerHeader.vue'
 import SourceSubscriptionPanel from './source-manager/SourceSubscriptionPanel.vue'
+import { storeToRefs } from 'pinia'
 
 type SourceSubscription = {
   url: string
@@ -164,9 +165,9 @@ const emit = defineEmits<{
 }>()
 
 const appStore = useAppStore()
+const sourceStore = useSourceStore()
+const { sources, loading } = storeToRefs(sourceStore)
 
-const sources = ref<BookSource[]>([])
-const loading = ref(false)
 const testingSources = ref(false)
 const filterText = ref('')
 const filterGroup = ref('')
@@ -238,15 +239,12 @@ function persistSubscriptions() {
   localStorage.setItem(SUBSCRIPTION_KEY, JSON.stringify(subscriptions.value))
 }
 
-async function loadSources() {
-  loading.value = true
+async function loadSources(force = true) {
   try {
-    sources.value = await getBookSources()
+    await sourceStore.fetchSources({ force })
     pruneSelection()
   } catch (e: unknown) {
     appStore.showToast((e as Error).message, 'error')
-  } finally {
-    loading.value = false
   }
 }
 
@@ -583,8 +581,8 @@ function close() {
 
 watch(() => props.modelValue, (v) => {
   if (v) {
-    if (sources.value.length === 0) {
-      loadSources()
+    if (!sourceStore.loaded) {
+      loadSources(false)
     }
     if (!editingSource.value && !editorText.value.trim()) {
       createSource()

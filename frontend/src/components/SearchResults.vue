@@ -176,6 +176,13 @@ function ensureSearchSelection() {
 
 function doSearch(key: string) {
   closeEventSource()
+  const searchParams = {
+    key,
+    scope: searchScope.value,
+    group: searchScope.value === 'group' ? selectedGroup.value : '',
+    sourceUrl: searchScope.value === 'source' ? selectedSourceUrl.value : '',
+  }
+  shelfStore.persistSearchPreferences()
 
   if (searchScope.value === 'group' && !selectedGroup.value) {
     shelfStore.searchResults = []
@@ -185,6 +192,13 @@ function doSearch(key: string) {
 
   if (searchScope.value === 'source' && !selectedSourceUrl.value) {
     shelfStore.searchResults = []
+    shelfStore.isSearching = false
+    return
+  }
+
+  const cachedResults = shelfStore.getCachedSearchResults(searchParams)
+  if (cachedResults) {
+    shelfStore.searchResults = cachedResults
     shelfStore.isSearching = false
     return
   }
@@ -212,6 +226,10 @@ function doSearch(key: string) {
 
   eventSource.addEventListener('end', () => {
     shelfStore.isSearching = false
+    shelfStore.cacheSearchResults({
+      ...searchParams,
+      results: shelfStore.searchResults,
+    })
     closeEventSource()
   })
 
@@ -235,6 +253,7 @@ watch(
   [() => shelfStore.searchKey, searchScope, selectedGroup, selectedSourceUrl],
   ([key, scope, group, sourceUrl]) => {
     ensureSearchSelection()
+    shelfStore.persistSearchPreferences()
     if (key) {
       // 如果搜索条件没变且已有结果，不重新搜索
       const conditionsUnchanged =
@@ -265,6 +284,7 @@ watch(
 
 watch([searchScope, sourceGroups, sourceOptions], () => {
   ensureSearchSelection()
+  shelfStore.persistSearchPreferences()
 }, { immediate: true })
 
 onMounted(async () => {
