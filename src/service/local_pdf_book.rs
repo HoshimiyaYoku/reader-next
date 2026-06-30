@@ -1,7 +1,8 @@
 use crate::error::error::AppError;
 use crate::model::{book::Book, book_chapter::BookChapter};
-use lopdf::Document;
+use lopdf::{content::Content, Document, Encoding, Object};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
@@ -266,6 +267,12 @@ fn extract_pdf_text(bytes: &[u8]) -> Result<(String, String, Vec<String>), AppEr
     let doc = Document::load_mem(bytes)
         .map_err(|e| AppError::BadRequest(format!("PDF 解析失败: {}", e)))?;
 
+    extract_pdf_text_from_document(&doc)
+}
+
+fn extract_pdf_text_from_document(doc: &Document) -> Result<(String, String, Vec<String>), AppError> {
+    let pages_map = doc.get_pages();
+
     let mut title = String::new();
     let mut author = String::new();
 
@@ -296,17 +303,120 @@ fn extract_pdf_text(bytes: &[u8]) -> Result<(String, String, Vec<String>), AppEr
         }
     }
 
-    let pages = doc
-        .get_pages()
+    let mut had_lossy_page = false;
+    let mut has_readable_text = false;
+    let pages = pages_map
         .keys()
         .map(|page_num| {
-            doc.extract_text(&[*page_num])
-                .map(|text| text.trim().to_string())
-                .map_err(|e| AppError::BadRequest(format!("PDF 文本提取失败: {}", e)))
+            let (text, was_lossy) = extract_pdf_page_text_lossy(doc, *page_num)?;
+            had_lossy_page |= was_lossy;
+            has_readable_text |= !text.is_empty();
+            Ok(text)
         })
         .collect::<Result<Vec<_>, AppError>>()?;
 
+    if had_lossy_page && !has_readable_text {
+        return Err(AppError::BadRequest(
+            "PDF 文本提取失败: 文件包含损坏或暂不支持的字体映射，无法提取可读文本".to_string(),
+        ));
+    }
+
     Ok((title, author, pages))
+}
+
+fn extract_pdf_page_text_lossy(doc: &Document, page_num: u32) -> Result<(String, bool), AppError> {
+    let pages = doc.get_pages();
+    let page_id = *pages
+        .get(&page_num)
+        .ok_or_else(|| AppError::BadRequest(format!("PDF 文本提取失败: 找不到第 {} 页", page_num)))?;
+
+    let fonts = doc
+        .get_page_fonts(page_id)
+        .map_err(|e| AppError::BadRequest(format!("PDF 文本提取失败: {}", e)))?;
+    let mut encodings = BTreeMap::new();
+    let mut had_lossy_decode = false;
+
+    for (name, font) in fonts {
+        match font.get_font_encoding(doc) {
+            Ok(encoding) => {
+                encodings.insert(name, encoding);
+            }
+            Err(err) => {
+                had_lossy_decode = true;
+                tracing::warn!(
+                    page = page_num,
+                    font = %String::from_utf8_lossy(&name),
+                    error = %err,
+                    "skip PDF font with invalid encoding"
+                );
+            }
+        }
+    }
+
+    let content_data = doc
+        .get_page_content(page_id)
+        .map_err(|e| AppError::BadRequest(format!("PDF 文本提取失败: {}", e)))?;
+    let content = Content::decode(&content_data)
+        .map_err(|e| AppError::BadRequest(format!("PDF 文本提取失败: {}", e)))?;
+    let mut text = String::new();
+    let mut current_encoding: Option<&Encoding<'_>> = None;
+
+    for operation in &content.operations {
+        match operation.operator.as_ref() {
+            "Tf" => {
+                let current_font = operation
+                    .operands
+                    .first()
+                    .ok_or_else(|| {
+                        AppError::BadRequest("PDF 文本提取失败: 缺少字体操作数".to_string())
+                    })?
+                    .as_name()
+                    .map_err(|e| AppError::BadRequest(format!("PDF 文本提取失败: {}", e)))?;
+                current_encoding = encodings.get(current_font);
+            }
+            "Tj" | "TJ" => {
+                if let Some(encoding) = current_encoding {
+                    if let Err(err) = collect_pdf_operation_text(&mut text, encoding, &operation.operands) {
+                        had_lossy_decode = true;
+                        tracing::warn!(
+                            page = page_num,
+                            error = %err,
+                            "skip undecodable PDF text operation"
+                        );
+                    }
+                }
+            }
+            "ET" => {
+                if !text.ends_with('\n') {
+                    text.push('\n');
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok((text.trim().to_string(), had_lossy_decode))
+}
+
+fn collect_pdf_operation_text(
+    text: &mut String,
+    encoding: &Encoding<'_>,
+    operands: &[Object],
+) -> lopdf::Result<()> {
+    for operand in operands {
+        match operand {
+            Object::String(bytes, _) => {
+                text.push_str(&Document::decode_text(encoding, bytes)?);
+            }
+            Object::Array(arr) => {
+                collect_pdf_operation_text(text, encoding, arr)?;
+                text.push(' ');
+            }
+            Object::Integer(i) if *i < -100 => text.push(' '),
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn pdf_hash_from_url(book_url: &str) -> Result<&str, AppError> {
@@ -332,6 +442,111 @@ fn parse_pdf_chapter_url(chapter_url: &str) -> Result<(String, i32), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lopdf::{content::Operation, dictionary, Stream, StringFormat};
+
+    const VALID_CMAP: &[u8] = b"/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+/CIDSystemInfo
+<< /Registry (Adobe)
+/Ordering (UCS)
+/Supplement 0
+>> def
+/CMapName /Adobe-Identity-UCS def
+/CMapType 2 def
+1 begincodespacerange
+<0000> <FFFF>
+endcodespacerange
+2 beginbfrange
+<0000> <005E> <0020>
+<005F> <0061> [<D83DDE00> <D83DDD27> <D83DDD28>]
+endbfrange
+1 beginbfchar
+<3A51> <D840DC3E>
+endbfchar
+endcmap
+CMapName currentdict /CMap defineresource pop
+end
+end";
+
+    fn build_type0_page(
+        doc: &mut Document,
+        pages_id: lopdf::ObjectId,
+        cmap_bytes: &[u8],
+        encoded_text: Vec<u8>,
+    ) -> lopdf::ObjectId {
+        let cmap_stream_id = doc.add_object(Stream::new(
+            dictionary! {
+                "Length" => cmap_bytes.len() as i64
+            },
+            cmap_bytes.to_vec(),
+        ));
+
+        let font_id = doc.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type0",
+            "BaseFont" => "Ryumin-Light",
+            "Encoding" => "Identity-H",
+            "ToUnicode" => Object::Reference(cmap_stream_id)
+        });
+
+        let resources_id = doc.add_object(dictionary! {
+            "Font" => dictionary! {
+                "F1" => font_id,
+            },
+        });
+
+        let content = Content {
+            operations: vec![
+                Operation::new("BT", vec![]),
+                Operation::new("Tf", vec!["F1".into(), 48.into()]),
+                Operation::new("Td", vec![100.into(), 600.into()]),
+                Operation::new(
+                    "Tj",
+                    vec![Object::String(encoded_text, StringFormat::Hexadecimal)],
+                ),
+                Operation::new("ET", vec![]),
+            ],
+        };
+
+        let content_id = doc.add_object(Stream::new(dictionary! {}, content.encode().unwrap()));
+
+        doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "Resources" => resources_id,
+            "Contents" => content_id,
+            "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+        })
+    }
+
+    fn build_pdf_document_with_pages(
+        page_specs: Vec<(&'static [u8], Vec<u8>)>,
+    ) -> Document {
+        let mut doc = Document::new();
+        let pages_id = doc.new_object_id();
+        let page_count = page_specs.len() as i64;
+        let page_ids: Vec<_> = page_specs
+            .into_iter()
+            .map(|(cmap_bytes, encoded_text)| build_type0_page(&mut doc, pages_id, cmap_bytes, encoded_text))
+            .collect();
+
+        let pages = dictionary! {
+            "Type" => "Pages",
+            "Kids" => page_ids.into_iter().map(Into::into).collect::<Vec<_>>(),
+            "Count" => page_count,
+        };
+        doc.objects.insert(pages_id, Object::Dictionary(pages));
+
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        });
+
+        doc.trailer.set("Root", catalog_id);
+        doc.compress();
+        doc
+    }
 
     #[test]
     fn validate_pdf_accepts_pdf_extension() {
@@ -365,5 +580,36 @@ mod tests {
             "page text was: {:?}",
             pages[0]
         );
+    }
+
+    #[test]
+    fn extract_pdf_text_keeps_readable_pages_when_tounicode_is_broken() {
+        let doc = build_pdf_document_with_pages(vec![
+            (VALID_CMAP, vec![0x00, 0x5F, 0x00, 0x60, 0x00, 0x61]),
+            (b"begincmap\nthis is broken\n", vec![0x00, 0x5F]),
+        ]);
+
+        let (_title, _author, pages) =
+            extract_pdf_text_from_document(&doc).expect("lossy PDF extraction should succeed");
+
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0], "😀🔧🔨");
+        assert_eq!(pages[1], "");
+    }
+
+    #[test]
+    fn extract_pdf_text_rejects_pdf_when_all_pages_are_unreadable() {
+        let doc = build_pdf_document_with_pages(vec![(
+            b"begincmap\nthis is broken\n",
+            vec![0x00, 0x5F],
+        )]);
+
+        let err = extract_pdf_text_from_document(&doc).expect_err("all-broken PDF should fail");
+        match err {
+            AppError::BadRequest(message) => {
+                assert!(message.contains("字体映射"), "message was: {message}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 }
