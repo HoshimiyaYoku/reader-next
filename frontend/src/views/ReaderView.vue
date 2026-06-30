@@ -336,14 +336,88 @@
                   <button class="summary-action" :disabled="savingChapterSummaryConfig || !chapterSummaryConfig?.isAdmin" @click="saveChapterSummaryGenerationSettings">保存 Prompt</button>
                 </div>
               </div>
-              <div class="summary-setting-group">
-                <div class="summary-setting-title">模型</div>
-                <p class="summary-setting-note">摘要使用后端文本模型配置。API Key、Base URL 和模型名在 AI资料中统一管理。</p>
-                <button class="summary-action" type="button" @click="openAiBackendSettings">打开 AI 后端设置</button>
+              <div class="summary-setting-group" data-section="server-model">
+                <div class="summary-setting-title">后端模型</div>
+                <div class="summary-model-status">
+                  <span>{{ aiModelStatusTitle }}</span>
+                  <small>{{ aiModelStatusMessage }}</small>
+                </div>
+                <details class="summary-model-details">
+                  <summary>模型设置</summary>
+                  <div class="summary-model-form">
+                    <label class="summary-switch-line">
+                      <input v-model="aiModelConfig.text.enabled" type="checkbox" />
+                      <span>启用文本模型</span>
+                    </label>
+                    <label class="summary-setting-field">
+                      <span>文本 Base URL</span>
+                      <input v-model="aiModelConfig.text.baseUrl" placeholder="https://api.openai.com" />
+                    </label>
+                    <label class="summary-setting-field">
+                      <span>文本模型</span>
+                      <input v-model="aiModelConfig.text.model" placeholder="gpt-4o-mini" />
+                    </label>
+                    <label class="summary-setting-field">
+                      <span>文本路径</span>
+                      <input v-model="aiModelConfig.text.path" placeholder="/v1/chat/completions" />
+                    </label>
+                    <label class="summary-setting-field">
+                      <span>文本 API Key</span>
+                      <input v-model="aiModelConfig.text.apiKey" type="password" autocomplete="off" />
+                    </label>
+
+                    <label class="summary-switch-line">
+                      <input v-model="aiModelConfig.image.enabled" type="checkbox" />
+                      <span>启用图片模型</span>
+                    </label>
+                    <label class="summary-setting-field">
+                      <span>图片 Base URL</span>
+                      <input v-model="aiModelConfig.image.baseUrl" />
+                    </label>
+                    <label class="summary-setting-field">
+                      <span>图片模型</span>
+                      <input v-model="aiModelConfig.image.model" placeholder="gpt-image-1" />
+                    </label>
+                    <label class="summary-setting-field">
+                      <span>图片路径</span>
+                      <input v-model="aiModelConfig.image.path" placeholder="/v1/images/generations" />
+                    </label>
+                    <label class="summary-setting-field">
+                      <span>图片 API Key</span>
+                      <input v-model="aiModelConfig.image.apiKey" type="password" autocomplete="off" />
+                    </label>
+
+                    <label class="summary-switch-line">
+                      <input v-model="aiModelConfig.speech.enabled" type="checkbox" />
+                      <span>启用语音模型</span>
+                    </label>
+                    <label class="summary-setting-field">
+                      <span>语音 Base URL</span>
+                      <input v-model="aiModelConfig.speech.baseUrl" />
+                    </label>
+                    <label class="summary-setting-field">
+                      <span>语音模型</span>
+                      <input v-model="aiModelConfig.speech.model" placeholder="gpt-4o-mini-tts" />
+                    </label>
+                    <label class="summary-setting-field">
+                      <span>语音路径</span>
+                      <input v-model="aiModelConfig.speech.path" placeholder="/v1/audio/speech" />
+                    </label>
+                    <label class="summary-setting-field">
+                      <span>语音 API Key</span>
+                      <input v-model="aiModelConfig.speech.apiKey" type="password" autocomplete="off" />
+                    </label>
+
+                    <div class="summary-actions compact">
+                      <button class="summary-action" :disabled="!aiModelIsAdmin || aiModelSaving" @click="handleSaveAiModelConfig">
+                        {{ aiModelSaving ? '保存中...' : '保存后端模型' }}
+                      </button>
+                    </div>
+                  </div>
+                </details>
               </div>
             </section>
           </section>
-
           <div
             ref="chapterTextRef"
             class="chapter-text"
@@ -564,14 +638,88 @@
                   <button class="summary-action" :disabled="savingChapterSummaryConfig || !chapterSummaryConfig?.isAdmin" @click="saveChapterSummaryGenerationSettings">保存 Prompt</button>
                 </div>
               </div>
-              <div class="summary-setting-group">
-                <div class="summary-setting-title">模型</div>
-                <p class="summary-setting-note">摘要使用后端文本模型配置。API Key、Base URL 和模型名在 AI资料中统一管理。</p>
-                <button class="summary-action" type="button" @click="openAiBackendSettings">打开 AI 后端设置</button>
+              <div class="summary-setting-group" data-section="server-model">
+                <div class="summary-setting-title">后端模型</div>
+                <div class="summary-model-status">
+                  <span>{{ aiModelStatusTitle }}</span>
+                  <small>{{ aiModelStatusMessage }}</small>
+                </div>
+                <details class="summary-model-details">
+                  <summary>模型设置</summary>
+                  <div class="summary-model-form">
+                    <label class="summary-switch-line">
+                      <input v-model="aiModelConfig.text.enabled" type="checkbox" />
+                      <span>启用文本模型</span>
+                    </label>
+                    <label class="summary-setting-field">
+                      <span>文本 Base URL</span>
+                      <input v-model="aiModelConfig.text.baseUrl" placeholder="https://api.openai.com" />
+                    </label>
+                    <label class="summary-setting-field">
+                      <span>文本模型</span>
+                      <input v-model="aiModelConfig.text.model" placeholder="gpt-4o-mini" />
+                    </label>
+                    <label class="summary-setting-field">
+                      <span>文本路径</span>
+                      <input v-model="aiModelConfig.text.path" placeholder="/v1/chat/completions" />
+                    </label>
+                    <label class="summary-setting-field">
+                      <span>文本 API Key</span>
+                      <input v-model="aiModelConfig.text.apiKey" type="password" autocomplete="off" />
+                    </label>
+
+                    <label class="summary-switch-line">
+                      <input v-model="aiModelConfig.image.enabled" type="checkbox" />
+                      <span>启用图片模型</span>
+                    </label>
+                    <label class="summary-setting-field">
+                      <span>图片 Base URL</span>
+                      <input v-model="aiModelConfig.image.baseUrl" />
+                    </label>
+                    <label class="summary-setting-field">
+                      <span>图片模型</span>
+                      <input v-model="aiModelConfig.image.model" placeholder="gpt-image-1" />
+                    </label>
+                    <label class="summary-setting-field">
+                      <span>图片路径</span>
+                      <input v-model="aiModelConfig.image.path" placeholder="/v1/images/generations" />
+                    </label>
+                    <label class="summary-setting-field">
+                      <span>图片 API Key</span>
+                      <input v-model="aiModelConfig.image.apiKey" type="password" autocomplete="off" />
+                    </label>
+
+                    <label class="summary-switch-line">
+                      <input v-model="aiModelConfig.speech.enabled" type="checkbox" />
+                      <span>启用语音模型</span>
+                    </label>
+                    <label class="summary-setting-field">
+                      <span>语音 Base URL</span>
+                      <input v-model="aiModelConfig.speech.baseUrl" />
+                    </label>
+                    <label class="summary-setting-field">
+                      <span>语音模型</span>
+                      <input v-model="aiModelConfig.speech.model" placeholder="gpt-4o-mini-tts" />
+                    </label>
+                    <label class="summary-setting-field">
+                      <span>语音路径</span>
+                      <input v-model="aiModelConfig.speech.path" placeholder="/v1/audio/speech" />
+                    </label>
+                    <label class="summary-setting-field">
+                      <span>语音 API Key</span>
+                      <input v-model="aiModelConfig.speech.apiKey" type="password" autocomplete="off" />
+                    </label>
+
+                    <div class="summary-actions compact">
+                      <button class="summary-action" :disabled="!aiModelIsAdmin || aiModelSaving" @click="handleSaveAiModelConfig">
+                        {{ aiModelSaving ? '保存中...' : '保存后端模型' }}
+                      </button>
+                    </div>
+                  </div>
+                </details>
               </div>
             </section>
           </section>
-
           <div
             class="chapter-text"
             data-role="continuous"
@@ -765,10 +913,85 @@
             <button class="summary-action" :disabled="savingChapterSummaryConfig || !chapterSummaryConfig?.isAdmin" @click="saveChapterSummaryGenerationSettings">保存 Prompt</button>
           </div>
         </div>
-        <div class="summary-setting-group">
-          <div class="summary-setting-title">模型</div>
-          <p class="summary-setting-note">摘要使用后端文本模型配置。API Key、Base URL 和模型名在 AI资料中统一管理。</p>
-          <button class="summary-action" type="button" @click="openAiBackendSettings">打开 AI 后端设置</button>
+        <div class="summary-setting-group" data-section="server-model">
+          <div class="summary-setting-title">后端模型</div>
+          <div class="summary-model-status">
+            <span>{{ aiModelStatusTitle }}</span>
+            <small>{{ aiModelStatusMessage }}</small>
+          </div>
+          <details class="summary-model-details">
+            <summary>模型设置</summary>
+            <div class="summary-model-form">
+              <label class="summary-switch-line">
+                <input v-model="aiModelConfig.text.enabled" type="checkbox" />
+                <span>启用文本模型</span>
+              </label>
+              <label class="summary-setting-field">
+                <span>文本 Base URL</span>
+                <input v-model="aiModelConfig.text.baseUrl" placeholder="https://api.openai.com" />
+              </label>
+              <label class="summary-setting-field">
+                <span>文本模型</span>
+                <input v-model="aiModelConfig.text.model" placeholder="gpt-4o-mini" />
+              </label>
+              <label class="summary-setting-field">
+                <span>文本路径</span>
+                <input v-model="aiModelConfig.text.path" placeholder="/v1/chat/completions" />
+              </label>
+              <label class="summary-setting-field">
+                <span>文本 API Key</span>
+                <input v-model="aiModelConfig.text.apiKey" type="password" autocomplete="off" />
+              </label>
+
+              <label class="summary-switch-line">
+                <input v-model="aiModelConfig.image.enabled" type="checkbox" />
+                <span>启用图片模型</span>
+              </label>
+              <label class="summary-setting-field">
+                <span>图片 Base URL</span>
+                <input v-model="aiModelConfig.image.baseUrl" />
+              </label>
+              <label class="summary-setting-field">
+                <span>图片模型</span>
+                <input v-model="aiModelConfig.image.model" placeholder="gpt-image-1" />
+              </label>
+              <label class="summary-setting-field">
+                <span>图片路径</span>
+                <input v-model="aiModelConfig.image.path" placeholder="/v1/images/generations" />
+              </label>
+              <label class="summary-setting-field">
+                <span>图片 API Key</span>
+                <input v-model="aiModelConfig.image.apiKey" type="password" autocomplete="off" />
+              </label>
+
+              <label class="summary-switch-line">
+                <input v-model="aiModelConfig.speech.enabled" type="checkbox" />
+                <span>启用语音模型</span>
+              </label>
+              <label class="summary-setting-field">
+                <span>语音 Base URL</span>
+                <input v-model="aiModelConfig.speech.baseUrl" />
+              </label>
+              <label class="summary-setting-field">
+                <span>语音模型</span>
+                <input v-model="aiModelConfig.speech.model" placeholder="gpt-4o-mini-tts" />
+              </label>
+              <label class="summary-setting-field">
+                <span>语音路径</span>
+                <input v-model="aiModelConfig.speech.path" placeholder="/v1/audio/speech" />
+              </label>
+              <label class="summary-setting-field">
+                <span>语音 API Key</span>
+                <input v-model="aiModelConfig.speech.apiKey" type="password" autocomplete="off" />
+              </label>
+
+              <div class="summary-actions compact">
+                <button class="summary-action" :disabled="!aiModelIsAdmin || aiModelSaving" @click="handleSaveAiModelConfig">
+                  {{ aiModelSaving ? '保存中...' : '保存后端模型' }}
+                </button>
+              </div>
+            </div>
+          </details>
         </div>
       </section>
     </aside>
@@ -2457,10 +2680,6 @@ function openAiBook() {
   })
 }
 
-function openAiBackendSettings() {
-  chapterSummaryActiveTab.value = 'settings'
-}
-
 function cloneAiModelConfig(config: AiServerModelConfig): AiServerModelConfig {
   return JSON.parse(JSON.stringify(config))
 }
@@ -3368,6 +3587,53 @@ watch(
   opacity: 0.62;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.summary-model-status {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-primary, #c97f3a) 8%, transparent);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.summary-model-status small {
+  opacity: 0.62;
+}
+
+.summary-model-details {
+  margin-top: 6px;
+}
+
+.summary-model-details summary {
+  cursor: pointer;
+  font-size: 13px;
+  opacity: 0.8;
+  padding: 4px 0;
+}
+
+.summary-model-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.summary-switch-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  padding: 4px 0;
+}
+
+.summary-switch-line input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-primary, #c97f3a);
 }
 
 .chapter-summary-collapsed-pill {

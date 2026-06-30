@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use reqwest::header::{ACCEPT, USER_AGENT};
+use reqwest::header::{ACCEPT, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
 
 use crate::error::error::AppError;
@@ -122,17 +122,20 @@ impl UpdateService {
     }
 
     async fn fetch_latest_release(&self) -> Result<GithubRelease, String> {
-        let response = self
+        let mut request = self
             .client
             .get(LATEST_RELEASE_URL)
             .header(ACCEPT, "application/vnd.github+json")
             .header(
                 USER_AGENT,
                 format!("reader-next/{}", env!("CARGO_PKG_VERSION")),
-            )
-            .send()
-            .await
-            .map_err(|err| err.to_string())?;
+            );
+        if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+            if !token.is_empty() {
+                request = request.header(AUTHORIZATION, format!("Bearer {}", token));
+            }
+        }
+        let response = request.send().await.map_err(|err| err.to_string())?;
         let status = response.status();
         if !status.is_success() {
             return Err(format!("GitHub 返回 {}", status));
