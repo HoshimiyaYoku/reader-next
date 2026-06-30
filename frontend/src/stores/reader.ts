@@ -127,7 +127,22 @@ function migrateLegacyReadConfig(saved: Partial<ReadConfig> & Record<string, unk
   if (normalized.aiPanelActiveTab === 'content') {
     normalized.aiPanelActiveTab = 'summary'
   }
-  return { ...defaultConfig, ...normalized } as ReadConfig
+  const merged = { ...defaultConfig, ...normalized } as ReadConfig
+  merged.fontSize = normalizeNumber(merged.fontSize, defaultConfig.fontSize, 1)
+  merged.fontWeight = normalizeNumber(merged.fontWeight, defaultConfig.fontWeight, 1)
+  merged.lineHeight = normalizeNumber(merged.lineHeight, defaultConfig.lineHeight, 0.1)
+  merged.paragraphSpacing = normalizeNumber(merged.paragraphSpacing, defaultConfig.paragraphSpacing, 0)
+  merged.pageWidth = normalizeNumber(merged.pageWidth, defaultConfig.pageWidth, 1)
+  merged.animateDuration = normalizeNumber(merged.animateDuration, defaultConfig.animateDuration, 0)
+  merged.scrollPixel = normalizeNumber(merged.scrollPixel, defaultConfig.scrollPixel, 1)
+  merged.pageSpeed = normalizeNumber(merged.pageSpeed, defaultConfig.pageSpeed, 1)
+  merged.aiPanelSiderWidth = normalizeNumber(merged.aiPanelSiderWidth, defaultConfig.aiPanelSiderWidth, 1)
+  merged.aiPanelFontSize = normalizeNumber(merged.aiPanelFontSize, defaultConfig.aiPanelFontSize, 1)
+  return merged
+}
+
+function normalizeNumber(value: unknown, fallback: number, min = Number.NEGATIVE_INFINITY) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= min ? value : fallback
 }
 
 /* ─── Theme presets ─── */
@@ -211,9 +226,29 @@ const defaultSpeechConfig: SpeechConfig = {
 function loadSpeechConfig(): SpeechConfig {
   try {
     const saved = localStorage.getItem('reader-speechConfig')
-    if (saved) return { ...defaultSpeechConfig, ...JSON.parse(saved) }
+    if (saved) return migrateSpeechConfig(JSON.parse(saved) as Partial<SpeechConfig>)
   } catch { /* ignore */ }
   return { ...defaultSpeechConfig }
+}
+
+function migrateSpeechConfig(saved: Partial<SpeechConfig>): SpeechConfig {
+  const merged = { ...defaultSpeechConfig, ...saved }
+  if (merged.provider !== 'system' && merged.provider !== 'openai') {
+    merged.provider = defaultSpeechConfig.provider
+  }
+  if (merged.openaiSource !== 'browser' && merged.openaiSource !== 'server') {
+    merged.openaiSource = defaultSpeechConfig.openaiSource
+  }
+  if (!['mp3', 'wav', 'opus', 'flac', 'pcm'].includes(merged.openaiFormat)) {
+    merged.openaiFormat = defaultSpeechConfig.openaiFormat
+  }
+  if (merged.openaiRequestMode !== 'chunked' && merged.openaiRequestMode !== 'merged') {
+    merged.openaiRequestMode = defaultSpeechConfig.openaiRequestMode
+  }
+  merged.speechRate = normalizeNumber(merged.speechRate, defaultSpeechConfig.speechRate, 0.5)
+  merged.speechPitch = normalizeNumber(merged.speechPitch, defaultSpeechConfig.speechPitch, 0.5)
+  merged.stopAfterMinutes = normalizeNumber(merged.stopAfterMinutes, defaultSpeechConfig.stopAfterMinutes, 0)
+  return merged
 }
 
 function isSafariSpeechFallbackMode() {

@@ -37,4 +37,32 @@ describe('reader summary display config', () => {
     expect(store.config.aiPanelFontSize).toBe(18)
     expect(store.config.aiPanelActiveTab).toBe('summary')
   })
+
+  it('normalizes invalid numeric read config values', () => {
+    localStorage.setItem('readConfig', JSON.stringify({
+      lineHeight: null,
+      paragraphSpacing: 'bad',
+      fontSize: 0,
+    }))
+
+    const store = useReaderStore()
+
+    expect(store.config.lineHeight).toBe(1.8)
+    expect(store.config.paragraphSpacing).toBe(0.2)
+    expect(store.config.fontSize).toBe(18)
+  })
+
+  it('normalizes invalid numeric speech config values', () => {
+    localStorage.setItem('reader-speechConfig', JSON.stringify({
+      speechRate: null,
+      speechPitch: 'bad',
+      stopAfterMinutes: -1,
+    }))
+
+    const store = useReaderStore()
+
+    expect(store.speechConfig.speechRate).toBe(1)
+    expect(store.speechConfig.speechPitch).toBe(1)
+    expect(store.speechConfig.stopAfterMinutes).toBe(0)
+  })
 })
