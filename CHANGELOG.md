@@ -2,9 +2,17 @@
 
 ## v1.0.12 - 2026-07-01
 
-- Added local Docker/dev deployment assets, including `.env.dev.example`, `deploy/compose.local.yml`, `scripts/run-dev.sh`, and Docker deployment docs.
-- Added login preview support for the settings drawer and source manager flows.
-- Fixed reader settings config migration so malformed or legacy summary config state is guarded safely.
-- Fixed search/source cache state so bookshelf search results and source selection stay consistent across updates.
-- Temporarily disabled the GitHub Actions VPS deployment workflow.
-
+- 书源登录预览支持脚本型 `loginUrl`：后端会从 `function login()`、`java.startBrowserAwait(...)` 或 `const/let/var url = ...` 中提取真实登录入口，不再只把 App 专用 JS 当作普通 URL 请求。
+- 书源登录预览支持内置表单页：当书源提供邮箱/密码式 `loginUi` 时，后端生成可预览的 HTML 表单，前端用 iframe `srcdoc` 展示，方便直接测试登录接口返回。
+- 书源登录解析补了覆盖用例：包含 `source.bookSourceUrl` 拼接、忽略 `login()` 外部 helper 调用、以及没有 `startBrowserAwait` 时从 `url` 赋值里提取登录地址。
+- 书源管理页改为复用全局书源 store：打开管理页时不重复维护一份本地 sources/loading 状态，避免书源列表和其他页面状态不一致。
+- 搜索结果增加 30 分钟内存缓存：同一关键词 + 搜索范围 + 分组/书源再次搜索时直接复用缓存结果，减少重复请求。
+- 搜索范围偏好会持久化：用户选择“全部 / 分组 / 当前书源”后会保存，下次打开搜索继续沿用；从探索页发起搜索时只在有当前书源时限定 source scope。
+- 搜索结果页在切换范围、分组、书源时会同步保存偏好，并在搜索完成后缓存本次结果。
+- 阅读设置迁移更稳：字体、行高、段距、页面宽度、滚动速度、AI 面板宽度/字号等数值会做 finite/min 校验，旧配置或坏数据不会把设置写成非法值。
+- 朗读设置迁移更稳：provider、OpenAI source、音频格式、请求模式和语速/音调/停止时间会回退到合法默认值。
+- 设置抽屉把“服务端版本更新”和“浏览器前端缓存更新”拆开显示：服务端更新提示为“需手动部署”，前端缓存更新只负责刷新浏览器资源，不再让这两个概念混在一起。
+- 新增本地双实例开发流程：`.env.dev.example` + `scripts/run-dev.sh` 默认使用 `dev-storage/reader.db`，避免开发 server 写到日常使用的 Docker 数据库。
+- 新增本地常驻 Docker compose：`deploy/compose.local.yml` 默认把仓库 `storage/` 挂进容器、监听 `28080`，README 和 Docker 文档补了对应启动说明。
+- 发布版本号更新到 `1.0.12`，同步 Rust、frontend、e2e package 及 lockfile 里的版本字段。
+- 暂停 VPS 自动部署：`.github/workflows/deploy-vps.yml` 改名为 `.yml.disabled`，GitHub Actions 不会再加载或触发这个 workflow，但部署脚本内容保留，后续恢复时可改回 `.yml`。
