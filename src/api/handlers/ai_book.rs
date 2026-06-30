@@ -76,15 +76,11 @@ pub async fn get_ai_book_memory(
     let user_ns = resolve_user_ns(&state, &auth).await?;
     let req = parse_ai_book_request(q, body)?;
     let book_url = required_book_url(req.book_url)?;
-    let shelf_book = ensure_shelf_book(&state, &user_ns, &book_url).await?;
+    let shelf_book = find_shelf_book(&state, &user_ns, &book_url).await?;
+    let (book_name, author) = optional_shelf_book_metadata(shelf_book.as_ref());
     let memory = state
         .ai_book_service
-        .get_or_create_v3(
-            &user_ns,
-            &book_url,
-            Some(shelf_book.name.clone()),
-            Some(shelf_book.author.clone()),
-        )
+        .get_or_create_v3(&user_ns, &book_url, book_name, author)
         .await?;
     Ok(Json(ApiResponse::ok(
         serde_json::to_value(AiBookMemoryViewResponse {
@@ -104,15 +100,11 @@ pub async fn get_ai_book_chapter_memory(
     let req = parse_ai_book_chapter_request(q, body)?;
     let book_url = required_book_url(req.book_url)?;
     let chapter_index = required_chapter_index(req.chapter_index)?;
-    let shelf_book = ensure_shelf_book(&state, &user_ns, &book_url).await?;
+    let shelf_book = find_shelf_book(&state, &user_ns, &book_url).await?;
+    let (book_name, author) = optional_shelf_book_metadata(shelf_book.as_ref());
     let memory = state
         .ai_book_service
-        .get_or_create_v3(
-            &user_ns,
-            &book_url,
-            Some(shelf_book.name.clone()),
-            Some(shelf_book.author.clone()),
-        )
+        .get_or_create_v3(&user_ns, &book_url, book_name, author)
         .await?;
     Ok(Json(ApiResponse::ok(
         serde_json::to_value(AiBookChapterMemoryViewResponse {
@@ -229,11 +221,28 @@ async fn ensure_shelf_book(
     user_ns: &str,
     book_url: &str,
 ) -> Result<crate::model::book::Book, AppError> {
+    find_shelf_book(state, user_ns, book_url)
+        .await?
+        .ok_or_else(|| AppError::BadRequest("书籍未加入书架".to_string()))
+}
+
+async fn find_shelf_book(
+    state: &AppState,
+    user_ns: &str,
+    book_url: &str,
+) -> Result<Option<crate::model::book::Book>, AppError> {
     state
         .book_service
         .get_shelf_book(user_ns, book_url)
-        .await?
-        .ok_or_else(|| AppError::BadRequest("书籍未加入书架".to_string()))
+        .await
+}
+
+fn optional_shelf_book_metadata(
+    shelf_book: Option<&crate::model::book::Book>,
+) -> (Option<String>, Option<String>) {
+    shelf_book
+        .map(|book| (Some(book.name.clone()), Some(book.author.clone())))
+        .unwrap_or((None, None))
 }
 
 fn parse_ai_book_request(
@@ -480,7 +489,6 @@ pub async fn get_ai_book_catchup_status(
     let user_ns = resolve_user_ns(&state, &auth).await?;
     let req = parse_ai_book_catchup_status_request(q, body)?;
     let book_url = required_book_url(req.book_url)?;
-    ensure_shelf_book(&state, &user_ns, &book_url).await?;
     let task = if let Some(task) = state
         .ai_book_catchup_service
         .get_status(&user_ns, &book_url)
@@ -923,6 +931,127 @@ mod tests {
         assert_eq!(payload["data"]["memory"]["bookUrl"], json!(book_url));
         assert_eq!(payload["data"]["memory"]["bookName"], json!("接口书"));
         assert_eq!(payload["data"]["memory"]["author"], json!("接口作者"));
+
+        let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+
+    #[tokio::test]
+    async fn ai_book_v3_get_memory_allows_missing_shelf_book() {
+        let (state, dir) = create_test_state().await;
+        let user_ns = "default";
+        let book_url = "book://api-memory-no-shelf";
+        state
+            .ai_book_service
+            .save_v3(
+                user_ns,
+                book_url,
+                create_empty_ai_book_memory_v3(
+                    book_url,
+                    Some("接口书".to_string()),
+                    Some("接口作者".to_string()),
+                ),
+            )
+            .await
+            .unwrap();
+
+        let response = get_ai_book_memory(
+            State(state),
+            AuthContext::default(),
+            Query(AiBookMemoryRequest {
+                book_url: Some(book_url.to_string()),
+            }),
+            Bytes::new(),
+        )
+        .await
+        .unwrap();
+
+        let payload = serde_json::to_value(response.0).unwrap();
+        assert_eq!(payload["isSuccess"], json!(true));
+        assert_eq!(payload["data"]["memory"]["bookUrl"], json!(book_url));
+        assert_eq!(payload["data"]["memory"]["bookName"], json!("接口书"));
+        assert_eq!(payload["data"]["memory"]["author"], json!("接口作者"));
+
+        let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+
+    #[tokio::test]
+    async fn ai_book_v3_get_chapter_memory_allows_missing_shelf_book() {
+        let (state, dir) = create_test_state().await;
+        let user_ns = "default";
+        let book_url = "book://api-chapter-no-shelf";
+        let mut memory = create_empty_ai_book_memory_v3(
+            book_url,
+            Some("章节书".to_string()),
+            Some("章节作者".to_string()),
+        );
+        memory.chapter_digests.push(crate::model::ai_book::AiBookChapterDigestV3 {
+            chapter_index: 3,
+            chapter_title: "第4章".to_string(),
+            summary: "章节摘要".to_string(),
+            ..Default::default()
+        });
+        state.ai_book_service.save_v3(user_ns, book_url, memory).await.unwrap();
+
+        let response = get_ai_book_chapter_memory(
+            State(state),
+            AuthContext::default(),
+            Query(AiBookChapterMemoryRequest {
+                book_url: Some(book_url.to_string()),
+                chapter_index: Some(3),
+            }),
+            Bytes::new(),
+        )
+        .await
+        .unwrap();
+
+        let payload = serde_json::to_value(response.0).unwrap();
+        assert_eq!(payload["isSuccess"], json!(true));
+        assert_eq!(payload["data"]["chapter"]["bookUrl"], json!(book_url));
+        assert_eq!(payload["data"]["chapter"]["chapterIndex"], json!(3));
+        assert_eq!(payload["data"]["chapter"]["chapterTitle"], json!("第4章"));
+        assert_eq!(payload["data"]["chapter"]["generationStatus"], json!("cached"));
+        assert_eq!(payload["data"]["chapter"]["digest"]["summary"], json!("章节摘要"));
+
+        let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+
+    #[tokio::test]
+    async fn ai_book_v3_get_catchup_status_allows_missing_shelf_book() {
+        let (state, dir) = create_test_state().await;
+        let user_ns = "default";
+        let book_url = "book://api-catchup-no-shelf";
+        let mut memory = create_empty_ai_book_memory_v3(
+            book_url,
+            Some("追更书".to_string()),
+            Some("追更作者".to_string()),
+        );
+        memory.chapter_digests = (0..=4)
+            .map(|index| crate::model::ai_book::AiBookChapterDigestV3 {
+                chapter_index: index,
+                chapter_title: format!("第{}章", index + 1),
+                summary: format!("摘要{}", index + 1),
+                ..Default::default()
+            })
+            .collect();
+        state.ai_book_service.save_v3(user_ns, book_url, memory).await.unwrap();
+
+        let response = get_ai_book_catchup_status(
+            State(state),
+            AuthContext::default(),
+            Query(AiBookCatchupStatusRequest {
+                book_url: Some(book_url.to_string()),
+            }),
+            Bytes::new(),
+        )
+        .await
+        .unwrap();
+
+        let payload = serde_json::to_value(response.0).unwrap();
+        assert_eq!(payload["isSuccess"], json!(true));
+        assert_eq!(payload["data"]["bookUrl"], json!(book_url));
+        assert_eq!(payload["data"]["status"], json!("idle"));
+        assert_eq!(payload["data"]["processedChapterIndex"], json!(4));
+        assert_eq!(payload["data"]["processedChapterTitle"], json!("第5章"));
 
         let _ = tokio::fs::remove_dir_all(dir).await;
     }

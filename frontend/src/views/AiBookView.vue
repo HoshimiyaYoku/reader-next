@@ -510,6 +510,13 @@ const statusNotice = computed(() => {
   }
 })
 
+function resolveInitialBook(bookUrl: string) {
+  if (readerStore.book?.bookUrl === bookUrl) {
+    return readerStore.book
+  }
+  return null
+}
+
 onMounted(async () => {
   catchupDisposed = false
   const bookUrl = String(route.query.bookUrl || '')
@@ -521,7 +528,7 @@ onMounted(async () => {
   try {
     await appStore.fetchUserInfo()
     loadError.value = ''
-    book.value = await getShelfBook(bookUrl)
+    book.value = resolveInitialBook(bookUrl) || await getShelfBook(bookUrl)
     await aiStore.load(book.value)
     await loadCurrentChapterMemory()
     await refreshCatchupStatus(true)
