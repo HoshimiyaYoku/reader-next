@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useAiBookStore } from './aiBook'
-import { getAiModelConfig } from '../api/aiModel'
+import { getAiModelConfig } from '../api/ai/model'
 import {
   cancelAiBookCatchup,
   generateAiBookChapterMemory,
@@ -11,7 +11,7 @@ import {
   resetAiBookMemory,
   setAiBookEnabled,
   startAiBookCatchup,
-} from '../api/aiBook'
+} from '../api/ai/book'
 import type {
   AiBookCatchupStatus,
   AiBookChapterMemoryViewResponse,
@@ -20,11 +20,11 @@ import type {
   Book,
 } from '../types'
 
-vi.mock('../api/aiModel', () => ({
+vi.mock('../api/ai/model', () => ({
   getAiModelConfig: vi.fn(),
 }))
 
-vi.mock('../api/aiBook', () => ({
+vi.mock('../api/ai/book', () => ({
   getAiBookMemory: vi.fn(),
   getAiBookChapterMemory: vi.fn(),
   resetAiBookMemory: vi.fn(),

@@ -3,16 +3,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const getMock = vi.fn()
 const postMock = vi.fn()
 
-vi.mock('./http', () => ({
+vi.mock('../http', () => ({
   default: {
     get: getMock,
     post: postMock,
   },
 }))
 
-const api = await import('./aiBook')
+const api = await import('./book')
 
-describe('aiBook v3 api', () => {
+describe('ai book api', () => {
   beforeEach(() => {
     getMock.mockReset()
     postMock.mockReset()
@@ -23,7 +23,7 @@ describe('aiBook v3 api', () => {
     expect('deleteAiBookMemory' in api).toBe(false)
   })
 
-  it('uses v3 memory and chapter endpoints', async () => {
+  it('uses ai book memory and chapter endpoints', async () => {
     getMock
       .mockResolvedValueOnce({ data: { memory: { bookUrl: 'book' } } })
       .mockResolvedValueOnce({ data: { chapter: { chapterIndex: 3 }, memory: { bookUrl: 'book' } } })
@@ -38,20 +38,20 @@ describe('aiBook v3 api', () => {
     await api.setAiBookEnabled({ bookUrl: 'book', enabled: true })
     await api.generateAiBookChapterMemory({ bookUrl: 'book', chapterIndex: 3, mode: 'auto' })
 
-    expect(getMock).toHaveBeenNthCalledWith(1, '/aiBook/memory', { params: { bookUrl: 'book' } })
-    expect(getMock).toHaveBeenNthCalledWith(2, '/aiBook/chapterMemory', {
+    expect(getMock).toHaveBeenNthCalledWith(1, '/ai/book/memory', { params: { bookUrl: 'book' } })
+    expect(getMock).toHaveBeenNthCalledWith(2, '/ai/book/chapter-memory', {
       params: { bookUrl: 'book', chapterIndex: 3 },
     })
-    expect(postMock).toHaveBeenNthCalledWith(1, '/aiBook/memory/reset', { bookUrl: 'book' })
-    expect(postMock).toHaveBeenNthCalledWith(2, '/aiBook/enabled', { bookUrl: 'book', enabled: true })
-    expect(postMock).toHaveBeenNthCalledWith(3, '/aiBook/chapterMemory/generate', {
+    expect(postMock).toHaveBeenNthCalledWith(1, '/ai/book/memory/reset', { bookUrl: 'book' })
+    expect(postMock).toHaveBeenNthCalledWith(2, '/ai/book/enabled', { bookUrl: 'book', enabled: true })
+    expect(postMock).toHaveBeenNthCalledWith(3, '/ai/book/chapter-memory/generate', {
       bookUrl: 'book',
       chapterIndex: 3,
       mode: 'auto',
     })
   })
 
-  it('uses v3 catchup endpoints', async () => {
+  it('uses ai book catchup endpoints', async () => {
     postMock
       .mockResolvedValueOnce({ data: { status: 'running', bookUrl: 'book' } })
       .mockResolvedValueOnce({ data: { status: 'canceled', bookUrl: 'book' } })
@@ -61,13 +61,13 @@ describe('aiBook v3 api', () => {
     await api.getAiBookCatchupStatus('book')
     await api.cancelAiBookCatchup('book')
 
-    expect(postMock).toHaveBeenNthCalledWith(1, '/aiBook/catchup/start', {
+    expect(postMock).toHaveBeenNthCalledWith(1, '/ai/book/catchup/start', {
       bookUrl: 'book',
       targetChapterIndex: 9,
     })
-    expect(getMock).toHaveBeenNthCalledWith(1, '/aiBook/catchup/status', {
+    expect(getMock).toHaveBeenNthCalledWith(1, '/ai/book/catchup/status', {
       params: { bookUrl: 'book' },
     })
-    expect(postMock).toHaveBeenNthCalledWith(2, '/aiBook/catchup/cancel', { bookUrl: 'book' })
+    expect(postMock).toHaveBeenNthCalledWith(2, '/ai/book/catchup/cancel', { bookUrl: 'book' })
   })
 })

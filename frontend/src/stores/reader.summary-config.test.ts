@@ -19,4 +19,22 @@ describe('reader summary display config', () => {
     const store = useReaderStore()
     expect(store.config.chapterSummaryKeyPointStyle).toBe('card')
   })
+
+  it('migrates legacy ai panel keys from readConfig', () => {
+    localStorage.setItem('readConfig', JSON.stringify({
+      showChapterSummary: false,
+      chapterSummaryLayout: 'side',
+      chapterSummarySiderWidth: 420,
+      chapterSummaryFontSize: 18,
+      chapterSummaryActiveTab: 'content',
+    }))
+
+    const store = useReaderStore()
+
+    expect(store.config.showAiPanel).toBe(false)
+    expect(store.config.aiPanelLayout).toBe('side')
+    expect(store.config.aiPanelSiderWidth).toBe(420)
+    expect(store.config.aiPanelFontSize).toBe(18)
+    expect(store.config.aiPanelActiveTab).toBe('summary')
+  })
 })

@@ -29,7 +29,7 @@ describe('openaiSpeech', () => {
 
     expect(blob.type).toBe('audio/mpeg')
     expect(fetchMock).toHaveBeenCalledWith(
-      '/reader3/aiProxy',
+    '/reader3/ai/proxy',
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({

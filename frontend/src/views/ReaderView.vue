@@ -7,7 +7,7 @@
       color: theme.fontColor,
       fontFamily: currentFontFamily,
       '--color-primary': '#c97f3a',
-      '--reader-summary-sider-width': showSideChapterSummary ? `${chapterSummarySiderWidth}px` : '0px'
+      '--reader-summary-sider-width': showSideAiPanel ? `${aiPanelSiderWidth}px` : '0px'
     }"
     @click="handleBackgroundClick"
     @contextmenu.prevent="handleContextMenu"
@@ -44,12 +44,12 @@
       v-if="!isMobile"
       :is-speaking="store.isSpeaking"
       :is-paused="store.isPaused"
-      :show-chapter-summary="showChapterSummary"
+      :show-ai-panel="showAiPanel"
       @bookmark="toggleBookmark"
       @search="toggleSearch"
       @info="openInfo"
       @ai="openAiBook"
-      @toggleChapterSummary="toggleChapterSummary"
+      @toggleAiPanel="toggleAiPanel"
       @tts="handleTTS"
       @prev="prevChapter"
       @next="nextChapter"
@@ -165,16 +165,16 @@
           <div class="chapter-title">{{ store.currentChapter?.title || '加载中...' }}</div>
 
           <button
-            v-if="showCollapsedChapterSummary"
+            v-if="showCollapsedAiPanel"
             class="chapter-summary-collapsed-pill"
             type="button"
-            @click="expandCollapsedChapterSummary"
+            @click="expandCollapsedAiPanel"
           >
             <span class="summary-kicker">摘要</span>
             <span class="summary-muted">{{ chapterSummary ? '展开管理' : '打开摘要设置' }}</span>
           </button>
 
-          <section v-if="showInlineChapterSummary" class="chapter-summary-card">
+          <section v-if="showInlineAiPanel" class="chapter-summary-card">
             <div class="chapter-summary-header reader-ui-font">
               <div>
                 <div class="summary-kicker">AI 面板</div>
@@ -183,32 +183,32 @@
               <div class="summary-tabs" role="tablist" aria-label="AI 面板">
                 <button
                   class="summary-tab"
-                  :class="{ active: chapterSummaryActiveTab === 'content' }"
-                  :aria-selected="chapterSummaryActiveTab === 'content'"
+                  :class="{ active: aiPanelActiveTab === 'summary' }"
+                  :aria-selected="aiPanelActiveTab === 'summary'"
                   role="tab"
                   type="button"
-                  @click="chapterSummaryActiveTab = 'content'"
+                  @click="aiPanelActiveTab = 'summary'"
                 >摘要</button>
                 <button
                   class="summary-tab"
-                  :class="{ active: chapterSummaryActiveTab === 'relationships' }"
-                  :aria-selected="chapterSummaryActiveTab === 'relationships'"
+                  :class="{ active: aiPanelActiveTab === 'relationships' }"
+                  :aria-selected="aiPanelActiveTab === 'relationships'"
                   role="tab"
                   type="button"
-                  @click="chapterSummaryActiveTab = 'relationships'"
+                  @click="aiPanelActiveTab = 'relationships'"
                 >人物关系</button>
                 <button
                   class="summary-tab"
-                  :class="{ active: chapterSummaryActiveTab === 'settings' }"
-                  :aria-selected="chapterSummaryActiveTab === 'settings'"
+                  :class="{ active: aiPanelActiveTab === 'settings' }"
+                  :aria-selected="aiPanelActiveTab === 'settings'"
                   role="tab"
                   type="button"
-                  @click="chapterSummaryActiveTab = 'settings'"
+                  @click="aiPanelActiveTab = 'settings'"
                 >设置</button>
               </div>
             </div>
 
-            <section v-if="chapterSummaryActiveTab === 'content'" class="chapter-summary-body" role="tabpanel" :style="chapterSummaryBodyStyle">
+            <section v-if="aiPanelActiveTab === 'summary'" class="chapter-summary-body" role="tabpanel" :style="aiPanelBodyStyle">
               <div v-if="chapterSummaryStatus === 'loading'" class="summary-skeleton" aria-label="摘要生成中">
                 <span></span>
                 <span></span>
@@ -235,10 +235,10 @@
               </div>
             </section>
             <ChapterSummaryRelationshipPanel
-              v-else-if="chapterSummaryActiveTab === 'relationships'"
+              v-else-if="aiPanelActiveTab === 'relationships'"
               :graph="chapterSummaryRelationshipGraph"
               :status="chapterSummaryRelationshipStatus"
-              :body-style="chapterSummaryBodyStyle"
+              :body-style="aiPanelBodyStyle"
             />
             <section v-else class="chapter-summary-settings-panel reader-ui-font" role="tabpanel">
               <div class="summary-setting-group">
@@ -247,22 +247,22 @@
                   <span>摘要栏</span>
                   <div class="summary-switch">
                     <button class="active" type="button">显示</button>
-                    <button type="button" @click="hideChapterSummary">隐藏</button>
+                    <button type="button" @click="hideAiPanel">隐藏</button>
                   </div>
                 </div>
                 <div class="summary-setting-row">
                   <span>位置</span>
                   <div class="summary-switch">
-                    <button :class="{ active: config.chapterSummaryLayout === 'auto' }" type="button" @click="store.updateConfig('chapterSummaryLayout', 'auto')">智能</button>
-                    <button :class="{ active: config.chapterSummaryLayout === 'side' }" type="button" @click="store.updateConfig('chapterSummaryLayout', 'side')">右侧</button>
+                    <button :class="{ active: config.aiPanelLayout === 'auto' }" type="button" @click="store.updateConfig('aiPanelLayout', 'auto')">智能</button>
+                    <button :class="{ active: config.aiPanelLayout === 'side' }" type="button" @click="store.updateConfig('aiPanelLayout', 'side')">右侧</button>
                   </div>
                 </div>
                 <div class="summary-setting-row">
                   <span>栏宽</span>
                   <div class="summary-stepper">
-                    <button type="button" @click="adjustChapterSummarySiderWidth(-20)">−</button>
-                    <span>{{ chapterSummarySiderWidth }}</span>
-                    <button type="button" @click="adjustChapterSummarySiderWidth(20)">+</button>
+                    <button type="button" @click="adjustAiPanelSiderWidth(-20)">−</button>
+                    <span>{{ aiPanelSiderWidth }}</span>
+                    <button type="button" @click="adjustAiPanelSiderWidth(20)">+</button>
                   </div>
                 </div>
               </div>
@@ -271,9 +271,9 @@
                 <div class="summary-setting-row">
                   <span>摘要字号</span>
                   <div class="summary-stepper">
-                    <button type="button" @click="adjustChapterSummaryFontSize(-1)">A-</button>
-                    <span>{{ config.chapterSummaryFontSize }}</span>
-                    <button type="button" @click="adjustChapterSummaryFontSize(1)">A+</button>
+                    <button type="button" @click="adjustAiPanelFontSize(-1)">A-</button>
+                    <span>{{ config.aiPanelFontSize }}</span>
+                    <button type="button" @click="adjustAiPanelFontSize(1)">A+</button>
                   </div>
                 </div>
                 <div class="summary-setting-row">
@@ -464,17 +464,17 @@
           <div class="chapter-title">{{ chapter.title }}</div>
 
           <button
-            v-if="showCollapsedChapterSummary && chapter.index === store.currentIndex"
+            v-if="showCollapsedAiPanel && chapter.index === store.currentIndex"
             class="chapter-summary-collapsed-pill"
             type="button"
-            @click="expandCollapsedChapterSummary"
+            @click="expandCollapsedAiPanel"
           >
             <span class="summary-kicker">摘要</span>
             <span class="summary-muted">{{ chapterSummary ? '展开管理' : '打开摘要设置' }}</span>
           </button>
 
           <section
-            v-if="showInlineChapterSummary && chapter.index === store.currentIndex"
+            v-if="showInlineAiPanel && chapter.index === store.currentIndex"
             class="chapter-summary-card"
           >
             <div class="chapter-summary-header reader-ui-font">
@@ -485,32 +485,32 @@
               <div class="summary-tabs" role="tablist" aria-label="AI 面板">
                 <button
                   class="summary-tab"
-                  :class="{ active: chapterSummaryActiveTab === 'content' }"
-                  :aria-selected="chapterSummaryActiveTab === 'content'"
+                  :class="{ active: aiPanelActiveTab === 'summary' }"
+                  :aria-selected="aiPanelActiveTab === 'summary'"
                   role="tab"
                   type="button"
-                  @click="chapterSummaryActiveTab = 'content'"
+                  @click="aiPanelActiveTab = 'summary'"
                 >摘要</button>
                 <button
                   class="summary-tab"
-                  :class="{ active: chapterSummaryActiveTab === 'relationships' }"
-                  :aria-selected="chapterSummaryActiveTab === 'relationships'"
+                  :class="{ active: aiPanelActiveTab === 'relationships' }"
+                  :aria-selected="aiPanelActiveTab === 'relationships'"
                   role="tab"
                   type="button"
-                  @click="chapterSummaryActiveTab = 'relationships'"
+                  @click="aiPanelActiveTab = 'relationships'"
                 >人物关系</button>
                 <button
                   class="summary-tab"
-                  :class="{ active: chapterSummaryActiveTab === 'settings' }"
-                  :aria-selected="chapterSummaryActiveTab === 'settings'"
+                  :class="{ active: aiPanelActiveTab === 'settings' }"
+                  :aria-selected="aiPanelActiveTab === 'settings'"
                   role="tab"
                   type="button"
-                  @click="chapterSummaryActiveTab = 'settings'"
+                  @click="aiPanelActiveTab = 'settings'"
                 >设置</button>
               </div>
             </div>
 
-            <section v-if="chapterSummaryActiveTab === 'content'" class="chapter-summary-body" role="tabpanel" :style="chapterSummaryBodyStyle">
+            <section v-if="aiPanelActiveTab === 'summary'" class="chapter-summary-body" role="tabpanel" :style="aiPanelBodyStyle">
               <div v-if="chapterSummaryStatus === 'loading'" class="summary-skeleton" aria-label="摘要生成中">
                 <span></span>
                 <span></span>
@@ -537,10 +537,10 @@
               </div>
             </section>
             <ChapterSummaryRelationshipPanel
-              v-else-if="chapterSummaryActiveTab === 'relationships'"
+              v-else-if="aiPanelActiveTab === 'relationships'"
               :graph="chapterSummaryRelationshipGraph"
               :status="chapterSummaryRelationshipStatus"
-              :body-style="chapterSummaryBodyStyle"
+              :body-style="aiPanelBodyStyle"
             />
             <section v-else class="chapter-summary-settings-panel reader-ui-font" role="tabpanel">
               <div class="summary-setting-group">
@@ -549,22 +549,22 @@
                   <span>摘要栏</span>
                   <div class="summary-switch">
                     <button class="active" type="button">显示</button>
-                    <button type="button" @click="hideChapterSummary">隐藏</button>
+                    <button type="button" @click="hideAiPanel">隐藏</button>
                   </div>
                 </div>
                 <div class="summary-setting-row">
                   <span>位置</span>
                   <div class="summary-switch">
-                    <button :class="{ active: config.chapterSummaryLayout === 'auto' }" type="button" @click="store.updateConfig('chapterSummaryLayout', 'auto')">智能</button>
-                    <button :class="{ active: config.chapterSummaryLayout === 'side' }" type="button" @click="store.updateConfig('chapterSummaryLayout', 'side')">右侧</button>
+                    <button :class="{ active: config.aiPanelLayout === 'auto' }" type="button" @click="store.updateConfig('aiPanelLayout', 'auto')">智能</button>
+                    <button :class="{ active: config.aiPanelLayout === 'side' }" type="button" @click="store.updateConfig('aiPanelLayout', 'side')">右侧</button>
                   </div>
                 </div>
                 <div class="summary-setting-row">
                   <span>栏宽</span>
                   <div class="summary-stepper">
-                    <button type="button" @click="adjustChapterSummarySiderWidth(-20)">−</button>
-                    <span>{{ chapterSummarySiderWidth }}</span>
-                    <button type="button" @click="adjustChapterSummarySiderWidth(20)">+</button>
+                    <button type="button" @click="adjustAiPanelSiderWidth(-20)">−</button>
+                    <span>{{ aiPanelSiderWidth }}</span>
+                    <button type="button" @click="adjustAiPanelSiderWidth(20)">+</button>
                   </div>
                 </div>
               </div>
@@ -573,9 +573,9 @@
                 <div class="summary-setting-row">
                   <span>摘要字号</span>
                   <div class="summary-stepper">
-                    <button type="button" @click="adjustChapterSummaryFontSize(-1)">A-</button>
-                    <span>{{ config.chapterSummaryFontSize }}</span>
-                    <button type="button" @click="adjustChapterSummaryFontSize(1)">A+</button>
+                    <button type="button" @click="adjustAiPanelFontSize(-1)">A-</button>
+                    <span>{{ config.aiPanelFontSize }}</span>
+                    <button type="button" @click="adjustAiPanelFontSize(1)">A+</button>
                   </div>
                 </div>
                 <div class="summary-setting-row">
@@ -742,13 +742,13 @@
     </div>
 
     <aside
-      v-if="showSideChapterSummary"
+      v-if="showSideAiPanel"
       class="chapter-summary-sider"
-      :class="{ resizing: chapterSummarySiderResizing }"
-      :style="chapterSummarySiderStyle"
+      :class="{ resizing: aiPanelSiderResizing }"
+      :style="aiPanelSiderStyle"
       @click.stop
     >
-      <div class="chapter-summary-resize-handle" @pointerdown="startChapterSummarySiderResize"></div>
+      <div class="chapter-summary-resize-handle" @pointerdown="startAiPanelSiderResize"></div>
       <div class="chapter-summary-sider-head reader-ui-font">
         <div>
           <div class="summary-kicker">AI 面板</div>
@@ -757,33 +757,33 @@
         <div class="summary-tabs" role="tablist" aria-label="AI 面板">
           <button
             class="summary-tab"
-            :class="{ active: chapterSummaryActiveTab === 'content' }"
-            :aria-selected="chapterSummaryActiveTab === 'content'"
+            :class="{ active: aiPanelActiveTab === 'summary' }"
+            :aria-selected="aiPanelActiveTab === 'summary'"
             role="tab"
             type="button"
-            @click="chapterSummaryActiveTab = 'content'"
+            @click="aiPanelActiveTab = 'summary'"
           >摘要</button>
           <button
             class="summary-tab"
-            :class="{ active: chapterSummaryActiveTab === 'relationships' }"
-            :aria-selected="chapterSummaryActiveTab === 'relationships'"
+            :class="{ active: aiPanelActiveTab === 'relationships' }"
+            :aria-selected="aiPanelActiveTab === 'relationships'"
             role="tab"
             type="button"
-            @click="chapterSummaryActiveTab = 'relationships'"
+            @click="aiPanelActiveTab = 'relationships'"
           >人物关系</button>
           <button
             class="summary-tab"
-            :class="{ active: chapterSummaryActiveTab === 'settings' }"
-            :aria-selected="chapterSummaryActiveTab === 'settings'"
+            :class="{ active: aiPanelActiveTab === 'settings' }"
+            :aria-selected="aiPanelActiveTab === 'settings'"
             role="tab"
             type="button"
-            @click="chapterSummaryActiveTab = 'settings'"
+            @click="aiPanelActiveTab = 'settings'"
           >设置</button>
         </div>
       </div>
 
-      <section v-if="chapterSummaryActiveTab === 'content'" class="chapter-summary-card side" role="tabpanel">
-        <div class="chapter-summary-body" :style="chapterSummaryBodyStyle">
+      <section v-if="aiPanelActiveTab === 'summary'" class="chapter-summary-card side" role="tabpanel">
+        <div class="chapter-summary-body" :style="aiPanelBodyStyle">
           <div v-if="chapterSummaryStatus === 'loading'" class="summary-skeleton" aria-label="摘要生成中">
             <span></span>
             <span></span>
@@ -807,15 +807,15 @@
               {{ chapterSummary ? '重新生成' : '生成摘要' }}
             </button>
             <button v-if="chapterSummary" class="summary-action" @click.stop="copyChapterSummary">复制</button>
-            <button class="summary-action" @click="hideChapterSummary">隐藏</button>
+            <button class="summary-action" @click="hideAiPanel">隐藏</button>
           </div>
         </div>
       </section>
       <ChapterSummaryRelationshipPanel
-        v-else-if="chapterSummaryActiveTab === 'relationships'"
+        v-else-if="aiPanelActiveTab === 'relationships'"
         :graph="chapterSummaryRelationshipGraph"
         :status="chapterSummaryRelationshipStatus"
-        :body-style="chapterSummaryBodyStyle"
+        :body-style="aiPanelBodyStyle"
       />
       <section v-else class="chapter-summary-settings-panel reader-ui-font" role="tabpanel">
         <div class="summary-setting-group">
@@ -824,22 +824,22 @@
             <span>摘要栏</span>
             <div class="summary-switch">
               <button class="active" type="button">显示</button>
-                <button type="button" @click="hideChapterSummary">隐藏</button>
+                <button type="button" @click="hideAiPanel">隐藏</button>
             </div>
           </div>
           <div class="summary-setting-row">
             <span>位置</span>
             <div class="summary-switch">
-              <button :class="{ active: config.chapterSummaryLayout === 'auto' }" type="button" @click="store.updateConfig('chapterSummaryLayout', 'auto')">智能</button>
-              <button :class="{ active: config.chapterSummaryLayout === 'side' }" type="button" @click="store.updateConfig('chapterSummaryLayout', 'side')">右侧</button>
+              <button :class="{ active: config.aiPanelLayout === 'auto' }" type="button" @click="store.updateConfig('aiPanelLayout', 'auto')">智能</button>
+              <button :class="{ active: config.aiPanelLayout === 'side' }" type="button" @click="store.updateConfig('aiPanelLayout', 'side')">右侧</button>
             </div>
           </div>
           <div class="summary-setting-row">
             <span>栏宽</span>
             <div class="summary-stepper">
-              <button type="button" @click="adjustChapterSummarySiderWidth(-20)">−</button>
-              <span>{{ chapterSummarySiderWidth }}</span>
-              <button type="button" @click="adjustChapterSummarySiderWidth(20)">+</button>
+              <button type="button" @click="adjustAiPanelSiderWidth(-20)">−</button>
+              <span>{{ aiPanelSiderWidth }}</span>
+              <button type="button" @click="adjustAiPanelSiderWidth(20)">+</button>
             </div>
           </div>
         </div>
@@ -848,9 +848,9 @@
           <div class="summary-setting-row">
             <span>摘要字号</span>
             <div class="summary-stepper">
-              <button type="button" @click="adjustChapterSummaryFontSize(-1)">A-</button>
-              <span>{{ config.chapterSummaryFontSize }}</span>
-              <button type="button" @click="adjustChapterSummaryFontSize(1)">A+</button>
+              <button type="button" @click="adjustAiPanelFontSize(-1)">A-</button>
+              <span>{{ config.aiPanelFontSize }}</span>
+              <button type="button" @click="adjustAiPanelFontSize(1)">A+</button>
             </div>
           </div>
           <div class="summary-setting-row">
@@ -1047,13 +1047,13 @@ import { onBeforeRouteLeave, useRouter } from 'vue-router'
 import { useReaderStore, fontPresets } from '../stores/reader'
 import { useAppStore } from '../stores/app'
 import { getBookInfo } from '../api/bookshelf'
-import { getAiBookMemory } from '../api/aiBook'
+import { getAiBookMemory } from '../api/ai/book'
 import {
   getChapterSummary,
   generateChapterSummary,
   getChapterSummaryConfig,
   saveChapterSummaryConfig,
-} from '../api/chapterSummary'
+} from '../api/ai/chapterSummary'
 import { applySystemTheme } from '../utils/systemUi'
 import { countBrowserBookCache } from '../utils/browserCache'
 import { APP_VIEWPORT_CHANGE_EVENT, syncViewportSize } from '../utils/viewport'
@@ -1062,7 +1062,7 @@ import { createReaderProgressAutoSaveScheduler, createReaderProgressExitSaver } 
 import { buildChapterSummaryIdentity, isCurrentChapterSummaryIdentity } from '../utils/chapterSummaryState'
 import { buildSummaryRelationshipGraph } from '../utils/summaryRelationshipGraph'
 import { chooseChapterSummaryPlacement, clampChapterSummarySiderWidth, getChapterSummaryFontSize } from '../utils/chapterSummaryLayout'
-import { getAiModelConfig, saveAiModelConfig } from '../api/aiModel'
+import { getAiModelConfig, saveAiModelConfig } from '../api/ai/model'
 import type { AiBookMemoryViewModel, AiServerModelConfig, Book, ChapterSummaryConfigResponse, ChapterSummaryRecord } from '../types'
 
 import ReaderSidebar from '../components/reader/ReaderSidebar.vue'
@@ -1171,9 +1171,9 @@ const offlineCachedCount = ref(0)
 const chapterSummary = ref<ChapterSummaryRecord | null>(null)
 const chapterSummaryStatus = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
 const chapterSummaryError = ref('')
-const showChapterSummary = ref(config.value.showChapterSummary)
-type ChapterSummaryTab = 'content' | 'relationships' | 'settings'
-const chapterSummaryActiveTab = ref<ChapterSummaryTab>(config.value.chapterSummaryActiveTab)
+const showAiPanel = ref(config.value.showAiPanel)
+type AiPanelTab = 'summary' | 'relationships' | 'settings'
+const aiPanelActiveTab = ref<AiPanelTab>(config.value.aiPanelActiveTab)
 const chapterSummaryRelationshipMemory = ref<AiBookMemoryViewModel | null>(null)
 const chapterSummaryRelationshipStatus = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
 const chapterSummaryConfig = ref<ChapterSummaryConfigResponse | null>(null)
@@ -1187,7 +1187,7 @@ const chapterSummaryConfigDraft = reactive({
   minContentChars: 300,
   prompt: '',
 })
-const chapterSummarySiderWidth = ref(clampChapterSummarySiderWidth(config.value.chapterSummarySiderWidth))
+const aiPanelSiderWidth = ref(clampChapterSummarySiderWidth(config.value.aiPanelSiderWidth))
 const aiModelConfig = reactive<AiServerModelConfig>({
   text: { enabled: false, baseUrl: '', apiKey: '', model: '', path: '/v1/chat/completions', useFullUrl: false },
   image: { enabled: false, baseUrl: '', apiKey: '', model: 'gpt-image-1', path: '/v1/images/generations', useFullUrl: false, imageSize: '1024x1024' },
@@ -1198,9 +1198,9 @@ const aiModelSaving = ref(false)
 const aiModelIsAdmin = ref(false)
 const aiModelCanUse = ref(false)
 const aiModelLoaded = ref(false)
-const chapterSummarySiderResizing = ref(false)
-let chapterSummaryResizeStartX = 0
-let chapterSummaryResizeStartWidth = 0
+const aiPanelSiderResizing = ref(false)
+let aiPanelResizeStartX = 0
+let aiPanelResizeStartWidth = 0
 let chapterSummaryTimer: number | null = null
 let chapterSummaryRequestId = 0
 let chapterSummaryRelationshipRequestId = 0
@@ -1267,23 +1267,23 @@ const currentChapterSummaryIdentity = computed(() => buildChapterSummaryIdentity
   store.currentIndex,
 ))
 
-const chapterSummaryPlacement = computed(() => chooseChapterSummaryPlacement({
-  mode: config.value.chapterSummaryLayout,
+const aiPanelPlacement = computed(() => chooseChapterSummaryPlacement({
+  mode: config.value.aiPanelLayout,
   viewportWidth: viewportWidth.value,
   pageWidth: config.value.pageWidth,
   isMobile: isMobile.value,
-  siderWidth: chapterSummarySiderWidth.value,
+  siderWidth: aiPanelSiderWidth.value,
 }))
-const showSideChapterSummary = computed(() => showChapterSummary.value && chapterSummaryPlacement.value === 'side' && !isHorizontalPageMode.value)
-const showCollapsedChapterSummary = computed(() => showChapterSummary.value && chapterSummaryPlacement.value === 'collapsed' && !isHorizontalPageMode.value)
-const showInlineChapterSummary = computed(() => showChapterSummary.value && chapterSummaryPlacement.value === 'inline' && !isHorizontalPageMode.value)
-const chapterSummarySiderStyle = computed(() => ({
-  width: `${chapterSummarySiderWidth.value}px`,
+const showSideAiPanel = computed(() => showAiPanel.value && aiPanelPlacement.value === 'side' && !isHorizontalPageMode.value)
+const showCollapsedAiPanel = computed(() => showAiPanel.value && aiPanelPlacement.value === 'collapsed' && !isHorizontalPageMode.value)
+const showInlineAiPanel = computed(() => showAiPanel.value && aiPanelPlacement.value === 'inline' && !isHorizontalPageMode.value)
+const aiPanelSiderStyle = computed(() => ({
+  width: `${aiPanelSiderWidth.value}px`,
   background: chromeTheme.value.popup,
   color: chromeTheme.value.fontColor,
 }))
-const chapterSummaryBodyStyle = computed(() => ({
-  fontSize: `${getChapterSummaryFontSize(config.value.chapterSummaryFontSize)}px`,
+const aiPanelBodyStyle = computed(() => ({
+  fontSize: `${getChapterSummaryFontSize(config.value.aiPanelFontSize)}px`,
   fontFamily: currentFontFamily.value || 'var(--font-body)',
 }))
 const chapterSummaryRelationshipGraph = computed(() => buildSummaryRelationshipGraph({
@@ -1423,12 +1423,12 @@ async function loadChapterSummaryForCurrentChapter() {
 
 function scheduleAutoChapterSummary(identity: string) {
   clearChapterSummaryTimer()
-  if (!showChapterSummary.value) return
+  if (!showAiPanel.value) return
   if (!config.value.enableChapterSummaryAuto) return
   if (isHorizontalPageMode.value) return
   if (!store.displayContent || store.displayContent.trim().length < 300) return
   chapterSummaryTimer = window.setTimeout(() => {
-    if (!showChapterSummary.value) return
+    if (!showAiPanel.value) return
     if (!isCurrentChapterSummaryIdentity(currentChapterSummaryIdentity.value, identity)) return
     void generateChapterSummaryForCurrentChapter(false)
   }, 1500)
@@ -1465,9 +1465,9 @@ async function generateChapterSummaryForCurrentChapter(force: boolean) {
 }
 
 
-function expandCollapsedChapterSummary() {
-  chapterSummaryActiveTab.value = chapterSummary.value ? 'content' : 'settings'
-  store.updateConfig('chapterSummaryLayout', 'auto')
+function expandCollapsedAiPanel() {
+  aiPanelActiveTab.value = chapterSummary.value ? 'summary' : 'settings'
+  store.updateConfig('aiPanelLayout', 'auto')
 }
 
 function copyChapterSummary() {
@@ -1491,35 +1491,35 @@ function buildPreviousChapterSummaryContext() {
     }))
 }
 
-function adjustChapterSummaryFontSize(delta: number) {
-  store.updateConfig('chapterSummaryFontSize', getChapterSummaryFontSize(config.value.chapterSummaryFontSize + delta))
+function adjustAiPanelFontSize(delta: number) {
+  store.updateConfig('aiPanelFontSize', getChapterSummaryFontSize(config.value.aiPanelFontSize + delta))
 }
 
-function adjustChapterSummarySiderWidth(delta: number) {
-  chapterSummarySiderWidth.value = clampChapterSummarySiderWidth(chapterSummarySiderWidth.value + delta)
-  store.updateConfig('chapterSummarySiderWidth', chapterSummarySiderWidth.value)
+function adjustAiPanelSiderWidth(delta: number) {
+  aiPanelSiderWidth.value = clampChapterSummarySiderWidth(aiPanelSiderWidth.value + delta)
+  store.updateConfig('aiPanelSiderWidth', aiPanelSiderWidth.value)
 }
 
-function handleChapterSummarySiderResize(event: PointerEvent) {
-  if (!chapterSummarySiderResizing.value) return
-  chapterSummarySiderWidth.value = clampChapterSummarySiderWidth(chapterSummaryResizeStartWidth + chapterSummaryResizeStartX - event.clientX)
+function handleAiPanelSiderResize(event: PointerEvent) {
+  if (!aiPanelSiderResizing.value) return
+  aiPanelSiderWidth.value = clampChapterSummarySiderWidth(aiPanelResizeStartWidth + aiPanelResizeStartX - event.clientX)
 }
 
-function stopChapterSummarySiderResize() {
-  if (!chapterSummarySiderResizing.value) return
-  chapterSummarySiderResizing.value = false
-  window.removeEventListener('pointermove', handleChapterSummarySiderResize)
-  window.removeEventListener('pointerup', stopChapterSummarySiderResize)
-  store.updateConfig('chapterSummarySiderWidth', chapterSummarySiderWidth.value)
+function stopAiPanelSiderResize() {
+  if (!aiPanelSiderResizing.value) return
+  aiPanelSiderResizing.value = false
+  window.removeEventListener('pointermove', handleAiPanelSiderResize)
+  window.removeEventListener('pointerup', stopAiPanelSiderResize)
+  store.updateConfig('aiPanelSiderWidth', aiPanelSiderWidth.value)
 }
 
-function startChapterSummarySiderResize(event: PointerEvent) {
+function startAiPanelSiderResize(event: PointerEvent) {
   event.preventDefault()
-  chapterSummarySiderResizing.value = true
-  chapterSummaryResizeStartX = event.clientX
-  chapterSummaryResizeStartWidth = chapterSummarySiderWidth.value
-  window.addEventListener('pointermove', handleChapterSummarySiderResize)
-  window.addEventListener('pointerup', stopChapterSummarySiderResize)
+  aiPanelSiderResizing.value = true
+  aiPanelResizeStartX = event.clientX
+  aiPanelResizeStartWidth = aiPanelSiderWidth.value
+  window.addEventListener('pointermove', handleAiPanelSiderResize)
+  window.addEventListener('pointerup', stopAiPanelSiderResize)
 }
 
 async function refreshOfflineCacheState() {
@@ -2655,20 +2655,20 @@ async function openInfo() {
   }
 }
 
-function toggleChapterSummary() {
-  showChapterSummary.value = !showChapterSummary.value
-  store.updateConfig('showChapterSummary', showChapterSummary.value)
-  if (showChapterSummary.value && !chapterSummary.value && chapterSummaryStatus.value !== 'loading') {
+function toggleAiPanel() {
+  showAiPanel.value = !showAiPanel.value
+  store.updateConfig('showAiPanel', showAiPanel.value)
+  if (showAiPanel.value && !chapterSummary.value && chapterSummaryStatus.value !== 'loading') {
     scheduleAutoChapterSummary(currentChapterSummaryIdentity.value)
-  } else if (!showChapterSummary.value) {
+  } else if (!showAiPanel.value) {
     clearChapterSummaryTimer()
   }
-  appStore.showToast(showChapterSummary.value ? '已显示 AI 面板' : '已隐藏 AI 面板', 'success')
+  appStore.showToast(showAiPanel.value ? '已显示 AI 面板' : '已隐藏 AI 面板', 'success')
 }
 
-function hideChapterSummary() {
-  showChapterSummary.value = false
-  store.updateConfig('showChapterSummary', false)
+function hideAiPanel() {
+  showAiPanel.value = false
+  store.updateConfig('showAiPanel', false)
   clearChapterSummaryTimer()
 }
 
@@ -2729,7 +2729,7 @@ const aiModelStatusMessage = computed(() => {
 
 onBeforeRouteLeave(() => {
   clearChapterSummaryTimer()
-  stopChapterSummarySiderResize()
+  stopAiPanelSiderResize()
   persistReadingProgressKeepalive()
   return true
 })
@@ -2737,7 +2737,7 @@ onBeforeRouteLeave(() => {
 onMounted(async () => {
   syncViewportSize()
   void loadChapterSummaryConfigForSider()
-  if (chapterSummaryActiveTab.value === 'settings') {
+  if (aiPanelActiveTab.value === 'settings') {
     void loadAiModelConfig()
   }
   appStore.startReadingSession()
@@ -2783,7 +2783,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
     clearChapterSummaryTimer()
-    stopChapterSummarySiderResize()
+    stopAiPanelSiderResize()
     persistReadingProgressKeepalive()
     appStore.stopReadingSession()
     window.removeEventListener('keydown', handleKeydown)
@@ -2855,13 +2855,13 @@ watch(
 
 watch(() => store.book?.bookUrl, () => {
   resetChapterSummaryRelationshipState()
-  if (chapterSummaryActiveTab.value === 'relationships') {
+  if (aiPanelActiveTab.value === 'relationships') {
     void loadChapterSummaryRelationshipMemory()
   }
 })
 
-watch(chapterSummaryActiveTab, (tab) => {
-  store.updateConfig('chapterSummaryActiveTab', tab)
+watch(aiPanelActiveTab, (tab) => {
+  store.updateConfig('aiPanelActiveTab', tab)
   if (tab === 'relationships' && chapterSummaryRelationshipStatus.value === 'idle') {
     void loadChapterSummaryRelationshipMemory()
   }
@@ -2871,10 +2871,10 @@ watch(chapterSummaryActiveTab, (tab) => {
 })
 
 watch(
-  () => config.value.chapterSummarySiderWidth,
+  () => config.value.aiPanelSiderWidth,
   (width) => {
-    if (!chapterSummarySiderResizing.value) {
-      chapterSummarySiderWidth.value = clampChapterSummarySiderWidth(width)
+    if (!aiPanelSiderResizing.value) {
+      aiPanelSiderWidth.value = clampChapterSummarySiderWidth(width)
     }
   },
 )

@@ -18,7 +18,7 @@
         <path d="M15 11v5" />
       </svg>
     </button>
-    <button class="tb-btn" :class="{ active: showChapterSummary }" @click="$emit('toggleChapterSummary')" :title="showChapterSummary ? '隐藏 AI 面板' : '显示 AI 面板'">
+    <button class="tb-btn" :class="{ active: showAiPanel }" @click="$emit('toggleAiPanel')" :title="showAiPanel ? '隐藏 AI 面板' : '显示 AI 面板'">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16M4 12h10M4 19h16" /></svg>
     </button>
     <button class="tb-btn" :class="{ spinning: store.loading }" @click="store.refreshContent()" title="刷新">
@@ -72,7 +72,7 @@ const theme = computed(() => {
 defineProps<{
   isSpeaking?: boolean
   isPaused?: boolean
-  showChapterSummary?: boolean
+  showAiPanel?: boolean
 }>()
 
 defineEmits<{
@@ -80,7 +80,7 @@ defineEmits<{
   search: []
   info: []
   ai: []
-  toggleChapterSummary: []
+  toggleAiPanel: []
   tts: []
   prev: []
   next: []

@@ -10,15 +10,21 @@ use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetReques
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
-const AI_BOOK_MEMORY_ROUTE: &str = "/reader3/aiBook/memory";
-const AI_BOOK_CHAPTER_MEMORY_ROUTE: &str = "/reader3/aiBook/chapterMemory";
-const AI_BOOK_MEMORY_RESET_ROUTE: &str = "/reader3/aiBook/memory/reset";
-const AI_BOOK_ENABLED_ROUTE: &str = "/reader3/aiBook/enabled";
-const AI_BOOK_CHAPTER_GENERATE_ROUTE: &str = "/reader3/aiBook/chapterMemory/generate";
-const AI_BOOK_MAP_GENERATE_ROUTE: &str = "/reader3/aiBook/map/generate";
-const AI_BOOK_CATCHUP_START_ROUTE: &str = "/reader3/aiBook/catchup/start";
-const AI_BOOK_CATCHUP_STATUS_ROUTE: &str = "/reader3/aiBook/catchup/status";
-const AI_BOOK_CATCHUP_CANCEL_ROUTE: &str = "/reader3/aiBook/catchup/cancel";
+const AI_BOOK_MEMORY_ROUTE: &str = "/reader3/ai/book/memory";
+const AI_BOOK_CHAPTER_MEMORY_ROUTE: &str = "/reader3/ai/book/chapter-memory";
+const AI_BOOK_MEMORY_RESET_ROUTE: &str = "/reader3/ai/book/memory/reset";
+const AI_BOOK_ENABLED_ROUTE: &str = "/reader3/ai/book/enabled";
+const AI_BOOK_CHAPTER_GENERATE_ROUTE: &str = "/reader3/ai/book/chapter-memory/generate";
+const AI_BOOK_MAP_GENERATE_ROUTE: &str = "/reader3/ai/book/map/generate";
+const AI_BOOK_CATCHUP_START_ROUTE: &str = "/reader3/ai/book/catchup/start";
+const AI_BOOK_CATCHUP_STATUS_ROUTE: &str = "/reader3/ai/book/catchup/status";
+const AI_BOOK_CATCHUP_CANCEL_ROUTE: &str = "/reader3/ai/book/catchup/cancel";
+const AI_MODEL_CONFIG_ROUTE: &str = "/reader3/ai/model/config";
+const AI_CHAPTER_SUMMARY_ROUTE: &str = "/reader3/ai/chapter-summary";
+const AI_CHAPTER_SUMMARY_GENERATE_ROUTE: &str = "/reader3/ai/chapter-summary/generate";
+const AI_CHAPTER_SUMMARY_CONFIG_ROUTE: &str = "/reader3/ai/chapter-summary/config";
+const AI_PROXY_ROUTE: &str = "/reader3/ai/proxy";
+const AI_PROXY_IMAGE_ROUTE: &str = "/reader3/ai/proxy/image";
 
 pub fn build_router(state: AppState) -> Router {
     let api = Router::new()
@@ -253,27 +259,23 @@ pub fn build_router(state: AppState) -> Router {
             post(handlers::cancel_ai_book_catchup),
         )
         .route(
-            "/reader3/getAiModelConfig",
-            get(handlers::get_ai_model_config),
+            AI_MODEL_CONFIG_ROUTE,
+            get(handlers::get_ai_model_config).post(handlers::save_ai_model_config),
         )
         .route(
-            "/reader3/saveAiModelConfig",
-            post(handlers::save_ai_model_config),
-        )
-        .route(
-            "/reader3/chapterSummary",
+            AI_CHAPTER_SUMMARY_ROUTE,
             get(handlers::get_chapter_summary),
         )
         .route(
-            "/reader3/chapterSummary/generate",
+            AI_CHAPTER_SUMMARY_GENERATE_ROUTE,
             post(handlers::generate_chapter_summary),
         )
         .route(
-            "/reader3/chapterSummary/config",
+            AI_CHAPTER_SUMMARY_CONFIG_ROUTE,
             get(handlers::get_chapter_summary_config).post(handlers::save_chapter_summary_config),
         )
-        .route("/reader3/aiProxy", post(handlers::ai_proxy))
-        .route("/reader3/aiProxyImage", post(handlers::ai_proxy_image))
+        .route(AI_PROXY_ROUTE, post(handlers::ai_proxy))
+        .route(AI_PROXY_IMAGE_ROUTE, post(handlers::ai_proxy_image))
         .route("/reader3/getReplaceRules", get(handlers::get_replace_rules))
         .route(
             "/reader3/saveReplaceRule",

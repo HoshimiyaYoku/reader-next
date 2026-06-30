@@ -1,31 +1,31 @@
-import http from './http'
+import http from '../http'
 import type {
   ChapterSummaryConfig,
   ChapterSummaryConfigResponse,
   ChapterSummaryResponse,
   GenerateChapterSummaryRequest,
-} from '../types'
+} from '../../types'
 
 export function getChapterSummary(bookUrl: string, chapterUrl: string) {
   return http
-    .get<ChapterSummaryResponse>('/chapterSummary', { params: { bookUrl, chapterUrl } })
+    .get<ChapterSummaryResponse>('/ai/chapter-summary', { params: { bookUrl, chapterUrl } })
     .then((r) => r.data)
 }
 
 export function generateChapterSummary(payload: GenerateChapterSummaryRequest) {
   return http
-    .post<ChapterSummaryResponse>('/chapterSummary/generate', payload)
+    .post<ChapterSummaryResponse>('/ai/chapter-summary/generate', payload)
     .then((r) => r.data)
 }
 
 export function getChapterSummaryConfig() {
   return http
-    .get<ChapterSummaryConfigResponse>('/chapterSummary/config')
+    .get<ChapterSummaryConfigResponse>('/ai/chapter-summary/config')
     .then((r) => r.data)
 }
 
 export function saveChapterSummaryConfig(config: ChapterSummaryConfig) {
   return http
-    .post<ChapterSummaryConfigResponse>('/chapterSummary/config', { config })
+    .post<ChapterSummaryConfigResponse>('/ai/chapter-summary/config', { config })
     .then((r) => r.data)
 }

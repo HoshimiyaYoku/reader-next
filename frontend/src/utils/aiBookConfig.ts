@@ -157,7 +157,7 @@ export function describeAiBookTextRuntime(
       source: 'server',
       sourceLabel: '后端配置',
       model: (serverConfig?.text.model || '').trim() || '未配置',
-      path: `/reader3/aiProxy → ${path}`,
+      path: `/reader3/ai/proxy → ${path}`,
     }
   }
 
@@ -166,7 +166,7 @@ export function describeAiBookTextRuntime(
     source: 'browser',
     sourceLabel: config.useBackendProxy ? '浏览器配置，经后端代理' : '浏览器直连',
     model: config.textModel.trim() || '未配置',
-    path: config.useBackendProxy ? `/reader3/aiProxy → ${path}` : path,
+      path: config.useBackendProxy ? `/reader3/ai/proxy → ${path}` : path,
   }
 }
 

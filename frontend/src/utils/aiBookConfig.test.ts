@@ -170,7 +170,7 @@ describe('aiBookConfig', () => {
       source: 'browser',
       sourceLabel: '浏览器配置，经后端代理',
       model: 'story-model',
-      path: '/reader3/aiProxy → /v1/responses',
+      path: '/reader3/ai/proxy → /v1/responses',
     })
 
     expect(describeAiBookTextRuntime({
@@ -220,7 +220,7 @@ describe('aiBookConfig', () => {
       source: 'server',
       sourceLabel: '后端配置',
       model: 'server-model',
-      path: '/reader3/aiProxy → /v1/chat/completions',
+      path: '/reader3/ai/proxy → /v1/chat/completions',
     })
   })
 

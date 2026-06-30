@@ -59,13 +59,13 @@ export interface ReadConfig {
   chineseMode: 'simplified' | 'traditional'
   specialMode: 'normal' | 'simple'
   enablePreload: boolean
-  showChapterSummary: boolean
+  showAiPanel: boolean
   enableChapterSummaryAuto: boolean
-  chapterSummaryLayout: 'auto' | 'side'
-  chapterSummarySiderWidth: number
-  chapterSummaryFontSize: number
+  aiPanelLayout: 'auto' | 'side'
+  aiPanelSiderWidth: number
+  aiPanelFontSize: number
   chapterSummaryKeyPointStyle: 'card' | 'list'
-  chapterSummaryActiveTab: 'content' | 'relationships' | 'settings'
+  aiPanelActiveTab: 'summary' | 'relationships' | 'settings'
 }
 
 const defaultConfig: ReadConfig = {
@@ -88,21 +88,46 @@ const defaultConfig: ReadConfig = {
   chineseMode: 'simplified',
   specialMode: 'normal',
   enablePreload: false,
-  showChapterSummary: true,
+  showAiPanel: true,
   enableChapterSummaryAuto: true,
-  chapterSummaryLayout: 'auto',
-  chapterSummarySiderWidth: 360,
-  chapterSummaryFontSize: 16,
+  aiPanelLayout: 'auto',
+  aiPanelSiderWidth: 360,
+  aiPanelFontSize: 16,
   chapterSummaryKeyPointStyle: 'card',
-  chapterSummaryActiveTab: 'content',
+  aiPanelActiveTab: 'summary',
 }
 
 function loadConfig(): ReadConfig {
   try {
     const saved = localStorage.getItem('readConfig')
-    if (saved) return { ...defaultConfig, ...JSON.parse(saved) }
+    if (saved) return migrateLegacyReadConfig(JSON.parse(saved))
   } catch { /* ignore */ }
   return { ...defaultConfig }
+}
+
+function migrateLegacyReadConfig(saved: Partial<ReadConfig> & Record<string, unknown>): ReadConfig {
+  const normalized = { ...saved } as Record<string, unknown>
+  if (normalized.showAiPanel === undefined && normalized.showChapterSummary !== undefined) {
+    normalized.showAiPanel = normalized.showChapterSummary
+  }
+  if (normalized.aiPanelLayout === undefined && normalized.chapterSummaryLayout !== undefined) {
+    normalized.aiPanelLayout = normalized.chapterSummaryLayout
+  }
+  if (normalized.aiPanelSiderWidth === undefined && normalized.chapterSummarySiderWidth !== undefined) {
+    normalized.aiPanelSiderWidth = normalized.chapterSummarySiderWidth
+  }
+  if (normalized.aiPanelFontSize === undefined && normalized.chapterSummaryFontSize !== undefined) {
+    normalized.aiPanelFontSize = normalized.chapterSummaryFontSize
+  }
+  if (normalized.aiPanelActiveTab === undefined && normalized.chapterSummaryActiveTab !== undefined) {
+    normalized.aiPanelActiveTab = normalized.chapterSummaryActiveTab === 'content'
+      ? 'summary'
+      : normalized.chapterSummaryActiveTab
+  }
+  if (normalized.aiPanelActiveTab === 'content') {
+    normalized.aiPanelActiveTab = 'summary'
+  }
+  return { ...defaultConfig, ...normalized } as ReadConfig
 }
 
 /* ─── Theme presets ─── */

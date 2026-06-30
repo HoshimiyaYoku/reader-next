@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { getAiModelConfig } from '../api/aiModel'
+import { getAiModelConfig } from '../api/ai/model'
 import {
   cancelAiBookCatchup,
   generateAiBookChapterMemory,
@@ -10,7 +10,7 @@ import {
   resetAiBookMemory,
   setAiBookEnabled,
   startAiBookCatchup,
-} from '../api/aiBook'
+} from '../api/ai/book'
 import type {
   AiBookCatchupStatus,
   AiBookChapterMemoryViewModel,

@@ -69,7 +69,7 @@ export async function requestOpenAISpeechAudio({
     speed,
   }
   const response = source === 'server'
-    ? await fetch('/reader3/aiProxy', {
+    ? await fetch('/reader3/ai/proxy', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
