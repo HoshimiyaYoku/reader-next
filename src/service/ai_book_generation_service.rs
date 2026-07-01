@@ -1,12 +1,19 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
+use base64::Engine;
 use reqwest::Client;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 
 use crate::error::error::AppError;
-use crate::model::ai_book::{AiBookChapterMemoryViewResponse, AiBookMemoryV3};
+use crate::model::ai_book::{
+    AiBookChapterMemoryViewResponse, AiBookLocationEdgeKind, AiBookMapArtifactsV3,
+    AiBookMapBlueprintConnectionV3, AiBookMapBlueprintContentV3, AiBookMapBlueprintLayoutV3,
+    AiBookMapBlueprintPlaceV3, AiBookMapBlueprintSourceV3, AiBookMapBlueprintV3,
+    AiBookMapImageGuideV3, AiBookMapLayoutGroupV3, AiBookMapLayoutPlacementV3,
+    AiBookMapSourceRefV3, AiBookMapStatusV3, AiBookMapV3, AiBookMemoryV3,
+};
 use crate::model::ai_book_generation::{
     AiBookChapterDigestCandidateV3, AiBookCombinedChapterGenerationV3, AiBookKnowledgePatchV3,
 };
@@ -25,7 +32,9 @@ use crate::service::ai_model_service::AiModelService;
 use crate::service::book_service::BookService;
 use crate::service::book_source_service::BookSourceService;
 use crate::service::local_txt_book::{is_local_txt_origin, LocalTxtBookService};
+use crate::util::hash::md5_hex;
 use crate::util::text::{normalize_source_url, repair_encoded_url};
+use crate::util::time::now_ts;
 
 const DEFAULT_PROMPT: &str = r#"你是小说 AI资料生成 agent。只允许基于当前已读章节和本次章节正文更新资料，不预测未读内容，不剧透目标章节之后内容。
 输入会给你 currentMemory、chapter 和 generationMode。不要输出 Markdown，不要输出解释，只输出严格 JSON 对象。
@@ -177,6 +186,85 @@ impl AiBookGenerationService {
             .save_v3(user_ns, &book_url, memory)
             .await?;
         Ok(project_chapter_response(&saved, chapter_index))
+    }
+
+    pub async fn generate_map(
+        &self,
+        user_ns: &str,
+        shelf_book: &Book,
+        source_chapter_index: Option<i32>,
+        prompt: Option<String>,
+    ) -> Result<crate::model::ai_book::AiBookMemoryViewResponse, AppError> {
+        let book_url = repair_encoded_url(&shelf_book.book_url);
+        let _guard = self.acquire_write_guard(user_ns, &book_url)?;
+        let mut memory = self
+            .ai_book_service
+            .get_or_create_v3(
+                user_ns,
+                &book_url,
+                Some(shelf_book.name.clone()),
+                Some(shelf_book.author.clone()),
+            )
+            .await?;
+        let blueprint = compile_map_blueprint(&memory, source_chapter_index, prompt.as_deref());
+        let image_prompt = build_map_image_prompt(&blueprint)?;
+        let previous_artifacts = memory.map.as_ref().and_then(|map| map.artifacts.clone());
+        memory.map = Some(AiBookMapV3 {
+            status: AiBookMapStatusV3 {
+                dirty: true,
+                dirty_reason: Some("地图蓝图已更新，等待图片生成".to_string()),
+                source_chapter_index,
+                source_chapter_title: blueprint.source.source_chapter_title.clone(),
+                last_blueprint_generated_at: Some(blueprint.source.compiled_at),
+                ..Default::default()
+            },
+            blueprint: Some(blueprint.clone()),
+            artifacts: previous_artifacts,
+        });
+        self.ai_book_service
+            .save_v3(user_ns, &book_url, memory.clone())
+            .await?;
+
+        let generated = match self.generator.generate_map_image(&image_prompt).await {
+            Ok(generated) => generated,
+            Err(error) => {
+                if let Some(map) = memory.map.as_mut() {
+                    map.status.last_error = Some(app_error_message(&error));
+                }
+                let _ = self
+                    .ai_book_service
+                    .save_v3(user_ns, &book_url, memory)
+                    .await;
+                return Err(error);
+            }
+        };
+        let image_url = self
+            .persist_map_image(user_ns, &book_url, &generated.bytes)
+            .await?;
+        let generated_at = now_ts() * 1000;
+        if let Some(map) = memory.map.as_mut() {
+            map.status.dirty = false;
+            map.status.dirty_reason = None;
+            map.status.last_error = None;
+            map.status.last_image_generated_at = Some(generated_at);
+            map.artifacts = Some(AiBookMapArtifactsV3 {
+                image_url: Some(image_url),
+                image_prompt: Some(image_prompt),
+                generated_at: Some(generated_at),
+                blueprint_version: map.blueprint.as_ref().map(|blueprint| blueprint.version),
+                model: Some(generated.model),
+                provider: generated.provider,
+                updated_at: Some(generated_at),
+                ..Default::default()
+            });
+        }
+        let saved = self
+            .ai_book_service
+            .save_v3(user_ns, &book_url, memory)
+            .await?;
+        Ok(crate::model::ai_book::AiBookMemoryViewResponse {
+            memory: select_ai_book_display_memory_v3(&saved),
+        })
     }
 
     pub async fn generate_digest(
@@ -353,6 +441,29 @@ impl AiBookGenerationService {
         }
         Err(AppError::NotFound("bookSource not found".to_string()))
     }
+
+    async fn persist_map_image(
+        &self,
+        user_ns: &str,
+        book_url: &str,
+        bytes: &[u8],
+    ) -> Result<String, AppError> {
+        let safe_user_ns = safe_asset_segment(user_ns);
+        let dir = self
+            .ai_book_service
+            .assets_dir()
+            .join(&safe_user_ns)
+            .join("ai-book-maps");
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(|e| AppError::Internal(e.into()))?;
+        let filename = format!("map-{}-{}.png", &md5_hex(book_url)[0..12], now_ts() * 1000);
+        let path = dir.join(&filename);
+        tokio::fs::write(&path, bytes)
+            .await
+            .map_err(|e| AppError::Internal(e.into()))?;
+        Ok(format!("/assets/{safe_user_ns}/ai-book-maps/{filename}"))
+    }
 }
 
 fn apply_generation_result(
@@ -434,6 +545,214 @@ fn upsert_digest(
     memory
 }
 
+pub fn compile_map_blueprint(
+    memory: &AiBookMemoryV3,
+    source_chapter_index: Option<i32>,
+    prompt: Option<&str>,
+) -> AiBookMapBlueprintV3 {
+    let mut warnings = Vec::new();
+    if memory.locations.is_empty() {
+        warnings.push("缺少地点资料，无法生成准确地图。".to_string());
+    }
+
+    let mut place_ids_by_name = HashMap::new();
+    let places = memory
+        .locations
+        .iter()
+        .map(|location| {
+            let id = stable_map_place_id(&location.name);
+            place_ids_by_name.insert(location.name.clone(), id.clone());
+            AiBookMapBlueprintPlaceV3 {
+                id,
+                source_ref: AiBookMapSourceRefV3 {
+                    source_type: "location".to_string(),
+                    key: location.name.clone(),
+                },
+                label: location.name.clone(),
+                kind: location.kind.clone(),
+                short_description: non_empty_string(&location.description),
+                importance: None,
+                related_characters: location.related_characters.clone(),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if memory.location_edges.is_empty() && !memory.locations.is_empty() {
+        warnings.push("缺少地点关系，地图只能展示地点列表。".to_string());
+    }
+
+    let mut has_hierarchy_edge = false;
+    let mut has_network_edge = false;
+    let mut connections = Vec::new();
+    for edge in &memory.location_edges {
+        let Some(source_place_id) = place_ids_by_name.get(&edge.source).cloned() else {
+            warnings.push(format!("地点关系引用了缺失地点：{}", edge.source));
+            continue;
+        };
+        let Some(target_place_id) = place_ids_by_name.get(&edge.target).cloned() else {
+            warnings.push(format!("地点关系引用了缺失地点：{}", edge.target));
+            continue;
+        };
+        if is_hierarchy_edge(&edge.kind) {
+            has_hierarchy_edge = true;
+        } else {
+            has_network_edge = true;
+        }
+        let kind = map_edge_kind_label(&edge.kind).to_string();
+        connections.push(AiBookMapBlueprintConnectionV3 {
+            id: stable_map_connection_id(&edge.source, &edge.target, &kind),
+            source_ref: AiBookMapSourceRefV3 {
+                source_type: "locationEdge".to_string(),
+                key: format!("{}:{}:{}", edge.source, kind, edge.target),
+            },
+            source_place_id,
+            target_place_id,
+            kind,
+            label: None,
+            description: edge.description.clone(),
+            confidence: Some("medium".to_string()),
+        });
+    }
+
+    let mode = if has_hierarchy_edge {
+        "place-hierarchy"
+    } else if has_network_edge {
+        "place-network"
+    } else {
+        "overview"
+    };
+    let place_ids = places
+        .iter()
+        .map(|place| place.id.clone())
+        .collect::<Vec<_>>();
+
+    AiBookMapBlueprintV3 {
+        version: 1,
+        source: AiBookMapBlueprintSourceV3 {
+            source_chapter_index,
+            source_chapter_title: source_chapter_index
+                .and_then(|index| {
+                    memory
+                        .chapter_digests
+                        .iter()
+                        .find(|digest| digest.chapter_index == index)
+                })
+                .map(|digest| digest.chapter_title.clone()),
+            compiled_at: now_ts() * 1000,
+            prompt: prompt.and_then(non_empty_string),
+        },
+        content: AiBookMapBlueprintContentV3 {
+            places,
+            connections,
+        },
+        layout: AiBookMapBlueprintLayoutV3 {
+            mode: mode.to_string(),
+            groups: if place_ids.is_empty() {
+                Vec::new()
+            } else {
+                vec![AiBookMapLayoutGroupV3 {
+                    id: "main".to_string(),
+                    label: "主要地点".to_string(),
+                    place_ids: place_ids.clone(),
+                }]
+            },
+            placements: place_ids
+                .iter()
+                .map(|place_id| AiBookMapLayoutPlacementV3 {
+                    place_id: place_id.clone(),
+                    x: None,
+                    y: None,
+                })
+                .collect(),
+            highlighted_place_ids: place_ids.iter().take(3).cloned().collect(),
+            current_place_ids: Vec::new(),
+        },
+        image_guide: AiBookMapImageGuideV3 {
+            aspect_ratio: "16:9".to_string(),
+            style: "clean-fictional-map".to_string(),
+            label_policy: "chinese-readable".to_string(),
+            must_include: memory
+                .locations
+                .iter()
+                .take(5)
+                .map(|location| location.name.clone())
+                .collect(),
+            must_avoid: vec!["不要编造未在资料中出现的地名或地理层级".to_string()],
+        },
+        warnings,
+    }
+}
+
+fn build_map_image_prompt(blueprint: &AiBookMapBlueprintV3) -> Result<String, AppError> {
+    Ok(format!(
+        "请根据以下 map.blueprint 生成一张清晰、可读、不要编造额外地名的小说地图。\n要求：中文标签清晰；优先表达地点层级和连接；如果 warnings 提示资料不足，要保持抽象，不补不存在的地理细节。\nmap.blueprint:\n{}",
+        serde_json::to_string_pretty(blueprint).map_err(|e| AppError::BadRequest(e.to_string()))?
+    ))
+}
+
+fn stable_map_place_id(name: &str) -> String {
+    format!("place-{}", &md5_hex(name.trim())[0..12])
+}
+
+fn stable_map_connection_id(source: &str, target: &str, kind: &str) -> String {
+    format!(
+        "edge-{}",
+        &md5_hex(&format!("{source}::{kind}::{target}"))[0..12]
+    )
+}
+
+fn non_empty_string(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn is_hierarchy_edge(kind: &AiBookLocationEdgeKind) -> bool {
+    matches!(
+        kind,
+        AiBookLocationEdgeKind::Contains | AiBookLocationEdgeKind::PartOf
+    )
+}
+
+fn map_edge_kind_label(kind: &AiBookLocationEdgeKind) -> &'static str {
+    match kind {
+        AiBookLocationEdgeKind::Unknown => "unknown",
+        AiBookLocationEdgeKind::Contains => "contains",
+        AiBookLocationEdgeKind::Adjacent => "adjacent",
+        AiBookLocationEdgeKind::LeadsTo => "leadsTo",
+        AiBookLocationEdgeKind::PartOf => "partOf",
+        AiBookLocationEdgeKind::Near => "near",
+    }
+}
+
+fn safe_asset_segment(value: &str) -> String {
+    let safe = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if safe.trim_matches('_').is_empty() {
+        "default".to_string()
+    } else {
+        safe
+    }
+}
+
+fn app_error_message(error: &AppError) -> String {
+    match error {
+        AppError::BadRequest(message) => message.clone(),
+        _ => error.to_string(),
+    }
+}
+
 fn project_chapter_response(
     memory: &AiBookMemoryV3,
     chapter_index: i32,
@@ -497,6 +816,23 @@ pub trait ChapterGenerationModel: Send + Sync {
         digest: &'a AiBookChapterDigestCandidateV3,
         mode: AiBookGenerationMode,
     ) -> futures::future::BoxFuture<'a, Result<AiBookKnowledgePatchV3, AppError>>;
+
+    fn generate_map_image<'a>(
+        &'a self,
+        _prompt: &'a str,
+    ) -> futures::future::BoxFuture<'a, Result<GeneratedMapImage, AppError>> {
+        Box::pin(async {
+            Err(AppError::BadRequest(
+                "后端图片模型未启用或配置不完整".to_string(),
+            ))
+        })
+    }
+}
+
+pub struct GeneratedMapImage {
+    bytes: Vec<u8>,
+    model: String,
+    provider: Option<String>,
 }
 
 struct DisabledChapterGenerationModel;
@@ -600,6 +936,16 @@ impl ChapterGenerationModel for ProxyChapterGenerationModel {
                 build_patch_generation_prompt(chapter_text, memory, chapter, digest, mode)?;
             let value = call_generation_model(&endpoint, prompt).await?;
             deserialize_patch_generation_value(value)
+        })
+    }
+
+    fn generate_map_image<'a>(
+        &'a self,
+        prompt: &'a str,
+    ) -> futures::future::BoxFuture<'a, Result<GeneratedMapImage, AppError>> {
+        Box::pin(async move {
+            let endpoint = resolve_image_endpoint(self.ai_model_service.as_ref()).await?;
+            call_image_generation_model(&endpoint, prompt).await
         })
     }
 }
@@ -797,6 +1143,93 @@ async fn resolve_text_endpoint(
         ));
     }
     Ok(endpoint)
+}
+
+async fn resolve_image_endpoint(
+    ai_model_service: &AiModelService,
+) -> Result<ResolvedAiModelEndpoint, AppError> {
+    let endpoint = ai_model_service.get().await?.resolve(AiModelKind::Image);
+    if !endpoint.enabled || endpoint.base_url.trim().is_empty() || endpoint.model.trim().is_empty()
+    {
+        return Err(AppError::BadRequest(
+            "后端图片模型未启用或配置不完整".to_string(),
+        ));
+    }
+    Ok(endpoint)
+}
+
+async fn call_image_generation_model(
+    endpoint: &ResolvedAiModelEndpoint,
+    prompt: &str,
+) -> Result<GeneratedMapImage, AppError> {
+    let path = if endpoint.path.trim().is_empty() {
+        "/v1/images/generations"
+    } else {
+        endpoint.path.trim()
+    };
+    let target = build_ai_proxy_url(&endpoint.base_url, path, endpoint.use_full_url)
+        .map_err(AppError::BadRequest)?;
+    let client = Client::builder().timeout(ai_proxy_timeout()).build()?;
+    let mut body = serde_json::json!({
+        "model": endpoint.model,
+        "prompt": prompt,
+        "n": 1,
+        "size": endpoint.image_size.as_deref().unwrap_or("1024x1024"),
+    });
+    if let Some(size) = endpoint
+        .image_size
+        .as_ref()
+        .filter(|size| !size.trim().is_empty())
+    {
+        body["size"] = Value::String(size.clone());
+    }
+    let mut builder = client
+        .post(target)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .json(&body);
+    if !endpoint.api_key.trim().is_empty() {
+        builder = builder.bearer_auth(endpoint.api_key.trim());
+    }
+    let response = builder.send().await.map_err(map_model_http_error)?;
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let text = response.text().await.unwrap_or_default();
+        return Err(AppError::BadRequest(format_ai_proxy_upstream_error(
+            status, &text,
+        )));
+    }
+    let value: Value = response.json().await?;
+    let item = value
+        .get("data")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .ok_or_else(|| AppError::BadRequest("图片模型返回内容为空".to_string()))?;
+    let bytes = if let Some(b64) = item.get("b64_json").and_then(Value::as_str) {
+        base64::engine::general_purpose::STANDARD
+            .decode(b64.trim())
+            .map_err(|e| AppError::BadRequest(format!("图片模型返回 base64 无法解析: {e}")))?
+    } else if let Some(url) = item.get("url").and_then(Value::as_str) {
+        let response = client.get(url).send().await.map_err(map_model_http_error)?;
+        if !response.status().is_success() {
+            return Err(AppError::BadRequest(format!(
+                "图片模型返回的图片地址下载失败: {}",
+                response.status().as_u16()
+            )));
+        }
+        response.bytes().await?.to_vec()
+    } else {
+        return Err(AppError::BadRequest(
+            "图片模型返回格式不支持，缺少 data[0].url 或 data[0].b64_json".to_string(),
+        ));
+    };
+    if bytes.is_empty() {
+        return Err(AppError::BadRequest("图片模型返回空图片".to_string()));
+    }
+    Ok(GeneratedMapImage {
+        bytes,
+        model: endpoint.model.clone(),
+        provider: Some(endpoint.base_url.clone()),
+    })
 }
 
 async fn call_generation_model(
@@ -1418,6 +1851,93 @@ mod tests {
         assert_eq!(memory.chapter_digests.len(), 1);
         assert_eq!(memory.chapter_digests[0].chapter_index, 6);
         assert_eq!(memory.processed_chapter_index, None);
+    }
+
+    fn sample_map_memory() -> AiBookMemoryV3 {
+        let mut memory = AiBookMemoryV3::new("book://map");
+        memory.locations = vec![
+            crate::model::ai_book::AiBookLocationV3 {
+                name: "昆墟".to_string(),
+                kind: Some("区域".to_string()),
+                description: "多层试炼空间".to_string(),
+                related_characters: vec!["张羽".to_string()],
+                ..Default::default()
+            },
+            crate::model::ai_book::AiBookLocationV3 {
+                name: "昆墟第一层".to_string(),
+                kind: Some("层级".to_string()),
+                description: "第一层训练区".to_string(),
+                ..Default::default()
+            },
+        ];
+        memory.location_edges = vec![crate::model::ai_book::AiBookLocationEdgeV3 {
+            source: "昆墟".to_string(),
+            target: "昆墟第一层".to_string(),
+            kind: crate::model::ai_book::AiBookLocationEdgeKind::Contains,
+            description: Some("第一层属于昆墟".to_string()),
+        }];
+        memory
+    }
+
+    #[test]
+    fn compile_map_blueprint_warns_for_empty_memory() {
+        let memory = AiBookMemoryV3::new("book://empty");
+        let blueprint = compile_map_blueprint(&memory, None, None);
+
+        assert_eq!(blueprint.version, 1);
+        assert!(blueprint.content.places.is_empty());
+        assert!(blueprint
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("地点")));
+        assert_eq!(blueprint.layout.mode, "overview");
+    }
+
+    #[test]
+    fn compile_map_blueprint_uses_locations_as_places() {
+        let memory = sample_map_memory();
+        let blueprint = compile_map_blueprint(&memory, Some(3), Some("突出昆墟"));
+
+        assert_eq!(blueprint.source.source_chapter_index, Some(3));
+        assert_eq!(blueprint.source.prompt.as_deref(), Some("突出昆墟"));
+        assert_eq!(blueprint.content.places.len(), 2);
+        assert_eq!(
+            blueprint.content.places[0].source_ref.source_type,
+            "location"
+        );
+        assert_eq!(blueprint.content.places[0].label, "昆墟");
+        assert_eq!(blueprint.image_guide.aspect_ratio, "16:9");
+    }
+
+    #[test]
+    fn compile_map_blueprint_uses_hierarchy_layout_for_contains_edges() {
+        let memory = sample_map_memory();
+        let blueprint = compile_map_blueprint(&memory, None, None);
+
+        assert_eq!(blueprint.content.connections.len(), 1);
+        assert_eq!(blueprint.content.connections[0].kind, "contains");
+        assert_eq!(blueprint.layout.mode, "place-hierarchy");
+    }
+
+    #[test]
+    fn compile_map_blueprint_warns_for_missing_edge_endpoint() {
+        let mut memory = sample_map_memory();
+        memory
+            .location_edges
+            .push(crate::model::ai_book::AiBookLocationEdgeV3 {
+                source: "不存在".to_string(),
+                target: "昆墟".to_string(),
+                kind: crate::model::ai_book::AiBookLocationEdgeKind::Near,
+                description: None,
+            });
+
+        let blueprint = compile_map_blueprint(&memory, None, None);
+
+        assert_eq!(blueprint.content.connections.len(), 1);
+        assert!(blueprint
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("不存在")));
     }
 
     async fn create_services() -> (AiBookGenerationService, PathBuf) {

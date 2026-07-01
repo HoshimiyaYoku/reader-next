@@ -1,5 +1,5 @@
 use reader_next::model::ai_book::{
-    AiBookCatchupStatsV3, AiBookChapterDigestV3, AiBookMemoryV3, AiBookRenderArtifactsV3,
+    AiBookCatchupStatsV3, AiBookChapterDigestV3, AiBookMapArtifactsV3, AiBookMapV3, AiBookMemoryV3,
 };
 use reader_next::service::ai_book_memory_v3::create_empty_ai_book_memory_v3;
 use reader_next::service::ai_book_service::AiBookService;
@@ -51,12 +51,13 @@ async fn ai_book_v3_memory_round_trips_and_isolated_by_user() {
         })
         .collect();
     memory.summary.current = "主角抵达北境，首次听闻旧神传说。".to_string();
-    memory.render_artifacts = Some(AiBookRenderArtifactsV3 {
-        chapter_index: Some(7),
-        chapter_title: Some("第八章".to_string()),
-        summary: Some("北境地图".to_string()),
-        image_url: Some("/assets/alice/ai-maps/map.png".to_string()),
-        updated_at: Some(1_700_000_000),
+    memory.map = Some(AiBookMapV3 {
+        artifacts: Some(AiBookMapArtifactsV3 {
+            image_url: Some("/assets/alice/ai-maps/map.png".to_string()),
+            updated_at: Some(1_700_000_000),
+            ..Default::default()
+        }),
+        ..Default::default()
     });
 
     service.save_v3("alice", book_url, memory).await.unwrap();
@@ -70,7 +71,8 @@ async fn ai_book_v3_memory_round_trips_and_isolated_by_user() {
     assert_eq!(saved.summary.current, "主角抵达北境，首次听闻旧神传说。");
     assert_eq!(
         saved
-            .render_artifacts
+            .map
+            .and_then(|map| map.artifacts)
             .and_then(|artifact| artifact.image_url),
         Some("/assets/alice/ai-maps/map.png".to_string())
     );
@@ -179,11 +181,11 @@ async fn ai_book_v3_save_rejects_non_v3_schema() {
 }
 
 #[tokio::test]
-async fn ai_book_v3_get_resets_non_v3_stored_data_without_backup() {
+async fn ai_book_v3_get_resets_unsupported_schema_stored_data_without_backup() {
     let (service, storage_dir) = create_service("destructive-reset").await;
     let book_url = "https://example.test/book/old";
     let old = serde_json::json!({
-        "schemaVersion": 2,
+        "schemaVersion": 99,
         "bookUrl": book_url,
         "summary": { "current": "旧资料" },
         "characters": [{ "name": "旧角色" }]

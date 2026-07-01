@@ -9,8 +9,8 @@ use crate::model::ai_book::{
     AiBookDroppedFactsSummary, AiBookEvidenceV3, AiBookFactCategory, AiBookFactConfidence,
     AiBookFactImportance, AiBookKnowledgeFactV3, AiBookKnowledgeFactView, AiBookLocationEdgeKind,
     AiBookLocationEdgeV3, AiBookLocationV3, AiBookLocationView, AiBookMapView, AiBookMemoryV3,
-    AiBookMemoryViewModel, AiBookRelationChangeView, AiBookRelationshipGroup, AiBookRelationPolarity,
-    AiBookRelationStatus, AiBookRelationStrength, AiBookRelationView,
+    AiBookMemoryViewModel, AiBookRelationChangeView, AiBookRelationPolarity, AiBookRelationStatus,
+    AiBookRelationStrength, AiBookRelationView, AiBookRelationshipGroup,
 };
 use crate::model::ai_book_generation::{
     AiBookCharacterPatchV3, AiBookCharacterRelationPatchV3, AiBookCharacterStatePatchV3,
@@ -533,7 +533,8 @@ pub fn classify_relation_candidate_v3(
     let strength = normalize_relation_strength(&candidate.strength_raw);
     let status = normalize_relation_status(&candidate.status_raw);
     let direction = normalize_relation_direction(&candidate.direction_raw, &group);
-    let label = clean_optional(candidate.label.clone()).unwrap_or_else(|| group_label(&group).to_string());
+    let label =
+        clean_optional(candidate.label.clone()).unwrap_or_else(|| group_label(&group).to_string());
     let summary = clean_optional(candidate.summary.clone())
         .or_else(|| clean_optional(candidate.description.clone()))
         .unwrap_or_else(|| label.clone());
@@ -812,14 +813,15 @@ pub fn select_ai_book_display_memory_v3(memory: &AiBookMemoryV3) -> AiBookMemory
         })
         .collect();
     let cleanup = summarize_dropped_facts(&memory.dropped_facts);
-    let map = if memory.map_state.is_some()
-        || memory.render_artifacts.is_some()
+    let map = if memory.map.is_some()
         || !memory.locations.is_empty()
         || !memory.location_edges.is_empty()
     {
+        let map_data = memory.map.clone().unwrap_or_default();
         Some(AiBookMapView {
-            state: memory.map_state.clone(),
-            render_artifacts: memory.render_artifacts.clone(),
+            status: Some(map_data.status),
+            blueprint: map_data.blueprint,
+            artifacts: map_data.artifacts,
             locations: locations.clone(),
             location_edges: memory.location_edges.clone(),
         })
@@ -959,31 +961,30 @@ pub fn select_working_context_v3(
         .iter()
         .map(|item| (item.id.clone(), item.name.clone()))
         .collect();
-    let relevant_relations =
-        select_relationship_views(&memory.character_relations)
-            .into_iter()
-            .filter(|relation| {
-                allowed_character_ids.contains(&relation.source_character_id)
-                    && allowed_character_ids.contains(&relation.target_character_id)
-            })
-            .take(MAX_RELEVANT_RELATIONS)
-            .map(|relation| WorkingContextRelationV3 {
-                source_name: relevant_character_name_map
-                    .get(&relation.source_character_id)
-                    .cloned()
-                    .unwrap_or_else(|| relation.source_character_id.clone()),
-                target_name: relevant_character_name_map
-                    .get(&relation.target_character_id)
-                    .cloned()
-                    .unwrap_or_else(|| relation.target_character_id.clone()),
-                source_character_id: relation.source_character_id,
-                target_character_id: relation.target_character_id,
-                group: format!("{:?}", relation.group),
-                label: relation.label,
-                polarity: format!("{:?}", relation.polarity),
-                status: format!("{:?}", relation.status),
-            })
-            .collect();
+    let relevant_relations = select_relationship_views(&memory.character_relations)
+        .into_iter()
+        .filter(|relation| {
+            allowed_character_ids.contains(&relation.source_character_id)
+                && allowed_character_ids.contains(&relation.target_character_id)
+        })
+        .take(MAX_RELEVANT_RELATIONS)
+        .map(|relation| WorkingContextRelationV3 {
+            source_name: relevant_character_name_map
+                .get(&relation.source_character_id)
+                .cloned()
+                .unwrap_or_else(|| relation.source_character_id.clone()),
+            target_name: relevant_character_name_map
+                .get(&relation.target_character_id)
+                .cloned()
+                .unwrap_or_else(|| relation.target_character_id.clone()),
+            source_character_id: relation.source_character_id,
+            target_character_id: relation.target_character_id,
+            group: format!("{:?}", relation.group),
+            label: relation.label,
+            polarity: format!("{:?}", relation.polarity),
+            status: format!("{:?}", relation.status),
+        })
+        .collect();
 
     let relevant_knowledge_facts = memory
         .knowledge_facts
@@ -1658,16 +1659,25 @@ fn is_directed_relationship_group(group: &AiBookRelationshipGroup) -> bool {
 
 fn normalize_relationship_group(raw: &str) -> Option<AiBookRelationshipGroup> {
     match canonical_key(raw).as_str() {
-        "family" | "家庭" | "家人" | "亲属" | "照料" => Some(AiBookRelationshipGroup::Family),
+        "family" | "家庭" | "家人" | "亲属" | "照料" => {
+            Some(AiBookRelationshipGroup::Family)
+        }
         "romance" | "romantic" | "情感" | "爱恋" | "恋爱" | "感情" => {
             Some(AiBookRelationshipGroup::Romance)
         }
         "companion" | "伙伴" | "友方" | "朋友" | "同伴" | "盟友" | "ally" | "friend"
         | "friendship" => Some(AiBookRelationshipGroup::Companion),
-        "authority" | "师长" | "权威" | "师生" | "老师" | "上下级" | "superior-subordinate"
-        | "teacher" | "mentor-student" | "mentorstudent" | "supervision" => {
-            Some(AiBookRelationshipGroup::Authority)
-        }
+        "authority"
+        | "师长"
+        | "权威"
+        | "师生"
+        | "老师"
+        | "上下级"
+        | "superior-subordinate"
+        | "teacher"
+        | "mentor-student"
+        | "mentorstudent"
+        | "supervision" => Some(AiBookRelationshipGroup::Authority),
         "opposition" | "对立" | "威胁" | "敌对" | "冲突" | "竞争" | "enemy" | "conflict"
         | "hostile" | "rival" | "rivalry" => Some(AiBookRelationshipGroup::Opposition),
         "association" | "关联" | "中立" | "同学" | "同门" | "同事" | "邻居" | "peer" => {
@@ -1678,10 +1688,7 @@ fn normalize_relationship_group(raw: &str) -> Option<AiBookRelationshipGroup> {
     }
 }
 
-fn normalize_relation_direction(
-    raw: &str,
-    group: &AiBookRelationshipGroup,
-) -> RelationDirectionV3 {
+fn normalize_relation_direction(raw: &str, group: &AiBookRelationshipGroup) -> RelationDirectionV3 {
     match canonical_key(raw).as_str() {
         "directed" | "有向" => RelationDirectionV3::Directed,
         "undirected" | "无向" => RelationDirectionV3::Undirected,
@@ -1914,10 +1921,7 @@ fn stable_relation_id(
             }
         }
     };
-    format!(
-        "relation:{left}:{right}:{:?}:{direction_key}",
-        group
-    )
+    format!("relation:{left}:{right}:{:?}:{direction_key}", group)
 }
 
 fn stable_location_edge_id(
@@ -2731,7 +2735,10 @@ mod tests {
         let view = select_ai_book_display_memory_v3(&memory);
 
         assert_eq!(view.relationships.len(), 1);
-        assert_eq!(view.relationships[0].group, AiBookRelationshipGroup::Opposition);
+        assert_eq!(
+            view.relationships[0].group,
+            AiBookRelationshipGroup::Opposition
+        );
         assert_eq!(view.relationships[0].current_dynamics.len(), 2);
     }
 

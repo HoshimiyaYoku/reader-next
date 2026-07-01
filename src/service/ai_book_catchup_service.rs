@@ -28,11 +28,10 @@ use tokio::sync::RwLock;
 const DEFAULT_PROMPT: &str = r#"你是小说 AI资料后台补齐 agent。只允许基于当前已读章节和本次章节正文更新资料，不预测未读内容，不剧透目标章节之后内容。
 输入会给你 currentMemory 和 chapter。不要输出 Markdown，不要输出解释，只输出严格 JSON 对象。
 优先输出 {"memory": <只包含本章新增/更新字段的 AI memory 增量 JSON>}；不要回传未变化的大数组，后端会与 currentMemory 合并。
-如果 currentMemory.schemaVersion 是 2，必须保留 V2 结构：summary.current/recentChanges/openQuestions、chapterDigests、worldFacts、characters、relationships、locations、mapState、renderArtifacts。
-V2 中 worldFacts、characters、relationships、locations 里的每个有效条目都必须带 evidence 数组；evidence 至少 1 条，至少包含 chapterIndex、chapterTitle、note，quote 仅在必要时填写。
-worldFacts 必须使用 category/title/content/confidence/importance；category 只能从 基础规则、势力制度、历史传说、技术/魔法、社会文化、地理环境、组织体系、未确认信息 中选择，禁止留空。
-characters 使用 name/currentStatus/faction/locationName/description；relationships 使用 sourceName/targetName/targetKind/relationType/direction/currentStatus/description。
-locations 必须使用 name/kind/scale/parentName/description/currentStatus；parentName 表示层级归属，例如 昆墟 > 昆墟第一层 > 嵩阳高中 > 学校食堂；无法确认父级才留空。
+必须保留 V3 结构：summary.current/recentChanges/openQuestions、chapterDigests、knowledgeFacts、characters、characterStates、characterRelations、locations、locationEdges。
+knowledgeFacts 必须使用 category/title/content/confidence/importance；category 只能从 基础规则、势力制度、历史传说、技术/魔法、社会文化、地理环境、组织体系、未确认信息 中选择，禁止留空。
+characters 使用 name/status/faction/location/description；characterRelations 使用 source/target/group/polarity/strength/status/description。
+locations 使用 name/kind/description/status/relatedCharacters/firstSeenChapter；locationEdges 使用 source/target/kind/description。
 不要为了凑数输出 importance=low 的空洞条目；无法确认的信息标为“推断”或“未知”。
 每次必须推进 processedChapterIndex/processedChapterTitle，并保留或更新已有有效资料。"#;
 
@@ -972,17 +971,12 @@ fn merge_patch(mut current: Value, patch: Value, chapter: &CatchupChapter) -> Va
     let Some(object) = current.as_object_mut() else {
         return patch;
     };
-    let is_v2 = object.get("schemaVersion").and_then(Value::as_i64) == Some(2);
-    if is_v2 {
-        merge_v2_patch(object, patch, chapter);
-    } else {
-        merge_legacy_patch(object, patch);
-    }
+    merge_v3_patch(object, patch, chapter);
     current
 }
 
 #[cfg(test)]
-fn merge_v2_patch(
+fn merge_v3_patch(
     object: &mut serde_json::Map<String, Value>,
     patch: Value,
     chapter: &CatchupChapter,
@@ -1000,23 +994,14 @@ fn merge_v2_patch(
         }
     }
     for (source, target) in [
-        ("worldFacts", "worldFacts"),
-        ("facts", "worldFacts"),
-        ("worldview", "worldFacts"),
+        ("knowledgeFacts", "knowledgeFacts"),
         ("characters", "characters"),
-        ("relationships", "relationships"),
+        ("characterStates", "characterStates"),
+        ("characterRelations", "characterRelations"),
         ("locations", "locations"),
+        ("locationEdges", "locationEdges"),
     ] {
         merge_non_empty_array_by_identity(object, &patch, source, target);
-    }
-    if let Some(map_state) = patch.get("mapState").filter(|value| value.is_object()) {
-        merge_object_fields(object, "mapState", map_state);
-    }
-    if let Some(render_artifacts) = patch
-        .get("renderArtifacts")
-        .filter(|value| value.is_object())
-    {
-        merge_object_fields(object, "renderArtifacts", render_artifacts);
     }
     let digest = patch
         .pointer("/chapterDigest/digest")
@@ -1100,7 +1085,7 @@ fn merge_non_empty_array_by_identity(
 
 #[cfg(test)]
 fn item_identity(kind: &str, item: &Value) -> Option<String> {
-    if kind == "relationships" {
+    if kind == "characterRelations" || kind == "relationships" {
         return relationship_identity(item);
     }
     ["id", "name", "title"]
@@ -1127,6 +1112,7 @@ fn relationship_identity(item: &Value) -> Option<String> {
     let relation = item
         .get("relationType")
         .or_else(|| item.get("relation"))
+        .or_else(|| item.get("group"))
         .and_then(Value::as_str)?
         .trim();
     if source.is_empty() || target.is_empty() || relation.is_empty() {
@@ -1171,41 +1157,6 @@ fn merge_value_fields(target: &mut Value, patch: &Value) {
 }
 
 #[cfg(test)]
-fn merge_object_fields(object: &mut serde_json::Map<String, Value>, key: &str, patch: &Value) {
-    let target = object.entry(key.to_string()).or_insert_with(|| json!({}));
-    let Some(target_map) = target.as_object_mut() else {
-        object.insert(key.to_string(), patch.clone());
-        return;
-    };
-    let Some(patch_map) = patch.as_object() else {
-        return;
-    };
-    for (field, value) in patch_map {
-        let empty_string = value.as_str().map(str::trim).is_some_and(str::is_empty);
-        let empty_array = value.as_array().is_some_and(Vec::is_empty);
-        let empty_object = value.as_object().is_some_and(serde_json::Map::is_empty);
-        if !value.is_null() && !empty_string && !empty_array && !empty_object {
-            target_map.insert(field.clone(), value.clone());
-        }
-    }
-}
-
-#[cfg(test)]
-fn merge_legacy_patch(object: &mut serde_json::Map<String, Value>, patch: Value) {
-    for key in [
-        "summary",
-        "worldview",
-        "characters",
-        "relationships",
-        "locations",
-    ] {
-        if let Some(value) = patch.get(key) {
-            object.insert(key.to_string(), value.clone());
-        }
-    }
-}
-
-#[cfg(test)]
 fn normalize_memory(
     value: &mut Value,
     book_url: &str,
@@ -1236,9 +1187,7 @@ fn normalize_memory(
     object.remove("lastErrorChapterIndex");
     object.remove("lastErrorChapterTitle");
 
-    if object.get("schemaVersion").and_then(Value::as_i64) == Some(2) {
-        ensure_v2_defaults(object);
-    }
+    ensure_v3_defaults(object);
     Ok(())
 }
 
@@ -1275,28 +1224,27 @@ fn set_string_if_empty(object: &mut serde_json::Map<String, Value>, key: &str, f
 }
 
 #[cfg(test)]
-fn ensure_v2_defaults(object: &mut serde_json::Map<String, Value>) {
+fn ensure_v3_defaults(object: &mut serde_json::Map<String, Value>) {
+    object
+        .entry("schemaVersion".to_string())
+        .or_insert_with(|| Value::Number(3.into()));
     object
         .entry("summary")
         .or_insert_with(|| json!({ "current": "", "recentChanges": [], "openQuestions": [] }));
     for key in [
         "chapterDigests",
-        "arcs",
-        "worldFacts",
+        "knowledgeFacts",
         "characters",
-        "relationships",
+        "characterStates",
+        "characterRelations",
         "locations",
+        "locationEdges",
+        "droppedFacts",
     ] {
         object
             .entry(key.to_string())
             .or_insert_with(|| Value::Array(Vec::new()));
     }
-    object
-        .entry("mapState".to_string())
-        .or_insert_with(|| json!({ "dirty": false, "nodes": [], "edges": [] }));
-    object
-        .entry("renderArtifacts".to_string())
-        .or_insert_with(|| json!({}));
 }
 
 #[cfg(test)]
@@ -1333,11 +1281,12 @@ fn has_semantic_content(value: &Value) -> bool {
         }
     }
     [
-        "worldview",
-        "worldFacts",
+        "knowledgeFacts",
         "characters",
-        "relationships",
+        "characterStates",
+        "characterRelations",
         "locations",
+        "locationEdges",
         "chapterDigests",
     ]
     .iter()
@@ -1418,19 +1367,23 @@ mod tests {
                 },
             ],
             memory: json!({
-                "schemaVersion": 2,
+                "schemaVersion": 3,
                 "bookUrl": "book-a",
                 "bookName": "书A",
                 "enabled": true,
                 "summary": { "current": "", "recentChanges": [], "openQuestions": [] },
                 "chapterDigests": [],
-                "arcs": [],
-                "worldFacts": [],
-                "characters": [{ "id": "hero", "name": "旧角色", "aliases": [], "importance": "high", "currentStatus": "已登场", "statusHistory": [], "evidence": [] }],
-                "relationships": [],
+                "knowledgeFacts": [],
+                "characters": [{ "name": "旧角色", "aliases": ["旧名"], "status": "已登场", "description": "旧描述" }],
+                "characterStates": [{ "name": "旧角色", "status": "已登场", "lastSeenChapterIndex": 0, "lastSeenChapterTitle": "第1章" }],
+                "characterRelations": [],
                 "locations": [],
-                "mapState": { "dirty": true, "reason": "旧地图", "nodes": [{ "id": "n1", "locationId": "l1", "label": "旧地点", "scale": "site" }], "edges": [] },
-                "renderArtifacts": { "mapImageUrl": "/old-map.png" },
+                "locationEdges": [],
+                "map": {
+                    "status": { "dirty": true, "dirtyReason": "旧地图" },
+                    "blueprint": null,
+                    "artifacts": { "imageUrl": "/old-map.png" }
+                },
             }),
             write_guard: None,
             save_memory: save_memory_fn(|memory| async move { Ok(memory) }),
@@ -1608,7 +1561,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_memory_update_preserves_v2_and_advances_chapter() {
+    fn direct_memory_update_preserves_v3_and_advances_chapter() {
         let current = sample_context().memory;
         let chapter = CatchupChapter {
             title: "第3章".to_string(),
@@ -1616,7 +1569,7 @@ mod tests {
             index: 2,
         };
         let next = parse_memory_update(
-            r#"{"memory":{"schemaVersion":2,"summary":{"current":"局势变化","recentChanges":["主角入城"],"openQuestions":[]},"chapterDigests":[],"arcs":[],"worldFacts":[],"characters":[],"relationships":[],"locations":[],"mapState":{"dirty":false,"nodes":[],"edges":[]},"renderArtifacts":{}}}"#,
+            r#"{"memory":{"schemaVersion":3,"summary":{"current":"局势变化","recentChanges":["主角入城"],"openQuestions":[]},"chapterDigests":[],"knowledgeFacts":[],"characters":[],"characterStates":[],"characterRelations":[],"locations":[],"locationEdges":[]}}"#,
             &current,
             "book-a",
             "书A",
@@ -1639,13 +1592,11 @@ mod tests {
             Some(1)
         );
         assert_eq!(
-            next.pointer("/mapState/nodes")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(1)
+            next.pointer("/map/status/dirty").and_then(Value::as_bool),
+            Some(true)
         );
         assert_eq!(
-            next.pointer("/renderArtifacts/mapImageUrl")
+            next.pointer("/map/artifacts/imageUrl")
                 .and_then(Value::as_str),
             Some("/old-map.png")
         );
@@ -1674,7 +1625,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_patch_appends_entities_without_dropping_existing_arrays() {
+    fn v3_patch_appends_entities_without_dropping_existing_arrays() {
         let current = sample_context().memory;
         let chapter = CatchupChapter {
             title: "第4章".to_string(),
@@ -1682,7 +1633,7 @@ mod tests {
             index: 3,
         };
         let next = parse_memory_update(
-            r#"{"memory":{"schemaVersion":2,"summary":{"current":"新角色出现"},"worldFacts":[{"id":"fact-new","title":"新设定","content":"新内容"}],"characters":[{"id":"villain","name":"新角色","aliases":[],"importance":"medium","currentStatus":"已登场","statusHistory":[],"evidence":[]}],"relationships":[],"locations":[{"id":"loc-new","name":"新地点","kind":"地点","importance":"medium","description":"新地点","evidence":[]}]}}"#,
+            r#"{"memory":{"schemaVersion":3,"summary":{"current":"新角色出现"},"knowledgeFacts":[{"title":"新设定","content":"新内容","category":"basicRule","confidence":"medium","importance":"medium"}],"characters":[{"name":"新角色","aliases":[],"status":"已登场"}],"characterStates":[],"characterRelations":[],"locations":[{"name":"新地点","kind":"地点","description":"新地点"}],"locationEdges":[]}}"#,
             &current,
             "book-a",
             "书A",
@@ -1694,23 +1645,20 @@ mod tests {
         let characters = next.get("characters").and_then(Value::as_array).unwrap();
         assert!(characters
             .iter()
-            .any(|item| item.get("id").and_then(Value::as_str) == Some("hero")));
+            .any(|item| item.get("name").and_then(Value::as_str) == Some("旧角色")));
         assert!(characters
             .iter()
-            .any(|item| item.get("id").and_then(Value::as_str) == Some("villain")));
+            .any(|item| item.get("name").and_then(Value::as_str) == Some("新角色")));
         let locations = next.get("locations").and_then(Value::as_array).unwrap();
         assert!(locations
             .iter()
-            .any(|item| item.get("id").and_then(Value::as_str) == Some("loc-new")));
+            .any(|item| item.get("name").and_then(Value::as_str) == Some("新地点")));
     }
 
     #[test]
-    fn v2_patch_merges_same_identity_entity_without_dropping_old_fields() {
+    fn v3_patch_merges_same_identity_entity_without_dropping_old_fields() {
         let mut current = sample_context().memory;
         current["characters"][0]["aliases"] = json!(["旧名"]);
-        current["characters"][0]["statusHistory"] =
-            json!([{ "chapterIndex": 0, "status": "已登场" }]);
-        current["characters"][0]["evidence"] = json!(["旧证据"]);
         let chapter = CatchupChapter {
             title: "第5章".to_string(),
             chapter_url: "c5".to_string(),
@@ -1718,7 +1666,7 @@ mod tests {
         };
 
         let next = parse_memory_update(
-            r#"{"memory":{"schemaVersion":2,"summary":{"current":"旧角色状态更新"},"characters":[{"id":"hero","currentStatus":"受伤"}]}}"#,
+            r#"{"memory":{"schemaVersion":3,"summary":{"current":"旧角色状态更新"},"characters":[{"name":"旧角色","status":"受伤"}]}}"#,
             &current,
             "book-a",
             "书A",
@@ -1732,39 +1680,31 @@ mod tests {
             .and_then(Value::as_array)
             .unwrap()
             .iter()
-            .find(|item| item.get("id").and_then(Value::as_str) == Some("hero"))
+            .find(|item| item.get("name").and_then(Value::as_str) == Some("旧角色"))
             .unwrap();
         assert_eq!(hero.get("name").and_then(Value::as_str), Some("旧角色"));
-        assert_eq!(
-            hero.get("currentStatus").and_then(Value::as_str),
-            Some("受伤")
-        );
+        assert_eq!(hero.get("status").and_then(Value::as_str), Some("受伤"));
         assert_eq!(
             hero.get("aliases").and_then(Value::as_array).map(Vec::len),
             Some(1)
         );
         assert_eq!(
-            hero.get("statusHistory")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-        assert_eq!(
-            hero.get("evidence").and_then(Value::as_array).map(Vec::len),
-            Some(1)
+            hero.get("description").and_then(Value::as_str),
+            Some("旧描述")
         );
     }
 
     #[test]
-    fn v2_patch_merges_same_name_based_relationship() {
+    fn v3_patch_merges_same_name_based_relationship() {
         let mut current = sample_context().memory;
-        current["relationships"] = json!([{
-            "sourceName": "张羽",
-            "targetName": "张羽的姐姐",
-            "targetKind": "character",
-            "relationType": "姐弟",
+        current["characterRelations"] = json!([{
+            "source": "张羽",
+            "target": "张羽的姐姐",
+            "group": "family",
+            "status": "active",
             "description": "旧描述",
-            "evidence": []
+            "polarity": "positive",
+            "strength": "moderate"
         }]);
         let chapter = CatchupChapter {
             title: "第6章".to_string(),
@@ -1773,7 +1713,7 @@ mod tests {
         };
 
         let next = parse_memory_update(
-            r#"{"memory":{"schemaVersion":2,"summary":{"current":"姐姐转账"},"relationships":[{"sourceName":"张羽","targetName":"张羽的姐姐","targetKind":"character","relationType":"姐弟","currentStatus":"转账500元","evidence":[]}]}}"#,
+            r#"{"memory":{"schemaVersion":3,"summary":{"current":"姐姐转账"},"characterRelations":[{"source":"张羽","target":"张羽的姐姐","group":"family","status":"active","description":"转账500元","polarity":"positive","strength":"strong"}]}}"#,
             &current,
             "book-a",
             "书A",
@@ -1782,12 +1722,13 @@ mod tests {
         )
         .unwrap();
 
-        let relationships = next.get("relationships").and_then(Value::as_array).unwrap();
+        let relationships = next
+            .get("characterRelations")
+            .and_then(Value::as_array)
+            .unwrap();
         assert_eq!(relationships.len(), 1);
         assert_eq!(
-            relationships[0]
-                .get("currentStatus")
-                .and_then(Value::as_str),
+            relationships[0].get("description").and_then(Value::as_str),
             Some("转账500元")
         );
     }
@@ -2208,7 +2149,7 @@ mod tests {
     }
 
     #[test]
-    fn patch_update_adds_v2_digest() {
+    fn patch_update_adds_v3_digest() {
         let current = sample_context().memory;
         let chapter = CatchupChapter {
             title: "第1章".to_string(),
@@ -2216,7 +2157,7 @@ mod tests {
             index: 0,
         };
         let next = parse_memory_update(
-            r#"{"summary":"第一章发生变化","worldFacts":[],"characters":[],"relationships":[],"locations":[]}"#,
+            r#"{"memory":{"schemaVersion":3,"summary":{"current":"第一章发生变化"},"knowledgeFacts":[],"characters":[],"characterRelations":[],"locations":[]}}"#,
             &current,
             "book-a",
             "书A",

@@ -1,75 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-#[serde(default, rename_all = "camelCase")]
-pub struct AiBookMemory {
-    pub book_url: String,
-    pub book_name: Option<String>,
-    pub author: Option<String>,
-    pub enabled: bool,
-    pub processed_chapter_index: Option<i32>,
-    pub processed_chapter_title: Option<String>,
-    pub updated_at: i64,
-    pub summary: String,
-    pub worldview: Vec<AiBookNote>,
-    pub characters: Vec<AiBookCharacter>,
-    pub relationships: Vec<AiBookRelationship>,
-    pub locations: Vec<AiBookLocation>,
-    pub map: Option<AiBookMap>,
-    pub map_dirty: bool,
-    pub last_error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-#[serde(default, rename_all = "camelCase")]
-pub struct AiBookNote {
-    pub title: String,
-    pub content: String,
-    pub confidence: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-#[serde(default, rename_all = "camelCase")]
-pub struct AiBookCharacter {
-    pub name: String,
-    pub aliases: Vec<String>,
-    pub status: String,
-    pub faction: Option<String>,
-    pub location: Option<String>,
-    pub description: Option<String>,
-    pub last_seen_chapter: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-#[serde(default, rename_all = "camelCase")]
-pub struct AiBookRelationship {
-    pub source: String,
-    pub target: String,
-    pub relation: String,
-    pub status: Option<String>,
-    pub description: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-#[serde(default, rename_all = "camelCase")]
-pub struct AiBookLocation {
-    pub name: String,
-    pub kind: Option<String>,
-    pub description: String,
-    pub status: Option<String>,
-    pub related_characters: Vec<String>,
-    pub first_seen_chapter: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-#[serde(default, rename_all = "camelCase")]
-pub struct AiBookMap {
-    pub image_url: Option<String>,
-    pub prompt: Option<String>,
-    pub updated_at: Option<i64>,
-    pub source_chapter_index: Option<i32>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AiBookMemoryV3 {
@@ -90,8 +20,7 @@ pub struct AiBookMemoryV3 {
     pub knowledge_facts: Vec<AiBookKnowledgeFactV3>,
     pub locations: Vec<AiBookLocationV3>,
     pub location_edges: Vec<AiBookLocationEdgeV3>,
-    pub map_state: Option<AiBookMapStateV3>,
-    pub render_artifacts: Option<AiBookRenderArtifactsV3>,
+    pub map: Option<AiBookMapV3>,
     pub dropped_facts: Vec<AiBookDroppedFactV3>,
     pub catchup_stats: Option<AiBookCatchupStatsV3>,
     pub last_error: Option<String>,
@@ -118,8 +47,7 @@ impl Default for AiBookMemoryV3 {
             knowledge_facts: Vec::new(),
             locations: Vec::new(),
             location_edges: Vec::new(),
-            map_state: None,
-            render_artifacts: None,
+            map: None,
             dropped_facts: Vec::new(),
             catchup_stats: None,
             last_error: None,
@@ -298,38 +226,129 @@ pub enum AiBookLocationEdgeKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
-pub struct AiBookMapStateV3 {
-    pub dirty: bool,
-    pub nodes: Vec<AiBookMapStateNodeV3>,
-    pub edges: Vec<AiBookMapStateEdgeV3>,
+pub struct AiBookMapV3 {
+    pub status: AiBookMapStatusV3,
+    pub blueprint: Option<AiBookMapBlueprintV3>,
+    pub artifacts: Option<AiBookMapArtifactsV3>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
-pub struct AiBookMapStateNodeV3 {
+pub struct AiBookMapStatusV3 {
+    pub dirty: bool,
+    pub dirty_reason: Option<String>,
+    pub source_chapter_index: Option<i32>,
+    pub source_chapter_title: Option<String>,
+    pub last_blueprint_generated_at: Option<i64>,
+    pub last_image_generated_at: Option<i64>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookMapBlueprintV3 {
+    pub version: i32,
+    pub source: AiBookMapBlueprintSourceV3,
+    pub content: AiBookMapBlueprintContentV3,
+    pub layout: AiBookMapBlueprintLayoutV3,
+    pub image_guide: AiBookMapImageGuideV3,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookMapBlueprintSourceV3 {
+    pub source_chapter_index: Option<i32>,
+    pub source_chapter_title: Option<String>,
+    pub compiled_at: i64,
+    pub prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookMapBlueprintContentV3 {
+    pub places: Vec<AiBookMapBlueprintPlaceV3>,
+    pub connections: Vec<AiBookMapBlueprintConnectionV3>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookMapSourceRefV3 {
+    pub source_type: String,
+    pub key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookMapBlueprintPlaceV3 {
     pub id: String,
+    pub source_ref: AiBookMapSourceRefV3,
     pub label: String,
     pub kind: Option<String>,
+    pub short_description: Option<String>,
+    pub importance: Option<String>,
+    pub related_characters: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookMapBlueprintConnectionV3 {
+    pub id: String,
+    pub source_ref: AiBookMapSourceRefV3,
+    pub source_place_id: String,
+    pub target_place_id: String,
+    pub kind: String,
+    pub label: Option<String>,
+    pub description: Option<String>,
+    pub confidence: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookMapBlueprintLayoutV3 {
+    pub mode: String,
+    pub groups: Vec<AiBookMapLayoutGroupV3>,
+    pub placements: Vec<AiBookMapLayoutPlacementV3>,
+    pub highlighted_place_ids: Vec<String>,
+    pub current_place_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookMapLayoutGroupV3 {
+    pub id: String,
+    pub label: String,
+    pub place_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiBookMapLayoutPlacementV3 {
+    pub place_id: String,
     pub x: Option<f64>,
     pub y: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
-pub struct AiBookMapStateEdgeV3 {
-    pub source: String,
-    pub target: String,
-    pub kind: Option<String>,
-    pub description: Option<String>,
+pub struct AiBookMapImageGuideV3 {
+    pub aspect_ratio: String,
+    pub style: String,
+    pub label_policy: String,
+    pub must_include: Vec<String>,
+    pub must_avoid: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
-pub struct AiBookRenderArtifactsV3 {
-    pub chapter_index: Option<i32>,
-    pub chapter_title: Option<String>,
-    pub summary: Option<String>,
+pub struct AiBookMapArtifactsV3 {
     pub image_url: Option<String>,
+    pub image_prompt: Option<String>,
+    pub scaffold_url: Option<String>,
+    pub generated_at: Option<i64>,
+    pub blueprint_version: Option<i32>,
+    pub model: Option<String>,
+    pub provider: Option<String>,
     pub updated_at: Option<i64>,
 }
 
@@ -491,8 +510,9 @@ pub struct AiBookLocationView {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AiBookMapView {
-    pub state: Option<AiBookMapStateV3>,
-    pub render_artifacts: Option<AiBookRenderArtifactsV3>,
+    pub status: Option<AiBookMapStatusV3>,
+    pub blueprint: Option<AiBookMapBlueprintV3>,
+    pub artifacts: Option<AiBookMapArtifactsV3>,
     pub locations: Vec<AiBookLocationView>,
     pub location_edges: Vec<AiBookLocationEdgeV3>,
 }
@@ -582,8 +602,9 @@ mod tests {
         assert_eq!(value["locationEdges"], Value::Array(vec![]));
         assert_eq!(value["droppedFacts"], Value::Array(vec![]));
         assert!(value["catchupStats"].is_null());
-        assert!(value["mapState"].is_null());
-        assert!(value["renderArtifacts"].is_null());
+        assert!(value["map"].is_null());
+        assert!(value.get("mapState").is_none());
+        assert!(value.get("renderArtifacts").is_none());
         assert!(value["lastError"].is_null());
     }
 }

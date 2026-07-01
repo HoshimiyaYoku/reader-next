@@ -31,6 +31,10 @@ impl AiBookService {
         }
     }
 
+    pub fn assets_dir(&self) -> PathBuf {
+        self.storage_dir.join("assets")
+    }
+
     pub async fn get_value(
         &self,
         user_ns: &str,
@@ -370,7 +374,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ai_book_v3_resets_invalid_or_non_v3_without_backup() {
+    async fn ai_book_v3_resets_invalid_or_unsupported_schema_without_backup() {
         let (service, dir) = create_service().await;
         let user_ns = "reader1";
 
@@ -381,9 +385,9 @@ mod tests {
         .bind(md5_hex("book://legacy"))
         .bind("book://legacy")
         .bind(json!({
-            "schemaVersion": 2,
+            "schemaVersion": 99,
             "bookUrl": "book://legacy",
-            "summary": "legacy"
+            "summary": "unsupported schema"
         }).to_string())
         .bind(now_ts())
         .execute(&service.pool)
@@ -549,7 +553,7 @@ mod tests {
         assert_eq!(saved_memory.summary.current, "已保存");
 
         let mut bad = serde_json::to_value(memory).unwrap();
-        bad["schemaVersion"] = json!(2);
+        bad["schemaVersion"] = json!(99);
         let err = service
             .save_value_as_v3(user_ns, book_url, bad)
             .await

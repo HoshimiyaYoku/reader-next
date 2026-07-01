@@ -200,12 +200,14 @@ pub async fn generate_ai_book_map(
 ) -> Result<Json<ApiResponse<Value>>, AppError> {
     let user_ns = resolve_user_ns(&state, &auth).await?;
     let book_url = required_book_url(req.book_url)?;
-    let _ = req.source_chapter_index;
-    let _ = req.prompt;
-    ensure_shelf_book(&state, &user_ns, &book_url).await?;
-    Err(AppError::BadRequest(
-        "AI资料地图功能在 V3 切换期间已禁用".to_string(),
-    ))
+    let shelf_book = ensure_shelf_book(&state, &user_ns, &book_url).await?;
+    let response = state
+        .ai_book_generation_service
+        .generate_map(&user_ns, &shelf_book, req.source_chapter_index, req.prompt)
+        .await?;
+    Ok(Json(ApiResponse::ok(
+        serde_json::to_value(response).unwrap_or_default(),
+    )))
 }
 
 async fn resolve_user_ns(state: &AppState, auth: &AuthContext) -> Result<String, AppError> {
@@ -231,10 +233,7 @@ async fn find_shelf_book(
     user_ns: &str,
     book_url: &str,
 ) -> Result<Option<crate::model::book::Book>, AppError> {
-    state
-        .book_service
-        .get_shelf_book(user_ns, book_url)
-        .await
+    state.book_service.get_shelf_book(user_ns, book_url).await
 }
 
 fn optional_shelf_book_metadata(
@@ -984,13 +983,19 @@ mod tests {
             Some("章节书".to_string()),
             Some("章节作者".to_string()),
         );
-        memory.chapter_digests.push(crate::model::ai_book::AiBookChapterDigestV3 {
-            chapter_index: 3,
-            chapter_title: "第4章".to_string(),
-            summary: "章节摘要".to_string(),
-            ..Default::default()
-        });
-        state.ai_book_service.save_v3(user_ns, book_url, memory).await.unwrap();
+        memory
+            .chapter_digests
+            .push(crate::model::ai_book::AiBookChapterDigestV3 {
+                chapter_index: 3,
+                chapter_title: "第4章".to_string(),
+                summary: "章节摘要".to_string(),
+                ..Default::default()
+            });
+        state
+            .ai_book_service
+            .save_v3(user_ns, book_url, memory)
+            .await
+            .unwrap();
 
         let response = get_ai_book_chapter_memory(
             State(state),
@@ -1009,8 +1014,14 @@ mod tests {
         assert_eq!(payload["data"]["chapter"]["bookUrl"], json!(book_url));
         assert_eq!(payload["data"]["chapter"]["chapterIndex"], json!(3));
         assert_eq!(payload["data"]["chapter"]["chapterTitle"], json!("第4章"));
-        assert_eq!(payload["data"]["chapter"]["generationStatus"], json!("cached"));
-        assert_eq!(payload["data"]["chapter"]["digest"]["summary"], json!("章节摘要"));
+        assert_eq!(
+            payload["data"]["chapter"]["generationStatus"],
+            json!("cached")
+        );
+        assert_eq!(
+            payload["data"]["chapter"]["digest"]["summary"],
+            json!("章节摘要")
+        );
 
         let _ = tokio::fs::remove_dir_all(dir).await;
     }
@@ -1033,7 +1044,11 @@ mod tests {
                 ..Default::default()
             })
             .collect();
-        state.ai_book_service.save_v3(user_ns, book_url, memory).await.unwrap();
+        state
+            .ai_book_service
+            .save_v3(user_ns, book_url, memory)
+            .await
+            .unwrap();
 
         let response = get_ai_book_catchup_status(
             State(state),
@@ -1111,14 +1126,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ai_book_v3_map_generate_returns_disabled_error() {
+    async fn ai_book_v3_map_generate_persists_blueprint_when_image_model_disabled() {
         let (state, dir) = create_test_state().await;
         let user_ns = "default";
         let book_url = "book://api-map-disabled";
         seed_shelf_book(&state, user_ns, book_url).await;
+        let mut memory = create_empty_ai_book_memory_v3(
+            book_url,
+            Some("测试书".to_string()),
+            Some("测试作者".to_string()),
+        );
+        memory
+            .locations
+            .push(crate::model::ai_book::AiBookLocationV3 {
+                name: "昆墟".to_string(),
+                kind: Some("区域".to_string()),
+                description: "试炼空间".to_string(),
+                ..Default::default()
+            });
+        state
+            .ai_book_service
+            .save_v3(user_ns, book_url, memory)
+            .await
+            .unwrap();
 
         let error = generate_ai_book_map(
-            State(state),
+            State(state.clone()),
             AuthContext::default(),
             Json(AiBookGenerateMapRequest {
                 book_url: Some(book_url.to_string()),
@@ -1131,10 +1164,21 @@ mod tests {
 
         match error {
             AppError::BadRequest(message) => {
-                assert_eq!(message, "AI资料地图功能在 V3 切换期间已禁用");
+                assert_eq!(message, "后端图片模型未启用或配置不完整");
             }
             other => panic!("unexpected error: {other:?}"),
         }
+        let saved = state
+            .ai_book_service
+            .get_or_create_v3(user_ns, book_url, None, None)
+            .await
+            .unwrap();
+        let map = saved.map.unwrap();
+        assert_eq!(map.blueprint.unwrap().content.places.len(), 1);
+        assert_eq!(
+            map.status.last_error.as_deref(),
+            Some("后端图片模型未启用或配置不完整")
+        );
 
         let _ = tokio::fs::remove_dir_all(dir).await;
     }
@@ -1142,7 +1186,7 @@ mod tests {
     #[test]
     fn start_failure_memory_records_last_error_without_advancing_processed_chapter() {
         let mut memory = json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "bookUrl": "book-a",
             "processedChapterIndex": 4,
             "processedChapterTitle": "第5章",
@@ -1168,16 +1212,16 @@ mod tests {
     #[test]
     fn start_failure_memory_prefers_latest_memory_over_start_snapshot() {
         let snapshot = json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "bookUrl": "book-a",
             "summary": { "current": "旧资料" },
-            "characters": [{ "id": "old", "name": "旧角色" }],
+            "characters": [{ "name": "旧角色" }],
         });
         let latest = json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "bookUrl": "book-a",
             "summary": { "current": "新资料" },
-            "characters": [{ "id": "new", "name": "新角色" }],
+            "characters": [{ "name": "新角色" }],
         });
 
         let memory = build_catchup_start_failure_memory(Some(latest), snapshot, 5, "目录加载失败");
@@ -1191,9 +1235,9 @@ mod tests {
                 .get("characters")
                 .and_then(Value::as_array)
                 .and_then(|items| items.first())
-                .and_then(|item| item.get("id"))
+                .and_then(|item| item.get("name"))
                 .and_then(Value::as_str),
-            Some("new")
+            Some("新角色")
         );
         assert_eq!(
             memory.get("lastError").and_then(Value::as_str),
