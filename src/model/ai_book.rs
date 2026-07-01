@@ -128,12 +128,19 @@ pub struct AiBookCharacterStateV3 {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AiBookCharacterRelationV3 {
+    pub id: String,
     pub source: String,
     pub target: String,
     pub group: AiBookRelationshipGroup,
+    pub label: String,
     pub polarity: AiBookRelationPolarity,
     pub strength: AiBookRelationStrength,
     pub status: AiBookRelationStatus,
+    pub direction: String,
+    pub summary: String,
+    pub current_dynamics: Vec<String>,
+    pub evidence: Vec<AiBookEvidenceV3>,
+    pub history: Vec<AiBookRelationChangeView>,
     pub description: Option<String>,
 }
 

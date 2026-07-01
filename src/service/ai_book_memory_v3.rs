@@ -642,23 +642,35 @@ pub fn merge_ai_book_memory_v3(
         .map(|(index, item)| (relation_storage_id(item), index))
         .collect();
     for relation in patch.character_relations {
-        let description = Some(encode_relation_meta(&relation));
         if let Some(index) = relation_index.get(&relation.id).copied() {
             let existing = &mut memory.character_relations[index];
             existing.group = relation.group.clone();
+            existing.label = relation.label.clone();
             existing.polarity = relation.polarity.clone();
             existing.strength = relation.strength.clone();
             existing.status = relation.status.clone();
-            existing.description = description;
+            existing.direction = relation.direction.as_str().to_string();
+            existing.summary = relation.summary.clone();
+            existing.current_dynamics = relation.current_dynamics.clone();
+            existing.evidence = relation.evidence.clone();
+            existing.history = relation.history.clone();
+            existing.description = clean_optional(Some(relation.summary.clone()));
         } else {
             memory.character_relations.push(AiBookCharacterRelationV3 {
+                id: relation.id.clone(),
                 source: relation.source_name.clone(),
                 target: relation.target_name.clone(),
                 group: relation.group.clone(),
+                label: relation.label.clone(),
                 polarity: relation.polarity.clone(),
                 strength: relation.strength.clone(),
                 status: relation.status.clone(),
-                description,
+                direction: relation.direction.as_str().to_string(),
+                summary: relation.summary.clone(),
+                current_dynamics: relation.current_dynamics.clone(),
+                evidence: relation.evidence.clone(),
+                history: relation.history.clone(),
+                description: clean_optional(Some(relation.summary.clone())),
             });
             relation_index.insert(relation.id, memory.character_relations.len() - 1);
         }
@@ -1148,27 +1160,33 @@ fn relation_to_view(relation: &AiBookCharacterRelationV3) -> AiBookRelationView 
     let meta = decode_relation_meta(relation);
     let fallback_source_id = stable_character_id(&relation.source, &[]);
     let fallback_target_id = stable_character_id(&relation.target, &[]);
-    let source_id = meta
-        .as_ref()
-        .map(|item| item.source_character_id.clone())
+    let source_id = (!relation.id.trim().is_empty())
+        .then(|| fallback_source_id.clone())
+        .or_else(|| meta.as_ref().map(|item| item.source_character_id.clone()))
         .unwrap_or(fallback_source_id.clone());
-    let target_id = meta
-        .as_ref()
-        .map(|item| item.target_character_id.clone())
+    let target_id = (!relation.id.trim().is_empty())
+        .then(|| fallback_target_id.clone())
+        .or_else(|| meta.as_ref().map(|item| item.target_character_id.clone()))
         .unwrap_or(fallback_target_id.clone());
-    let label = meta
-        .as_ref()
-        .map(|item| item.label.clone())
+    let label = clean_optional(Some(relation.label.clone()))
+        .or_else(|| meta.as_ref().map(|item| item.label.clone()))
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| group_label(&relation.group).to_string());
-    let summary = meta
-        .as_ref()
-        .map(|item| item.summary.clone())
+    let summary = clean_optional(Some(relation.summary.clone()))
+        .or_else(|| meta.as_ref().map(|item| item.summary.clone()))
         .unwrap_or_else(|| relation.description.clone().unwrap_or_default());
+    let direction = clean_optional(Some(relation.direction.clone()))
+        .or_else(|| meta.as_ref().map(|item| item.direction.clone()))
+        .unwrap_or_else(|| {
+            if is_directed_relationship_group(&relation.group) {
+                "directed".to_string()
+            } else {
+                "undirected".to_string()
+            }
+        });
     AiBookRelationView {
-        id: meta
-            .as_ref()
-            .map(|item| item.id.clone())
+        id: clean_optional(Some(relation.id.clone()))
+            .or_else(|| meta.as_ref().map(|item| item.id.clone()))
             .unwrap_or_else(|| {
                 stable_relation_id(
                     &source_id,
@@ -1188,35 +1206,41 @@ fn relation_to_view(relation: &AiBookCharacterRelationV3) -> AiBookRelationView 
         polarity: relation.polarity.clone(),
         strength: relation.strength.clone(),
         status: relation.status.clone(),
-        direction: meta
-            .as_ref()
-            .map(|item| item.direction.clone())
-            .unwrap_or_else(|| {
-                if is_directed_relationship_group(&relation.group) {
-                    "directed".to_string()
-                } else {
-                    "undirected".to_string()
-                }
-            }),
+        direction,
         summary: summary.clone(),
-        current_dynamics: meta
-            .as_ref()
-            .map(|item| item.current_dynamics.clone())
-            .unwrap_or_else(|| vec![summary.clone()]),
-        first_seen_chapter_index: meta
-            .as_ref()
-            .and_then(|item| item.history.first().map(|history| history.chapter_index)),
-        last_updated_chapter_index: meta
-            .as_ref()
-            .and_then(|item| item.history.last().map(|history| history.chapter_index)),
-        evidence: meta
-            .as_ref()
-            .map(|item| item.evidence.clone())
-            .unwrap_or_default(),
-        history: meta
-            .as_ref()
-            .map(|item| item.history.clone())
-            .unwrap_or_default(),
+        current_dynamics: if relation.current_dynamics.is_empty() {
+            meta.as_ref()
+                .map(|item| item.current_dynamics.clone())
+                .unwrap_or_else(|| vec![summary.clone()])
+        } else {
+            relation.current_dynamics.clone()
+        },
+        first_seen_chapter_index: if relation.history.is_empty() {
+            meta.as_ref()
+                .and_then(|item| item.history.first().map(|history| history.chapter_index))
+        } else {
+            relation.history.first().map(|history| history.chapter_index)
+        },
+        last_updated_chapter_index: if relation.history.is_empty() {
+            meta.as_ref()
+                .and_then(|item| item.history.last().map(|history| history.chapter_index))
+        } else {
+            relation.history.last().map(|history| history.chapter_index)
+        },
+        evidence: if relation.evidence.is_empty() {
+            meta.as_ref()
+                .map(|item| item.evidence.clone())
+                .unwrap_or_default()
+        } else {
+            relation.evidence.clone()
+        },
+        history: if relation.history.is_empty() {
+            meta.as_ref()
+                .map(|item| item.history.clone())
+                .unwrap_or_default()
+        } else {
+            relation.history.clone()
+        },
     }
 }
 
@@ -1598,26 +1622,6 @@ fn parse_state_abilities(description: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn encode_relation_meta(relation: &NormalizedCharacterRelationV3) -> String {
-    let meta = RelationStorageMetaV3 {
-        id: relation.id.clone(),
-        source_character_id: relation.source_character_id.clone(),
-        target_character_id: relation.target_character_id.clone(),
-        source_name: relation.source_name.clone(),
-        target_name: relation.target_name.clone(),
-        label: relation.label.clone(),
-        direction: relation.direction.as_str().to_string(),
-        summary: relation.summary.clone(),
-        current_dynamics: relation.current_dynamics.clone(),
-        evidence: relation.evidence.clone(),
-        history: relation.history.clone(),
-    };
-    format!(
-        "{V3_RELATION_META_PREFIX}{}",
-        serde_json::to_string(&meta).unwrap_or_default()
-    )
-}
-
 fn decode_relation_meta(relation: &AiBookCharacterRelationV3) -> Option<RelationStorageMetaV3> {
     let raw = relation.description.as_deref()?;
     let payload = raw.strip_prefix(V3_RELATION_META_PREFIX)?;
@@ -1625,8 +1629,8 @@ fn decode_relation_meta(relation: &AiBookCharacterRelationV3) -> Option<Relation
 }
 
 fn relation_storage_id(relation: &AiBookCharacterRelationV3) -> String {
-    decode_relation_meta(relation)
-        .map(|meta| meta.id)
+    clean_optional(Some(relation.id.clone()))
+        .or_else(|| decode_relation_meta(relation).map(|meta| meta.id))
         .unwrap_or_else(|| {
             stable_relation_id(
                 &stable_character_id(&relation.source, &[]),
@@ -2643,6 +2647,53 @@ mod tests {
     }
 
     #[test]
+    fn ai_book_v3_relation_schema_stores_metadata_as_fields() {
+        let mut memory = memory_with_characters(&["张羽", "白真真"]);
+        let digest = AiBookChapterDigestV3 {
+            chapter_index: 12,
+            chapter_title: "第十二章".to_string(),
+            summary: "张羽和白真真并肩行动".to_string(),
+            ..AiBookChapterDigestV3::default()
+        };
+        let context = select_working_context_v3(&memory, Some(&digest), "张羽和白真真并肩行动");
+        let normalized = normalize_knowledge_patch_v3(
+            AiBookKnowledgePatchV3 {
+                chapter_index: 12,
+                character_relations: vec![AiBookCharacterRelationPatchV3 {
+                    source: "张羽".to_string(),
+                    target: "白真真".to_string(),
+                    group: "companion".to_string(),
+                    label: "并肩".to_string(),
+                    polarity: "positive".to_string(),
+                    strength: "strong".to_string(),
+                    status: "active".to_string(),
+                    direction: "undirected".to_string(),
+                    summary: Some("两人并肩行动".to_string()),
+                    description: Some("两人并肩行动".to_string()),
+                }],
+                ..AiBookKnowledgePatchV3::default()
+            },
+            &context,
+        );
+
+        memory = merge_ai_book_memory_v3(memory, normalized);
+
+        let stored = &memory.character_relations[0];
+        assert_eq!(stored.id, "relation:character:张羽:character:白真真:Companion:undirected");
+        assert_eq!(stored.label, "并肩");
+        assert_eq!(stored.direction, "undirected");
+        assert_eq!(stored.summary, "两人并肩行动");
+        assert_eq!(stored.current_dynamics, vec!["两人并肩行动".to_string()]);
+        assert_eq!(stored.evidence.len(), 1);
+        assert_eq!(stored.history.len(), 1);
+        assert_eq!(stored.description.as_deref(), Some("两人并肩行动"));
+
+        let view = select_ai_book_display_memory_v3(&memory);
+        assert_eq!(view.relationships[0].label, "并肩");
+        assert_eq!(view.relationships[0].summary, "两人并肩行动");
+    }
+
+    #[test]
     fn ai_book_v3_status_only_state_patch_preserves_existing_description_and_new_empty_state_is_none(
     ) {
         let mut existing_state = AiBookCharacterStateV3 {
@@ -3092,13 +3143,20 @@ mod tests {
             ..NormalizedCharacterRelationV3::default()
         };
         AiBookCharacterRelationV3 {
+            id: normalized.id,
             source: source.to_string(),
             target: target.to_string(),
             group,
+            label: normalized.label,
             polarity: AiBookRelationPolarity::Neutral,
             strength: AiBookRelationStrength::Moderate,
             status,
-            description: Some(encode_relation_meta(&normalized)),
+            direction: normalized.direction.as_str().to_string(),
+            summary: normalized.summary,
+            current_dynamics: normalized.current_dynamics,
+            evidence: normalized.evidence,
+            history: normalized.history,
+            description: Some(summary.to_string()),
         }
     }
 }
