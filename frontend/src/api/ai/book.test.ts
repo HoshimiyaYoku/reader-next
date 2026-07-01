@@ -31,12 +31,14 @@ describe('ai book api', () => {
       .mockResolvedValueOnce({ data: { memory: { bookUrl: 'book', enabled: false } } })
       .mockResolvedValueOnce({ data: { memory: { bookUrl: 'book', enabled: true } } })
       .mockResolvedValueOnce({ data: { chapter: { chapterIndex: 3 }, memory: { bookUrl: 'book' } } })
+      .mockResolvedValueOnce({ data: { memory: { bookUrl: 'book', map: {} } } })
 
     await api.getAiBookMemory('book')
     await api.getAiBookChapterMemory({ bookUrl: 'book', chapterIndex: 3 })
     await api.resetAiBookMemory('book')
     await api.setAiBookEnabled({ bookUrl: 'book', enabled: true })
     await api.generateAiBookChapterMemory({ bookUrl: 'book', chapterIndex: 3, mode: 'auto' })
+    await api.generateAiBookMap({ bookUrl: 'book', sourceChapterIndex: 3, prompt: '地图' })
 
     expect(getMock).toHaveBeenNthCalledWith(1, '/ai/book/memory', { params: { bookUrl: 'book' } })
     expect(getMock).toHaveBeenNthCalledWith(2, '/ai/book/chapter-memory', {
@@ -48,6 +50,11 @@ describe('ai book api', () => {
       bookUrl: 'book',
       chapterIndex: 3,
       mode: 'auto',
+    })
+    expect(postMock).toHaveBeenNthCalledWith(4, '/ai/book/map/generate', {
+      bookUrl: 'book',
+      sourceChapterIndex: 3,
+      prompt: '地图',
     })
   })
 

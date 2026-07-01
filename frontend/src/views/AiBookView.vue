@@ -232,20 +232,12 @@
         </section>
 
         <section v-else class="stack-panel">
-          <article class="panel-card">
-            <div class="panel-head map-head">
-              <div>
-                <h2>地图</h2>
-                <p>{{ mapStatusText }}</p>
-              </div>
-              <button class="secondary-btn" disabled>
-                暂未开放
-              </button>
-            </div>
-            <div class="map-frame">
-              <EmptyState text="V3 切换期间，地图生成与持久化暂未接入；当前页仅保留地点资料。" />
-            </div>
-          </article>
+          <AiBookMapPanel
+            :map="memoryView.map"
+            :locations="memoryView.locations"
+            :busy="aiStore.isBusy"
+            @generate="generateMap"
+          />
 
           <article class="panel-card">
             <div class="panel-head">
@@ -300,6 +292,7 @@
 import { computed, defineComponent, h, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getShelfBook } from '../api/bookshelf'
+import AiBookMapPanel from '../components/reader/AiBookMapPanel.vue'
 import { useAiBookStore } from '../stores/aiBook'
 import { useAppStore } from '../stores/app'
 import { useReaderStore } from '../stores/reader'
@@ -464,7 +457,6 @@ const worldviewGroups = computed(() => {
   }
   return [...groups.entries()].map(([category, items]) => ({ category, items }))
 })
-const mapStatusText = computed(() => '地图生成功能已暂时禁用')
 const generateDisabled = computed(() => aiStore.isBusy || !book.value)
 const generateButtonLabel = computed(() => aiStore.phase === 'text' ? '生成中...' : '生成当前章节')
 const pollingStatuses = new Set<AiBookCatchupTaskStatus>(['running', 'canceling', 'pausing'])
@@ -588,6 +580,19 @@ async function generateCurrentChapter() {
     appStore.showToast('当前章节 AI资料已生成', 'success')
   } catch (error) {
     appStore.showToast((error as Error).message || '当前章节生成失败', 'error')
+  }
+}
+
+async function generateMap() {
+  if (!book.value) return
+  try {
+    await aiStore.generateMap({
+      bookUrl: book.value.bookUrl,
+      sourceChapterIndex: currentChapterIndex.value,
+    })
+    appStore.showToast('AI 地图已生成', 'success')
+  } catch (error) {
+    appStore.showToast((error as Error).message || 'AI 地图生成失败', 'error')
   }
 }
 

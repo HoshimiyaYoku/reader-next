@@ -1,4 +1,4 @@
-import type { AiBookMemory } from '../types'
+import type { AiBookMemoryViewModel } from '../types'
 
 export interface AiBookGraphNode {
   id: string
@@ -44,11 +44,14 @@ export interface AiBookGraphLayout {
   links: AiBookGraphLayoutLink[]
 }
 
-export function buildAiBookRelationshipGraph(memory: AiBookMemory): AiBookRelationshipGraph {
+type AiBookRelationshipGraphSource = Pick<AiBookMemoryViewModel, 'characters' | 'relationships' | 'locations'>
+
+export function buildAiBookRelationshipGraph(memory: AiBookRelationshipGraphSource): AiBookRelationshipGraph {
   const nodes: AiBookGraphNode[] = []
   const links: AiBookGraphLink[] = []
   const seenNodes = new Set<string>()
   const seenLinks = new Set<string>()
+  const characterNames = new Map(memory.characters.map((character) => [character.id, character.name]))
 
   function addNode(node: AiBookGraphNode) {
     if (!node.id || seenNodes.has(node.id)) return
@@ -66,50 +69,40 @@ export function buildAiBookRelationshipGraph(memory: AiBookMemory): AiBookRelati
 
   for (const character of memory.characters) {
     addNode({
-      id: character.name,
+      id: character.id,
       label: character.name,
       kind: 'character',
-      detail: character.status || character.description,
+      detail: character.description || undefined,
     })
   }
 
   for (const relationship of memory.relationships) {
+    const sourceLabel = characterNames.get(relationship.sourceCharacterId) || relationship.sourceCharacterId
+    const targetLabel = characterNames.get(relationship.targetCharacterId) || relationship.targetCharacterId
     addNode({
-      id: relationship.source,
-      label: relationship.source,
+      id: relationship.sourceCharacterId,
+      label: sourceLabel,
       kind: 'character',
     })
     addNode({
-      id: relationship.target,
-      label: relationship.target,
+      id: relationship.targetCharacterId,
+      label: targetLabel,
       kind: 'character',
     })
     addLink({
-      source: relationship.source,
-      target: relationship.target,
-      label: relationship.relation || relationship.status || '关联',
+      source: relationship.sourceCharacterId,
+      target: relationship.targetCharacterId,
+      label: relationship.label || relationship.summary || '关联',
     })
   }
 
   for (const location of memory.locations) {
     addNode({
-      id: location.name,
+      id: location.id,
       label: location.name,
       kind: 'location',
       detail: location.description,
     })
-    for (const characterName of location.relatedCharacters || []) {
-      addNode({
-        id: characterName,
-        label: characterName,
-        kind: 'character',
-      })
-      addLink({
-        source: characterName,
-        target: location.name,
-        label: '位于',
-      })
-    }
   }
 
   return { nodes, links }

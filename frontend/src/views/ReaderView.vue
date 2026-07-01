@@ -199,6 +199,14 @@
                 >人物关系</button>
                 <button
                   class="summary-tab"
+                  :class="{ active: aiPanelActiveTab === 'map' }"
+                  :aria-selected="aiPanelActiveTab === 'map'"
+                  role="tab"
+                  type="button"
+                  @click="aiPanelActiveTab = 'map'"
+                >地图</button>
+                <button
+                  class="summary-tab"
                   :class="{ active: aiPanelActiveTab === 'settings' }"
                   :aria-selected="aiPanelActiveTab === 'settings'"
                   role="tab"
@@ -239,6 +247,14 @@
               :graph="chapterSummaryRelationshipGraph"
               :status="chapterSummaryRelationshipStatus"
               :body-style="aiPanelBodyStyle"
+            />
+            <AiBookMapPanel
+              v-else-if="aiPanelActiveTab === 'map'"
+              :map="chapterSummaryRelationshipMemory?.map"
+              :locations="chapterSummaryRelationshipMemory?.locations || []"
+              :busy="aiBookStore.isBusy || chapterSummaryRelationshipStatus === 'loading'"
+              :body-style="aiPanelBodyStyle"
+              @generate="generateAiBookMapForCurrentBook"
             />
             <section v-else class="chapter-summary-settings-panel reader-ui-font" role="tabpanel">
               <div class="summary-setting-group">
@@ -501,6 +517,14 @@
                 >人物关系</button>
                 <button
                   class="summary-tab"
+                  :class="{ active: aiPanelActiveTab === 'map' }"
+                  :aria-selected="aiPanelActiveTab === 'map'"
+                  role="tab"
+                  type="button"
+                  @click="aiPanelActiveTab = 'map'"
+                >地图</button>
+                <button
+                  class="summary-tab"
                   :class="{ active: aiPanelActiveTab === 'settings' }"
                   :aria-selected="aiPanelActiveTab === 'settings'"
                   role="tab"
@@ -541,6 +565,14 @@
               :graph="chapterSummaryRelationshipGraph"
               :status="chapterSummaryRelationshipStatus"
               :body-style="aiPanelBodyStyle"
+            />
+            <AiBookMapPanel
+              v-else-if="aiPanelActiveTab === 'map'"
+              :map="chapterSummaryRelationshipMemory?.map"
+              :locations="chapterSummaryRelationshipMemory?.locations || []"
+              :busy="aiBookStore.isBusy || chapterSummaryRelationshipStatus === 'loading'"
+              :body-style="aiPanelBodyStyle"
+              @generate="generateAiBookMapForCurrentBook"
             />
             <section v-else class="chapter-summary-settings-panel reader-ui-font" role="tabpanel">
               <div class="summary-setting-group">
@@ -773,6 +805,14 @@
           >人物关系</button>
           <button
             class="summary-tab"
+            :class="{ active: aiPanelActiveTab === 'map' }"
+            :aria-selected="aiPanelActiveTab === 'map'"
+            role="tab"
+            type="button"
+            @click="aiPanelActiveTab = 'map'"
+          >地图</button>
+          <button
+            class="summary-tab"
             :class="{ active: aiPanelActiveTab === 'settings' }"
             :aria-selected="aiPanelActiveTab === 'settings'"
             role="tab"
@@ -816,6 +856,14 @@
         :graph="chapterSummaryRelationshipGraph"
         :status="chapterSummaryRelationshipStatus"
         :body-style="aiPanelBodyStyle"
+      />
+      <AiBookMapPanel
+        v-else-if="aiPanelActiveTab === 'map'"
+        :map="chapterSummaryRelationshipMemory?.map"
+        :locations="chapterSummaryRelationshipMemory?.locations || []"
+        :busy="aiBookStore.isBusy || chapterSummaryRelationshipStatus === 'loading'"
+        :body-style="aiPanelBodyStyle"
+        @generate="generateAiBookMapForCurrentBook"
       />
       <section v-else class="chapter-summary-settings-panel reader-ui-font" role="tabpanel">
         <div class="summary-setting-group">
@@ -1045,6 +1093,7 @@
 import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick, defineAsyncComponent } from 'vue'
 import { onBeforeRouteLeave, useRouter } from 'vue-router'
 import { useReaderStore, fontPresets } from '../stores/reader'
+import { useAiBookStore } from '../stores/aiBook'
 import { useAppStore } from '../stores/app'
 import { getBookInfo } from '../api/bookshelf'
 import { getAiBookMemory } from '../api/ai/book'
@@ -1069,6 +1118,7 @@ import ReaderSidebar from '../components/reader/ReaderSidebar.vue'
 import ReaderToolbar from '../components/reader/ReaderToolbar.vue'
 import ReaderMobileControls from '../components/reader/ReaderMobileControls.vue'
 import ChapterSummaryRelationshipPanel from '../components/reader/ChapterSummaryRelationshipPanel.vue'
+import AiBookMapPanel from '../components/reader/AiBookMapPanel.vue'
 import { useReaderSearch } from '../composables/useReaderSearch'
 import { useReaderSelection } from '../composables/useReaderSelection'
 import { useHorizontalPaging } from '../composables/useHorizontalPaging'
@@ -1087,6 +1137,7 @@ const ReaderSearchPanel = defineAsyncComponent(() => import('../components/reade
 
 const router = useRouter()
 const store = useReaderStore()
+const aiBookStore = useAiBookStore()
 const appStore = useAppStore()
 const READER_POSITION_PREFIX = 'reader-position:'
 const SERVER_PROGRESS_AUTOSAVE_MS = 10000
@@ -1172,7 +1223,7 @@ const chapterSummary = ref<ChapterSummaryRecord | null>(null)
 const chapterSummaryStatus = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
 const chapterSummaryError = ref('')
 const showAiPanel = ref(config.value.showAiPanel)
-type AiPanelTab = 'summary' | 'relationships' | 'settings'
+type AiPanelTab = 'summary' | 'relationships' | 'map' | 'settings'
 const aiPanelActiveTab = ref<AiPanelTab>(config.value.aiPanelActiveTab)
 const chapterSummaryRelationshipMemory = ref<AiBookMemoryViewModel | null>(null)
 const chapterSummaryRelationshipStatus = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
@@ -1464,6 +1515,26 @@ async function generateChapterSummaryForCurrentChapter(force: boolean) {
   }
 }
 
+async function generateAiBookMapForCurrentBook() {
+  const bookUrl = store.book?.bookUrl
+  if (!bookUrl) return
+  try {
+    const map = await aiBookStore.generateMap({
+      bookUrl,
+      sourceChapterIndex: store.currentIndex,
+    })
+    if (aiBookStore.memoryView?.bookUrl === bookUrl) {
+      chapterSummaryRelationshipMemory.value = aiBookStore.memoryView
+      chapterSummaryRelationshipStatus.value = 'ready'
+    } else if (map) {
+      await loadChapterSummaryRelationshipMemory()
+    }
+    appStore.showToast('AI 地图已生成', 'success')
+  } catch (error) {
+    appStore.showToast((error as Error).message || 'AI 地图生成失败', 'error')
+    await loadChapterSummaryRelationshipMemory()
+  }
+}
 
 function expandCollapsedAiPanel() {
   aiPanelActiveTab.value = chapterSummary.value ? 'summary' : 'settings'
@@ -2858,11 +2929,17 @@ watch(() => store.book?.bookUrl, () => {
   if (aiPanelActiveTab.value === 'relationships') {
     void loadChapterSummaryRelationshipMemory()
   }
+  if (aiPanelActiveTab.value === 'map') {
+    void loadChapterSummaryRelationshipMemory()
+  }
 })
 
 watch(aiPanelActiveTab, (tab) => {
   store.updateConfig('aiPanelActiveTab', tab)
   if (tab === 'relationships' && chapterSummaryRelationshipStatus.value === 'idle') {
+    void loadChapterSummaryRelationshipMemory()
+  }
+  if (tab === 'map' && chapterSummaryRelationshipStatus.value === 'idle') {
     void loadChapterSummaryRelationshipMemory()
   }
   if (tab === 'settings' && !aiModelLoaded.value) {

@@ -4,6 +4,7 @@ import { useAiBookStore } from './aiBook'
 import { getAiModelConfig } from '../api/ai/model'
 import {
   cancelAiBookCatchup,
+  generateAiBookMap,
   generateAiBookChapterMemory,
   getAiBookCatchupStatus,
   getAiBookChapterMemory,
@@ -33,6 +34,7 @@ vi.mock('../api/ai/book', () => ({
   startAiBookCatchup: vi.fn(),
   getAiBookCatchupStatus: vi.fn(),
   cancelAiBookCatchup: vi.fn(),
+  generateAiBookMap: vi.fn(),
 }))
 
 const getAiModelConfigMock = vi.mocked(getAiModelConfig)
@@ -44,6 +46,7 @@ const generateAiBookChapterMemoryMock = vi.mocked(generateAiBookChapterMemory)
 const startAiBookCatchupMock = vi.mocked(startAiBookCatchup)
 const getAiBookCatchupStatusMock = vi.mocked(getAiBookCatchupStatus)
 const cancelAiBookCatchupMock = vi.mocked(cancelAiBookCatchup)
+const generateAiBookMapMock = vi.mocked(generateAiBookMap)
 
 describe('aiBook store v3', () => {
   beforeEach(() => {
@@ -58,6 +61,7 @@ describe('aiBook store v3', () => {
     startAiBookCatchupMock.mockReset()
     getAiBookCatchupStatusMock.mockReset()
     cancelAiBookCatchupMock.mockReset()
+    generateAiBookMapMock.mockReset()
   })
 
   it('reuses the loaded server model config for repeated checks', async () => {
@@ -140,7 +144,7 @@ describe('aiBook store v3', () => {
     expect(store.catchupStatus).toEqual(cancelStatus)
   })
 
-  it('preserves legacy non-null runChapterUpdate contract before Task 7', async () => {
+  it('returns V3 memory from runChapterUpdate without exposing legacy memory', async () => {
     const book = createBook()
     const chapter = { index: 3, title: '第四章', url: 'chapter-3' }
     const generatedResponse = createChapterResponse(book)
@@ -157,9 +161,12 @@ describe('aiBook store v3', () => {
     expect(result).not.toBeNull()
     expect(result).toMatchObject({
       bookUrl: book.bookUrl,
-      summary: '摘要',
-      worldview: [],
+      summary: {
+        current: '摘要',
+      },
+      knowledgeFacts: [],
     })
+    expect('memory' in store).toBe(false)
   })
 
 
@@ -185,6 +192,40 @@ describe('aiBook store v3', () => {
       .toEqual(generatedResponse.chapter)
 
     expect(generateAiBookChapterMemoryMock).toHaveBeenCalledTimes(2)
+    expect(store.phase).toBe('idle')
+    expect(store.statusText).toBe('')
+  })
+
+  it('generates map and updates V3 memory map', async () => {
+    const book = createBook()
+    const response = createMemoryResponse(book)
+    response.memory.map = {
+      status: {
+        dirty: false,
+        lastImageGeneratedAt: 10,
+      },
+      blueprint: null,
+      artifacts: {
+        imageUrl: '/assets/default/ai-book-maps/map.png',
+      },
+      locations: [],
+      locationEdges: [],
+    }
+    generateAiBookMapMock.mockResolvedValue(response)
+    const store = useAiBookStore()
+
+    await expect(store.generateMap({
+      bookUrl: book.bookUrl,
+      sourceChapterIndex: 3,
+      prompt: '地图',
+    })).resolves.toEqual(response.memory.map)
+
+    expect(generateAiBookMapMock).toHaveBeenCalledWith({
+      bookUrl: book.bookUrl,
+      sourceChapterIndex: 3,
+      prompt: '地图',
+    })
+    expect(store.memoryView?.map?.artifacts?.imageUrl).toBe('/assets/default/ai-book-maps/map.png')
     expect(store.phase).toBe('idle')
     expect(store.statusText).toBe('')
   })

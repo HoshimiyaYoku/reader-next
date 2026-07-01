@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { getAiModelConfig } from '../api/ai/model'
 import {
   cancelAiBookCatchup,
+  generateAiBookMap,
   generateAiBookChapterMemory,
   getAiBookCatchupStatus,
   getAiBookChapterMemory,
@@ -16,7 +17,6 @@ import type {
   AiBookChapterMemoryViewModel,
   AiBookConfig,
   AiBookGenerationMode,
-  AiBookMemory,
   AiBookMemoryViewModel,
   AiServerModelConfigResponse,
   Book,
@@ -44,7 +44,6 @@ export const useAiBookStore = defineStore('aiBook', () => {
   const username = computed(() => appStore.userInfo?.username || 'default')
   const config = ref<AiBookConfig>(getAiBookConfig(username.value))
   const serverModelConfig = ref<AiServerModelConfigResponse | null>(null)
-  const memory = computed<AiBookMemory | null>(() => toLegacyMemory(memoryView.value))
   const isBusy = computed(() => (
     loading.value
     || phase.value === 'loading'
@@ -174,6 +173,21 @@ export const useAiBookStore = defineStore('aiBook', () => {
     }
   }
 
+  async function generateMap(params: { bookUrl: string; sourceChapterIndex?: number; prompt?: string }) {
+    phase.value = 'loading'
+    statusText.value = '生成 AI 地图...'
+    try {
+      const response = await generateAiBookMap(params)
+      applyMemoryResponse(response.memory)
+      phase.value = 'idle'
+      statusText.value = ''
+      return memoryView.value?.map || null
+    } catch (error) {
+      setActionError((error as Error).message || 'AI 地图生成失败')
+      throw error
+    }
+  }
+
   async function startCatchup(params: { bookUrl: string; targetChapterIndex?: number }) {
     catchupPolling.value = true
     try {
@@ -219,21 +233,21 @@ export const useAiBookStore = defineStore('aiBook', () => {
       chapterIndex: params.chapter.index,
       mode: 'auto',
     }).catch(() => null)
-    return memory.value
+    return memoryView.value
   }
 
   async function runChapterUpdate(params: {
     book: Book
     chapter: BookChapter
     chapterContent: string
-    current?: AiBookMemory | null
+    current?: AiBookMemoryViewModel | null
     allowSkip?: boolean
     throwOnError?: boolean
     chapters?: BookChapter[]
-  }): Promise<AiBookMemory> {
+  }): Promise<AiBookMemoryViewModel> {
     const key = `${params.book.bookUrl}::${params.chapter.index}`
     if (updatingChapterKeys.has(key)) {
-      return resolveLegacyMemoryFallback(memory.value, params.book, params.current)
+      return resolveMemoryViewFallback(memoryView.value, params.book, params.current)
     }
     updatingChapterKeys.add(key)
     try {
@@ -242,13 +256,13 @@ export const useAiBookStore = defineStore('aiBook', () => {
         chapterIndex: params.chapter.index,
         mode: params.allowSkip ? 'auto' : 'manual',
       })
-      return resolveLegacyMemoryFallback(memory.value, params.book, params.current)
+      return resolveMemoryViewFallback(memoryView.value, params.book, params.current)
     } catch (error) {
       applyLocalError(params.chapter.index, params.chapter.title, (error as Error).message || 'AI 资料更新失败')
       if (params.throwOnError) {
         throw error
       }
-      return resolveLegacyMemoryFallback(memory.value, params.book, params.current)
+      return resolveMemoryViewFallback(memoryView.value, params.book, params.current)
     } finally {
       updatingChapterKeys.delete(key)
     }
@@ -281,7 +295,6 @@ export const useAiBookStore = defineStore('aiBook', () => {
   }
 
   return {
-    memory,
     memoryView,
     chapterMemory,
     catchupStatus,
@@ -302,6 +315,7 @@ export const useAiBookStore = defineStore('aiBook', () => {
     setEnabled,
     reset,
     generateChapterMemory,
+    generateMap,
     startCatchup,
     loadCatchupStatus,
     cancelCatchup,
@@ -311,92 +325,8 @@ export const useAiBookStore = defineStore('aiBook', () => {
   }
 })
 
-function toLegacyMemory(memory: AiBookMemoryViewModel | AiBookMemory | null | undefined): AiBookMemory | null {
-  if (!memory) {
-    return null
-  }
-  if ('worldview' in memory) {
-    return memory
-  }
-
-  const charactersById = new Map(memory.characters.map((item) => [item.id, item.name]))
-  const locationsById = new Map(memory.locations.map((item) => [item.id, item.name]))
-
-  return {
-    bookUrl: memory.bookUrl,
-    bookName: memory.bookName || undefined,
-    author: memory.author || undefined,
-    enabled: memory.enabled,
-    processedChapterIndex: memory.processedChapterIndex ?? undefined,
-    processedChapterTitle: memory.processedChapterTitle || undefined,
-    updatedAt: memory.updatedAt,
-    summary: memory.summary.current,
-    worldview: memory.knowledgeFacts.map((item) => ({
-      title: item.title,
-      content: item.content,
-      category: item.category,
-      confidence: item.confidence,
-      importance: item.importance,
-      evidence: item.evidence,
-    })),
-    characters: memory.characters.map((item) => ({
-      name: item.name,
-      aliases: item.aliases,
-      status: '',
-      description: item.description || undefined,
-      lastSeenChapter: formatChapter(item.lastSeenChapterIndex ?? undefined),
-      importance: item.importance,
-      evidence: item.evidence,
-    })),
-    relationships: memory.relationships.map((item) => ({
-      source: charactersById.get(item.sourceCharacterId) || item.sourceCharacterId,
-      target: charactersById.get(item.targetCharacterId) || item.targetCharacterId,
-      relation: item.label,
-      status: item.status,
-      description: item.summary,
-      evidence: item.evidence,
-    })),
-    locations: memory.locations.map((item) => ({
-      name: item.name,
-      kind: item.kind,
-      parentName: item.parentLocationId ? locationsById.get(item.parentLocationId) : undefined,
-      description: item.description,
-      status: item.currentStatus || undefined,
-      relatedCharacters: [],
-      firstSeenChapter: formatChapter(item.firstSeenChapterIndex ?? undefined),
-      importance: item.importance,
-      evidence: item.evidence,
-    })),
-    map: memory.map
-      ? {
-          imageUrl: memory.map.renderArtifacts?.imageUrl || undefined,
-          prompt: undefined,
-          updatedAt: memory.map.renderArtifacts?.updatedAt ?? undefined,
-          sourceChapterIndex: memory.map.renderArtifacts?.chapterIndex ?? undefined,
-          fallback: memory.map.renderArtifacts?.imageUrl ? undefined : 'relationship-graph',
-          fallbackReason: memory.map.state?.dirty ? '地图待重新生成' : undefined,
-        }
-      : null,
-    mapDirty: Boolean(memory.map?.state?.dirty),
-    lastError: memory.lastError || undefined,
-    lastErrorChapterIndex: memory.lastErrorChapterIndex ?? undefined,
-    lastErrorChapterTitle: memory.lastErrorChapterTitle || undefined,
-    cleanup: memory.cleanup,
-    catchupStats: memory.catchupStats,
-  }
-}
-
-function formatChapter(index?: number) {
-  if (typeof index !== 'number') {
-    return undefined
-  }
-  return `第${index + 1}章`
-}
-
-function resolveLegacyMemoryFallback(next: AiBookMemory | null, book: Book, current?: AiBookMemory | null): AiBookMemory {
-  return toLegacyMemory(next)
-    || toLegacyMemory(current)
-    || toLegacyMemory({
+function resolveMemoryViewFallback(next: AiBookMemoryViewModel | null, book: Book, current?: AiBookMemoryViewModel | null): AiBookMemoryViewModel {
+  return next || current || {
       bookUrl: book.bookUrl,
       bookName: book.name,
       author: book.author,
@@ -421,5 +351,5 @@ function resolveLegacyMemoryFallback(next: AiBookMemory | null, book: Book, curr
       lastError: null,
       lastErrorChapterIndex: null,
       lastErrorChapterTitle: null,
-    })!
+    }
 }

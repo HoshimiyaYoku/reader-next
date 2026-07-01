@@ -1,94 +1,75 @@
 import { describe, expect, it } from 'vitest'
-import type { AiBookMemory } from '../types'
+import type { AiBookMemoryViewModel } from '../types'
 import { buildAiBookRelationshipGraph, layoutAiBookRelationshipGraph } from './aiBookGraph'
 
 describe('aiBookGraph', () => {
-  it('builds stable nodes and links from characters, relationships, and locations', () => {
-    const memory: AiBookMemory = {
-      bookUrl: 'book-1',
-      enabled: true,
-      updatedAt: 0,
-      worldview: [],
+  it('builds stable nodes and links from V3 characters, relationships, and locations', () => {
+    const memory = createMemory({
       characters: [
-        { name: '林舟', status: '受伤', location: '北境' },
-        { name: '沈月', status: '失踪' },
+        createCharacter('char-lin', '林舟', '受伤'),
+        createCharacter('char-shen', '沈月', '失踪'),
       ],
       relationships: [
-        { source: '林舟', target: '沈月', relation: '盟友' },
+        createRelationship('rel-1', 'char-lin', 'char-shen', '盟友'),
       ],
       locations: [
-        { name: '北境', description: '寒冷边地', relatedCharacters: ['林舟'] },
+        createLocation('loc-north', '北境', '寒冷边地'),
       ],
-    }
+    })
 
     const graph = buildAiBookRelationshipGraph(memory)
 
-    expect(graph.nodes.map((node) => node.id)).toEqual(['林舟', '沈月', '北境'])
+    expect(graph.nodes.map((node) => node.id)).toEqual(['char-lin', 'char-shen', 'loc-north'])
     expect(graph.links).toEqual([
-      { source: '林舟', target: '沈月', label: '盟友' },
-      { source: '林舟', target: '北境', label: '位于' },
+      { source: 'char-lin', target: 'char-shen', label: '盟友' },
     ])
   })
 
-  it('lays out locations and characters in readable columns with selected-node focus', () => {
-    const memory: AiBookMemory = {
-      bookUrl: 'book-1',
-      enabled: true,
-      updatedAt: 0,
-      worldview: [],
+  it('lays out V3 locations and characters in readable columns with selected-node focus', () => {
+    const memory = createMemory({
       characters: [
-        { name: '林舟', status: '受伤', location: '北境' },
-        { name: '沈月', status: '失踪' },
-        { name: '韩青', status: '旁观' },
+        createCharacter('char-lin', '林舟', '受伤'),
+        createCharacter('char-shen', '沈月', '失踪'),
+        createCharacter('char-han', '韩青', '旁观'),
       ],
       relationships: [
-        { source: '林舟', target: '沈月', relation: '盟友' },
+        createRelationship('rel-1', 'char-lin', 'char-shen', '盟友'),
       ],
       locations: [
-        { name: '北境', description: '寒冷边地', relatedCharacters: ['林舟'] },
-        { name: '帝都', description: '权力中心', relatedCharacters: ['韩青'] },
+        createLocation('loc-north', '北境', '寒冷边地'),
+        createLocation('loc-capital', '帝都', '权力中心'),
       ],
-    }
+    })
 
     const graph = buildAiBookRelationshipGraph(memory)
-    const layout = layoutAiBookRelationshipGraph(graph, '林舟')
-    const north = layout.nodes.find((node) => node.id === '北境')!
-    const lin = layout.nodes.find((node) => node.id === '林舟')!
-    const han = layout.nodes.find((node) => node.id === '韩青')!
-    const locatedLink = layout.links.find((link) => link.source === '林舟' && link.target === '北境')!
-    const unrelatedLink = layout.links.find((link) => link.source === '韩青' && link.target === '帝都')!
+    const layout = layoutAiBookRelationshipGraph(graph, 'char-lin')
+    const north = layout.nodes.find((node) => node.id === 'loc-north')!
+    const lin = layout.nodes.find((node) => node.id === 'char-lin')!
+    const han = layout.nodes.find((node) => node.id === 'char-han')!
+    const allyLink = layout.links.find((link) => link.source === 'char-lin' && link.target === 'char-shen')!
 
     expect(north.lane).toBe('left')
     expect(lin.lane).toBe('right')
     expect(north.x).toBeLessThan(lin.x)
     expect(lin.dimmed).toBe(false)
-    expect(north.dimmed).toBe(false)
+    expect(north.dimmed).toBe(true)
     expect(han.dimmed).toBe(true)
-    expect(locatedLink.highlighted).toBe(true)
-    expect(locatedLink.showLabel).toBe(true)
-    expect(unrelatedLink.dimmed).toBe(true)
-    expect(unrelatedLink.showLabel).toBe(false)
+    expect(allyLink.highlighted).toBe(true)
+    expect(allyLink.showLabel).toBe(true)
   })
 
-  it('expands the canvas for dense relationship graphs to avoid node overlap', () => {
-    const memory: AiBookMemory = {
-      bookUrl: 'book-1',
-      enabled: true,
-      updatedAt: 0,
-      worldview: [],
-      characters: Array.from({ length: 14 }, (_, index) => ({
-        name: `角色${index + 1}`,
-        status: '活跃',
-      })),
+  it('expands the canvas for dense V3 relationship graphs to avoid node overlap', () => {
+    const memory = createMemory({
+      characters: Array.from({ length: 14 }, (_, index) => (
+        createCharacter(`char-${index + 1}`, `角色${index + 1}`, '活跃')
+      )),
       relationships: [],
-      locations: [{
-        name: '中心城',
-        description: '主舞台',
-        relatedCharacters: Array.from({ length: 14 }, (_, index) => `角色${index + 1}`),
-      }],
-    }
+      locations: [
+        createLocation('loc-center', '中心城', '主舞台'),
+      ],
+    })
 
-    const layout = layoutAiBookRelationshipGraph(buildAiBookRelationshipGraph(memory), '角色1')
+    const layout = layoutAiBookRelationshipGraph(buildAiBookRelationshipGraph(memory), 'char-1')
     const characterNodes = layout.nodes
       .filter((node) => node.kind === 'character')
       .sort((a, b) => a.y - b.y)
@@ -101,3 +82,67 @@ describe('aiBookGraph', () => {
     }
   })
 })
+
+function createMemory(overrides: Partial<Pick<AiBookMemoryViewModel, 'characters' | 'relationships' | 'locations'>> = {}): AiBookMemoryViewModel {
+  return {
+    bookUrl: 'book-1',
+    enabled: true,
+    updatedAt: 0,
+    summary: {
+      current: '',
+      recentChanges: [],
+      openQuestions: [],
+    },
+    characters: overrides.characters || [],
+    relationships: overrides.relationships || [],
+    knowledgeFacts: [],
+    locations: overrides.locations || [],
+    map: null,
+    cleanup: {
+      droppedFactsCount: 0,
+      droppedByReason: {},
+      oldSchemaBackedUp: false,
+    },
+  }
+}
+function createCharacter(id: string, name: string, description: string) {
+  return {
+    id,
+    name,
+    aliases: [],
+    importance: 'moderate',
+    description,
+    evidence: [],
+  }
+}
+
+function createRelationship(id: string, sourceCharacterId: string, targetCharacterId: string, label: string) {
+  return {
+    id,
+    sourceCharacterId,
+    targetCharacterId,
+    group: 'companion' as const,
+    label,
+    polarity: 'positive' as const,
+    strength: 'moderate' as const,
+    status: 'active' as const,
+    direction: 'undirected',
+    summary: label,
+    currentDynamics: [],
+    evidence: [],
+    history: [],
+  }
+}
+
+function createLocation(id: string, name: string, description: string) {
+  return {
+    id,
+    name,
+    aliases: [],
+    kind: '地点',
+    scale: 'unknown',
+    description,
+    importance: 'moderate',
+    evidence: [],
+  }
+}

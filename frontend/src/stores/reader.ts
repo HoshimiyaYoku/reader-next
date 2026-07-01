@@ -65,7 +65,7 @@ export interface ReadConfig {
   aiPanelSiderWidth: number
   aiPanelFontSize: number
   chapterSummaryKeyPointStyle: 'card' | 'list'
-  aiPanelActiveTab: 'summary' | 'relationships' | 'settings'
+  aiPanelActiveTab: 'summary' | 'relationships' | 'map' | 'settings'
 }
 
 const defaultConfig: ReadConfig = {
@@ -125,6 +125,9 @@ function migrateLegacyReadConfig(saved: Partial<ReadConfig> & Record<string, unk
       : normalized.chapterSummaryActiveTab
   }
   if (normalized.aiPanelActiveTab === 'content') {
+    normalized.aiPanelActiveTab = 'summary'
+  }
+  if (!['summary', 'relationships', 'map', 'settings'].includes(String(normalized.aiPanelActiveTab || ''))) {
     normalized.aiPanelActiveTab = 'summary'
   }
   const merged = { ...defaultConfig, ...normalized } as ReadConfig
