@@ -15,6 +15,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 ## CodeGraph + LeanCTX Routing
 
 CodeGraph owns code-structure work in this repository. Use it first whenever the question is about source layout, symbols, relationships, or impact.
+Before every CodeGraph-backed lookup, sync the CodeGraph index for this repository when a sync capability is available, then rely on the synced result.
 
 Use CodeGraph for:
 
@@ -69,6 +70,13 @@ cargo test --lib <test_name> # Single test
 cd frontend && npm install && npm run dev    # Hot-reload frontend only; keep proxy aligned with SERVER_PORT
 cd frontend && npm run build                 # Builds to frontend/dist/
 ```
+
+## Release Workflow
+
+- Release by pushing the code, creating/pushing the version tag, and confirming the Docker publish workflow has been triggered.
+- After the Docker publish workflow is queued or running, do not wait for completion by default. Wait only when the user explicitly needs immediate deploy verification or the workflow has recently been unstable.
+- Release notes must summarize the actual service/product changes since the previous release. Inspect the diff, relevant files, and user-facing behavior; do not copy commit messages directly as release details.
+- When writing release notes, call out backend/API/schema/storage changes, frontend behavior changes, deployment or Docker-impacting changes, and known risks or follow-up checks.
 
 ## Configuration
 

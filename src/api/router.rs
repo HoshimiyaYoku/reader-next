@@ -262,10 +262,7 @@ pub fn build_router(state: AppState) -> Router {
             AI_MODEL_CONFIG_ROUTE,
             get(handlers::get_ai_model_config).post(handlers::save_ai_model_config),
         )
-        .route(
-            AI_CHAPTER_SUMMARY_ROUTE,
-            get(handlers::get_chapter_summary),
-        )
+        .route(AI_CHAPTER_SUMMARY_ROUTE, get(handlers::get_chapter_summary))
         .route(
             AI_CHAPTER_SUMMARY_GENERATE_ROUTE,
             post(handlers::generate_chapter_summary),
