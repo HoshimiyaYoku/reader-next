@@ -1,6 +1,17 @@
 <template>
   <nav class="reader-sidebar" :style="{ background: theme.popup, color: theme.fontColor }">
     <div class="sidebar-items">
+      <button
+        v-if="showAddToShelf"
+        type="button"
+        class="sidebar-item shelf-action"
+        :disabled="addingToShelf"
+        @click="$emit('addToShelf')"
+      >
+        <svg v-if="addingToShelf" class="spinning" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 0-9 9" /></svg>
+        <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" /><path d="M12 7v6M9 10h6" /></svg>
+        <span>{{ addingToShelf ? '添加中' : '加书架' }}</span>
+      </button>
       <div class="sidebar-item" :class="{ active: store.activePanel === 'bookshelf' }" @click="store.togglePanel('bookshelf')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" /></svg>
         <span>书架</span>
@@ -55,8 +66,14 @@ const theme = computed(() => {
   return store.currentTheme
 })
 
+defineProps<{
+  showAddToShelf?: boolean
+  addingToShelf?: boolean
+}>()
+
 defineEmits<{
   goHome: []
+  addToShelf: []
   scrollTop: []
   scrollBottom: []
 }>()
@@ -105,6 +122,26 @@ defineEmits<{
   color: inherit;
   opacity: 0.6;
   width: 48px;
+}
+
+.sidebar-item.shelf-action {
+  border: 0;
+  background: color-mix(in srgb, var(--color-primary, #c97f3a) 12%, transparent);
+  color: var(--color-primary, #c97f3a);
+  font: inherit;
+}
+
+.sidebar-item.shelf-action:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.sidebar-item svg.spinning {
+  animation: sidebar-spin 0.9s linear infinite;
+}
+
+@keyframes sidebar-spin {
+  to { transform: rotate(360deg); }
 }
 
 .sidebar-item svg {

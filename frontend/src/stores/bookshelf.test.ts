@@ -135,4 +135,42 @@ describe('bookshelf search state', () => {
       sourceUrl: '',
     })).toBeNull()
   })
+
+  it('pauses an in-progress search and caches partial results for reader return', () => {
+    const store = useBookshelfStore()
+    const book = {
+      name: '星门',
+      author: '老鹰吃小鸡',
+      bookUrl: 'https://book.example/xm',
+      origin: 'https://source.example',
+    }
+    store.startSearch('星门', { sourceUrl: 'https://source.example' })
+    store.searchResults = [book]
+    store.isSearching = true
+
+    store.pauseSearch()
+
+    expect(store.isSearching).toBe(false)
+    expect(store.getCachedSearchResults({
+      key: '星门',
+      scope: 'source',
+      group: '',
+      sourceUrl: 'https://source.example',
+    })).toEqual([book])
+  })
+
+  it('caches an empty paused search so returning does not restart it', () => {
+    const store = useBookshelfStore()
+    store.startSearch('无结果', { sourceUrl: 'https://source.example' })
+    store.isSearching = true
+
+    store.pauseSearch()
+
+    expect(store.getCachedSearchResults({
+      key: '无结果',
+      scope: 'source',
+      group: '',
+      sourceUrl: 'https://source.example',
+    })).toEqual([])
+  })
 })

@@ -265,6 +265,18 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
     ].slice(0, SEARCH_CACHE_LIMIT)
   }
 
+  function pauseSearch() {
+    if (!searchKey.value) return
+    cacheSearchResults({
+      key: searchKey.value,
+      scope: searchScope.value,
+      group: searchScope.value === 'group' ? searchGroup.value : '',
+      sourceUrl: searchScope.value === 'source' ? searchSourceUrl.value : '',
+      results: searchResults.value,
+    })
+    isSearching.value = false
+  }
+
   const isSearchMode = computed(() => searchKey.value.length > 0)
 
   // ─── Edit mode and Selection ───
@@ -364,7 +376,7 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
     fetchGroups, saveGroup, removeGroup,
     searchResults, isSearching, searchKey,
     searchScope, searchGroup, searchSourceUrl, startSearch, clearSearch, isSearchMode,
-    persistSearchPreferences, getCachedSearchResults, cacheSearchResults,
+    persistSearchPreferences, getCachedSearchResults, cacheSearchResults, pauseSearch,
     editMode,
     selectedBookUrls, toggleSelection, selectAll, clearSelection,
     bulkDelete, bulkSetGroup, reorderBooks, moveBookToFront,

@@ -174,14 +174,18 @@ function ensureSearchSelection() {
   }
 }
 
-function doSearch(key: string) {
-  closeEventSource()
-  const searchParams = {
+function currentSearchParams(key = searchKey.value) {
+  return {
     key,
     scope: searchScope.value,
     group: searchScope.value === 'group' ? selectedGroup.value : '',
     sourceUrl: searchScope.value === 'source' ? selectedSourceUrl.value : '',
   }
+}
+
+function doSearch(key: string) {
+  closeEventSource()
+  const searchParams = currentSearchParams(key)
   shelfStore.persistSearchPreferences()
 
   if (searchScope.value === 'group' && !selectedGroup.value) {
@@ -295,6 +299,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  shelfStore.pauseSearch()
   closeEventSource()
 })
 

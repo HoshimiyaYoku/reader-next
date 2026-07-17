@@ -36,7 +36,10 @@
     <!-- PC Desktop Toolbars (Always shown) -->
     <ReaderSidebar
       v-if="!isMobile"
+      :show-add-to-shelf="showAddToShelf"
+      :adding-to-shelf="addingToShelf"
       @goHome="goHome"
+      @addToShelf="handleAddToShelf"
       @scrollTop="scrollToTop"
       @scrollBottom="scrollToBottom"
     />
@@ -60,7 +63,10 @@
     <ReaderMobileControls
       v-if="isMobile"
       :show="showControls || !!store.activePanel"
+      :show-add-to-shelf="showAddToShelf"
+      :adding-to-shelf="addingToShelf"
       @goHome="goHome"
+      @addToShelf="handleAddToShelf"
       @scrollTop="scrollToTop"
       @scrollBottom="scrollToBottom"
       @prev="prevChapter"
@@ -1093,9 +1099,10 @@
 import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick, defineAsyncComponent } from 'vue'
 import { onBeforeRouteLeave, useRouter } from 'vue-router'
 import { useReaderStore, fontPresets } from '../stores/reader'
+import { useBookshelfStore } from '../stores/bookshelf'
 import { useAiBookStore } from '../stores/aiBook'
 import { useAppStore } from '../stores/app'
-import { getBookInfo } from '../api/bookshelf'
+import { getBookInfo, getShelfBook, saveBook } from '../api/bookshelf'
 import { getAiBookMemory } from '../api/ai/book'
 import {
   getChapterSummary,
@@ -1108,6 +1115,7 @@ import { countBrowserBookCache } from '../utils/browserCache'
 import { APP_VIEWPORT_CHANGE_EVENT, syncViewportSize } from '../utils/viewport'
 import { isReaderInteractiveClickTarget } from '../utils/readerClick'
 import { createReaderProgressAutoSaveScheduler, createReaderProgressExitSaver } from '../utils/readerProgressAutoSave'
+import { buildReaderShelfBook, isBookOnShelf } from '../utils/readerShelf'
 import { buildChapterSummaryIdentity, isCurrentChapterSummaryIdentity } from '../utils/chapterSummaryState'
 import { buildSummaryRelationshipGraph } from '../utils/summaryRelationshipGraph'
 import { chooseChapterSummaryPlacement, clampChapterSummarySiderWidth, getChapterSummaryFontSize } from '../utils/chapterSummaryLayout'
@@ -1137,6 +1145,7 @@ const ReaderSearchPanel = defineAsyncComponent(() => import('../components/reade
 
 const router = useRouter()
 const store = useReaderStore()
+const shelfStore = useBookshelfStore()
 const aiBookStore = useAiBookStore()
 const appStore = useAppStore()
 const READER_POSITION_PREFIX = 'reader-position:'
@@ -1174,7 +1183,11 @@ const scrollContainerRef = ref<HTMLElement>()
 const chapterTextRef = ref<HTMLElement>()
 const showControls = ref(false)
 const isMobile = ref(false)
+const readerShelfStatus = ref<'checking' | 'available' | 'added'>('checking')
+const addingToShelf = ref(false)
+const showAddToShelf = computed(() => readerShelfStatus.value === 'available' || addingToShelf.value)
 const viewportWidth = ref(typeof window === 'undefined' ? 0 : window.innerWidth)
+let readerShelfCheckRequestId = 0
 let speechTimerTicker: number | null = null
 let suppressNextTapUntil = 0
 let restorePositionTimer: number | null = null
@@ -1797,6 +1810,45 @@ function pageBackward() {
 async function goHome() {
   await persistReadingProgressBeforeLeave()
   router.replace('/')
+}
+
+async function refreshReaderShelfStatus() {
+  const requestId = ++readerShelfCheckRequestId
+  const currentBook = store.book
+  if (!currentBook?.bookUrl) {
+    readerShelfStatus.value = 'checking'
+    return
+  }
+  if (isBookOnShelf(shelfStore.books, currentBook.bookUrl)) {
+    readerShelfStatus.value = 'added'
+    return
+  }
+
+  readerShelfStatus.value = 'checking'
+  const shelfBook = await getShelfBook(currentBook.bookUrl).catch(() => null)
+  if (requestId !== readerShelfCheckRequestId || store.book?.bookUrl !== currentBook.bookUrl) return
+  readerShelfStatus.value = shelfBook ? 'added' : 'available'
+}
+
+async function handleAddToShelf() {
+  if (!store.book || addingToShelf.value || readerShelfStatus.value === 'added') return
+  addingToShelf.value = true
+  try {
+    const savedBook = await saveBook(buildReaderShelfBook(
+      store.book,
+      store.currentIndex,
+      store.currentChapter?.title,
+    ))
+    readerShelfCheckRequestId += 1
+    readerShelfStatus.value = 'added'
+    Object.assign(store.book, savedBook)
+    await shelfStore.fetchBooks().catch(() => undefined)
+    appStore.showToast(`"${store.book.name}" 已加入书架`, 'success')
+  } catch (error: unknown) {
+    appStore.showToast((error as Error).message || '加入书架失败', 'error')
+  } finally {
+    addingToShelf.value = false
+  }
 }
 
 function handlePageHide() {
@@ -2923,6 +2975,10 @@ watch(
   },
   { immediate: true },
 )
+
+watch(() => store.book?.bookUrl, () => {
+  void refreshReaderShelfStatus()
+}, { immediate: true })
 
 watch(() => store.book?.bookUrl, () => {
   resetChapterSummaryRelationshipState()

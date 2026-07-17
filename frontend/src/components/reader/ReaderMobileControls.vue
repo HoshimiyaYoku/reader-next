@@ -14,6 +14,17 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6" /></svg>
           <span>首页</span>
         </div>
+        <button
+          v-if="showAddToShelf"
+          type="button"
+          class="m-top-item shelf-action"
+          :disabled="addingToShelf"
+          @click="$emit('addToShelf')"
+        >
+          <svg v-if="addingToShelf" class="spinning" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 0-9 9" /></svg>
+          <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" /><path d="M12 7v6M9 10h6" /></svg>
+          <span>{{ addingToShelf ? '添加中' : '加书架' }}</span>
+        </button>
         <div class="m-top-item" :class="{ active: store.activePanel === 'bookshelf' }" @click="store.togglePanel('bookshelf')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" /></svg>
           <span>书架</span>
@@ -133,10 +144,13 @@ defineProps<{
   show: boolean
   isSpeaking?: boolean
   isPaused?: boolean
+  showAddToShelf?: boolean
+  addingToShelf?: boolean
 }>()
 
 defineEmits<{
   goHome: []
+  addToShelf: []
   scrollTop: []
   scrollBottom: []
   prev: []
@@ -192,6 +206,10 @@ defineEmits<{
   flex: 1 1 0;
   justify-content: center;
   padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
 }
 
 .m-top-item svg { width: 18px; height: 18px; }
@@ -199,6 +217,21 @@ defineEmits<{
   white-space: nowrap;
 }
 .m-top-item.active { opacity: 1; color: var(--color-primary, #c97f3a); }
+.m-top-item.shelf-action {
+  color: var(--color-primary, #c97f3a);
+  opacity: 1;
+}
+.m-top-item.shelf-action:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+.m-top-item svg.spinning {
+  animation: mobile-control-spin 0.9s linear infinite;
+}
+
+@keyframes mobile-control-spin {
+  to { transform: rotate(360deg); }
+}
 
 .m-bottom-bar {
   position: absolute;
