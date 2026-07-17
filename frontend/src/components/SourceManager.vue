@@ -114,6 +114,23 @@
         </div>
       </div>
     </Transition>
+
+    <Transition name="scale">
+      <SourceLoginPanel
+        v-if="sourceLoginPanelVisible"
+        v-model="sourceLoginInfo"
+        :title="sourceLoginTitle"
+        :source-url="sourceLoginSourceUrl"
+        :items="sourceLoginItems"
+        :logged-in="sourceLoggedIn"
+        :loading="sourceLoginActionLoading"
+        :active-action="sourceLoginActiveAction"
+        :messages="sourceLoginMessages"
+        :open-url="sourceLoginOpenUrl"
+        @action="handleSourceLoginAction"
+        @close="closeSourceLoginPanel"
+      />
+    </Transition>
   </Teleport>
 </template>
 
@@ -124,12 +141,14 @@ import {
   deleteBookSources,
   deleteInvalidBookSources,
   loginBookSource,
+  runBookSourceLoginAction,
   saveBookSource,
   saveBookSources,
   testBookSources,
   readRemoteSourceFile,
   readSourceFile,
 } from '../api/source'
+import type { BookSourceLoginUiItem } from '../api/source'
 import { useAppStore } from '../stores/app'
 import { useSourceStore } from '../stores/source'
 import type { BookSource } from '../types'
@@ -145,6 +164,7 @@ import { chunkBookSourceUrls, mergeBookSourceTestResponses } from '../utils/sour
 import SourceEditorPanel from './source-manager/SourceEditorPanel.vue'
 import SourceFilterBar from './source-manager/SourceFilterBar.vue'
 import SourceList from './source-manager/SourceList.vue'
+import SourceLoginPanel from './source-manager/SourceLoginPanel.vue'
 import SourceManagerHeader from './source-manager/SourceManagerHeader.vue'
 import SourceSubscriptionPanel from './source-manager/SourceSubscriptionPanel.vue'
 import { storeToRefs } from 'pinia'
@@ -185,6 +205,16 @@ const loginPreviewVisible = ref(false)
 const loginPreviewUrl = ref('')
 const loginPreviewFrameUrl = ref('')
 const loginPreviewFrameHtml = ref('')
+const sourceLoginPanelVisible = ref(false)
+const sourceLoginTitle = ref('')
+const sourceLoginSourceUrl = ref('')
+const sourceLoginItems = ref<BookSourceLoginUiItem[]>([])
+const sourceLoginInfo = ref<Record<string, string>>({})
+const sourceLoggedIn = ref(false)
+const sourceLoginActionLoading = ref(false)
+const sourceLoginActiveAction = ref('')
+const sourceLoginMessages = ref<string[]>([])
+const sourceLoginOpenUrl = ref('')
 
 const groupList = computed(() => getBookSourceGroups(sources.value))
 
@@ -444,16 +474,48 @@ async function handleSourceLogin() {
     }
 
     sourceLoginLoading.value = true
-    if (!editingSource.value || editingSource.value.bookSourceUrl !== parsed.bookSourceUrl) {
-      await saveBookSource(parsed)
-      await loadSources()
-      const latest = sources.value.find((item) => item.bookSourceUrl === parsed.bookSourceUrl)
-      if (latest) {
-        editSource(latest)
-      }
+    // The editor may contain unsaved loginUi/loginUrl changes. Persist the exact
+    // JSON shown to the user before asking the backend to prepare the login flow.
+    await saveBookSource(parsed)
+    const savedSource = { ...parsed }
+    const sourceIndex = sources.value.findIndex(
+      (source) => source.bookSourceUrl === savedSource.bookSourceUrl
+    )
+    if (sourceIndex >= 0) {
+      sources.value[sourceIndex] = savedSource
+    } else {
+      sources.value.unshift(savedSource)
     }
+    editingSource.value = savedSource
+    editorText.value = JSON.stringify(savedSource, null, 2)
 
     const result = await loginBookSource(parsed.bookSourceUrl)
+    if (result.mode === 'legadoUi') {
+      const loginItems = (result.loginUi || []).filter(
+        (item): item is BookSourceLoginUiItem =>
+          Boolean(item && typeof item.name === 'string' && typeof item.type === 'string')
+      )
+      if (!loginItems.length) {
+        throw new Error('当前书源的 loginUi 为空或格式错误')
+      }
+
+      loginPreviewVisible.value = false
+      sourceLoginTitle.value = parsed.bookSourceName?.trim() || '书源登录'
+      sourceLoginSourceUrl.value = parsed.bookSourceUrl
+      sourceLoginItems.value = loginItems
+      sourceLoginInfo.value = normalizeLoginInfo(result.loginInfo)
+      sourceLoggedIn.value = Boolean(result.loggedIn)
+      sourceLoginMessages.value = []
+      sourceLoginOpenUrl.value = ''
+      sourceLoginPanelVisible.value = true
+      appStore.showToast(
+        result.loggedIn ? '书源登录配置已加载，当前为已登录状态' : '书源登录配置已加载',
+        'success'
+      )
+      return
+    }
+
+    sourceLoginPanelVisible.value = false
     const check = typeof result.checkResult === 'string' && result.checkResult.trim()
       ? `，校验结果：${result.checkResult}`
       : ''
@@ -468,12 +530,98 @@ async function handleSourceLogin() {
       loginPreviewFrameUrl.value = buildLoginProxyUrl(parsed.bookSourceUrl, result.url)
       loginPreviewVisible.value = true
     }
-    appStore.showToast(`书源登录请求已完成，状态 ${result.status}${check}`, 'success')
+    const status = typeof result.status === 'number' ? `，状态 ${result.status}` : ''
+    appStore.showToast(`书源登录请求已完成${status}${check}`, 'success')
   } catch (e: unknown) {
     appStore.showToast((e as Error).message || '书源登录失败', 'error')
   } finally {
     sourceLoginLoading.value = false
   }
+}
+
+function normalizeLoginInfo(loginInfo?: Record<string, string>) {
+  return Object.fromEntries(
+    Object.entries(loginInfo || {}).map(([name, value]) => [name, value == null ? '' : String(value)])
+  )
+}
+
+async function handleSourceLoginAction(payload: { action: string; name: string }) {
+  const action = payload.action.trim()
+  if (!action || !sourceLoginSourceUrl.value || sourceLoginActionLoading.value) return
+
+  sourceLoginActionLoading.value = true
+  sourceLoginActiveAction.value = action
+  sourceLoginMessages.value = []
+  sourceLoginOpenUrl.value = ''
+  try {
+    const result = await runBookSourceLoginAction({
+      bookSourceUrl: sourceLoginSourceUrl.value,
+      loginInfo: { ...sourceLoginInfo.value },
+      action,
+    })
+    sourceLoggedIn.value = result.loggedIn
+
+    const messages = compactLoginMessages(result.messages, redactSourceLoginResult(result.result))
+    sourceLoginMessages.value = messages
+
+    if (result.openUrl?.trim()) {
+      sourceLoginOpenUrl.value = normalizeSourceLoginUrl(result.openUrl)
+      if (!openSourceLoginUrl(sourceLoginOpenUrl.value)) {
+        messages.push('浏览器拦截了新窗口，请点击“打开书源页面”')
+      }
+    }
+
+    const fallbackMessage = result.success ? `${payload.name}执行完成` : `${payload.name}执行失败`
+    appStore.showToast(
+      messages[messages.length - 1] || fallbackMessage,
+      result.success ? 'success' : 'error'
+    )
+  } catch (e: unknown) {
+    const message = (e as Error).message || `${payload.name}执行失败`
+    sourceLoginMessages.value = [message]
+    appStore.showToast(message, 'error')
+  } finally {
+    sourceLoginActionLoading.value = false
+    sourceLoginActiveAction.value = ''
+  }
+}
+
+function compactLoginMessages(messages: string[] | undefined, result?: string) {
+  const values = [...(messages || []), result || '']
+    .map((message) => message.trim())
+    .filter(Boolean)
+  return Array.from(new Set(values))
+}
+
+function redactSourceLoginResult(result?: string) {
+  let safeResult = result || ''
+  sourceLoginItems.value
+    .filter((item) => item.type.trim().toLowerCase() === 'password')
+    .map((item) => sourceLoginInfo.value[item.name])
+    .filter(Boolean)
+    .forEach((password) => {
+      safeResult = safeResult.split(password).join('••••••')
+    })
+  return safeResult
+}
+
+function normalizeSourceLoginUrl(rawUrl: string) {
+  const baseUrl = sourceLoginSourceUrl.value || window.location.href
+  const url = new URL(rawUrl, baseUrl)
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(`书源请求打开不受支持的链接：${url.protocol}`)
+  }
+  return url.href
+}
+
+function openSourceLoginUrl(url: string) {
+  return window.open(url, '_blank', 'noopener,noreferrer') !== null
+}
+
+function closeSourceLoginPanel() {
+  sourceLoginPanelVisible.value = false
+  sourceLoginMessages.value = []
+  sourceLoginOpenUrl.value = ''
 }
 
 function buildLoginProxyUrl(bookSourceUrl: string, targetUrl: string) {

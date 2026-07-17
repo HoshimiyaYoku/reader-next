@@ -2,6 +2,7 @@ use crate::error::error::AppError;
 use crate::model::book_source::BookSource;
 use crate::util::time::now_ts;
 use sqlx::{Row, SqlitePool};
+use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct BookSourceRepo {
@@ -62,6 +63,69 @@ impl BookSourceRepo {
                 .fetch_optional(&self.pool)
                 .await?;
         Ok(row.map(|r| r.get::<String, _>("json")))
+    }
+
+    pub async fn get_runtime_state(
+        &self,
+        user_ns: &str,
+        book_source_url: &str,
+    ) -> Result<Option<String>, AppError> {
+        let row = sqlx::query(
+            "SELECT json FROM book_source_runtime_states WHERE user_ns=?1 AND book_source_url=?2",
+        )
+        .bind(user_ns)
+        .bind(book_source_url)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.get::<String, _>("json")))
+    }
+
+    pub async fn upsert_runtime_state(
+        &self,
+        user_ns: &str,
+        book_source_url: &str,
+        json: &str,
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            "INSERT INTO book_source_runtime_states (user_ns, book_source_url, json, updated_at) VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT(user_ns, book_source_url) DO UPDATE SET json=excluded.json, updated_at=excluded.updated_at",
+        )
+        .bind(user_ns)
+        .bind(book_source_url)
+        .bind(json)
+        .bind(now_ts())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_runtime_states(
+        &self,
+        user_ns: &str,
+    ) -> Result<HashMap<String, String>, AppError> {
+        let rows = sqlx::query(
+            "SELECT book_source_url, json FROM book_source_runtime_states WHERE user_ns=?1",
+        )
+        .bind(user_ns)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                (
+                    row.get::<String, _>("book_source_url"),
+                    row.get::<String, _>("json"),
+                )
+            })
+            .collect())
+    }
+
+    pub async fn delete_runtime_states(&self, user_ns: &str) -> Result<(), AppError> {
+        sqlx::query("DELETE FROM book_source_runtime_states WHERE user_ns=?1")
+            .bind(user_ns)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     pub async fn list(&self, user_ns: &str) -> Result<Vec<String>, AppError> {

@@ -1,6 +1,8 @@
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Map, Value};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 
 use crate::model::rule::{BookInfoRule, ContentRule, ExploreRule, ReviewRule, SearchRule, TocRule};
 
@@ -47,6 +49,145 @@ pub struct BookSource {
     pub respond_time: Option<i64>,
     pub load_with_base_url: Option<bool>,
     pub single_url: Option<bool>,
+    #[serde(skip)]
+    pub runtime: BookSourceRuntime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct BookSourceRuntimeState {
+    pub login_info: HashMap<String, String>,
+    pub login_header: String,
+    pub variable: String,
+    pub java_kv: HashMap<String, String>,
+    pub cookies: HashMap<String, String>,
+    #[serde(skip)]
+    pub notices: Vec<String>,
+    #[serde(skip)]
+    pub browser_urls: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct BookSourceRuntime(Arc<Mutex<BookSourceRuntimeState>>);
+
+impl BookSource {
+    pub fn login_password_fields(&self) -> HashSet<String> {
+        let Some(raw) = self
+            .login_ui
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        else {
+            return HashSet::new();
+        };
+        let Ok(mut value) = serde_json::from_str::<Value>(raw) else {
+            return HashSet::new();
+        };
+        if let Some(encoded) = value.as_str() {
+            let Ok(decoded) = serde_json::from_str::<Value>(encoded) else {
+                return HashSet::new();
+            };
+            value = decoded;
+        }
+        value
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|item| {
+                item.get("type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|kind| kind.eq_ignore_ascii_case("password"))
+            })
+            .filter_map(|item| item.get("name").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect()
+    }
+
+    pub fn login_info_for_storage(
+        &self,
+        login_info: &HashMap<String, String>,
+    ) -> HashMap<String, String> {
+        let password_fields = self.login_password_fields();
+        login_info
+            .iter()
+            .filter(|(name, _)| {
+                let lower = name.to_ascii_lowercase();
+                !password_fields.contains(*name)
+                    && !name.contains("密码")
+                    && !lower.contains("password")
+            })
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect()
+    }
+}
+
+impl BookSourceRuntime {
+    pub fn from_state(state: BookSourceRuntimeState) -> Self {
+        Self(Arc::new(Mutex::new(state)))
+    }
+
+    pub fn snapshot(&self) -> BookSourceRuntimeState {
+        self.0.lock().unwrap_or_else(|err| err.into_inner()).clone()
+    }
+
+    pub fn replace_login_info(&self, login_info: HashMap<String, String>) {
+        self.0
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .login_info = login_info;
+    }
+
+    pub fn set_login_header(&self, login_header: String) {
+        self.0
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .login_header = login_header;
+    }
+
+    pub fn push_notice(&self, message: String) {
+        let message = message.trim().to_string();
+        if !message.is_empty() {
+            self.0
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .notices
+                .push(message);
+        }
+    }
+
+    pub fn clear_notices(&self) {
+        let mut state = self.0.lock().unwrap_or_else(|err| err.into_inner());
+        state.notices.clear();
+        state.browser_urls.clear();
+    }
+
+    pub fn take_notices(&self) -> Vec<String> {
+        std::mem::take(&mut self.0.lock().unwrap_or_else(|err| err.into_inner()).notices)
+    }
+
+    pub fn push_browser_url(&self, url: String) {
+        if !url.trim().is_empty() {
+            self.0
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .browser_urls
+                .push(url);
+        }
+    }
+
+    pub fn take_browser_urls(&self) -> Vec<String> {
+        std::mem::take(
+            &mut self
+                .0
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .browser_urls,
+        )
+    }
+
+    pub fn shared(&self) -> Arc<Mutex<BookSourceRuntimeState>> {
+        self.0.clone()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -338,6 +479,15 @@ fn extract_legacy_header(input: &str) -> Option<(usize, usize, String)> {
 }
 
 fn convert_legacy_page_braces(input: &str) -> String {
+    let trimmed = input.trim_start();
+    if trimmed.starts_with("@js:")
+        || trimmed.starts_with("<js>")
+        || trimmed.contains("\nfunction ")
+        || trimmed.contains("java.")
+        || trimmed.contains("source.")
+    {
+        return input.to_string();
+    }
     let re = regex::Regex::new(r"\{([^{}]*,[^{}]*)\}").unwrap();
     re.replace_all(input, "<$1>").into_owned()
 }

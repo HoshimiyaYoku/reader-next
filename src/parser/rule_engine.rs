@@ -4,7 +4,7 @@ use crate::model::{
 };
 use crate::parser::{
     html,
-    js::{eval_js, eval_js_with_bindings, with_js_lib},
+    js::{eval_js, eval_js_with_bindings, with_js_source},
     jsonpath,
 };
 use crate::util::text::{apply_regex_replace, normalize_source_url};
@@ -85,7 +85,7 @@ impl RuleEngine {
     }
 
     pub fn search_books(&self, source: &BookSource, body: &str, base_url: &str) -> Vec<SearchBook> {
-        with_js_lib(source.js_lib.as_deref(), || {
+        with_js_source(source, || {
             let rule = source.rule_search.clone().unwrap_or_default();
             let (list_rule, reverse) = normalize_list_rule(rule.book_list.as_deref().unwrap_or(""));
             let mode = self.detect_mode(list_rule, body);
@@ -127,7 +127,7 @@ impl RuleEngine {
         body: &str,
         base_url: &str,
     ) -> Vec<SearchBook> {
-        with_js_lib(source.js_lib.as_deref(), || {
+        with_js_source(source, || {
             let rule = source
                 .rule_explore
                 .clone()
@@ -166,7 +166,7 @@ impl RuleEngine {
         base_url: &str,
         book_url: &str,
     ) -> Book {
-        with_js_lib(source.js_lib.as_deref(), || {
+        with_js_source(source, || {
             let rule = source.rule_book_info.clone().unwrap_or_default();
             let mut context = HashMap::new();
 
@@ -206,7 +206,7 @@ impl RuleEngine {
         body: &str,
         base_url: &str,
     ) -> (Vec<BookChapter>, Vec<String>) {
-        with_js_lib(source.js_lib.as_deref(), || {
+        with_js_source(source, || {
             let rule = source.rule_toc.clone().unwrap_or_default();
             let mut context = HashMap::new();
             let (list_rule, reverse) =
@@ -258,7 +258,7 @@ impl RuleEngine {
     }
 
     pub fn content(&self, source: &BookSource, body: &str, base_url: &str) -> String {
-        with_js_lib(source.js_lib.as_deref(), || {
+        with_js_source(source, || {
             let rule = source.rule_content.clone().unwrap_or_default();
             let mut content_body = body.to_string();
 
@@ -404,10 +404,31 @@ impl RuleEngine {
         rule: &SearchRule,
         list_rule: &str,
     ) -> Vec<SearchBook> {
-        let output = match eval_js(self.strip_mode_prefix(list_rule), body, base_url) {
+        let (script, followup_rule) = split_leading_js_rule(list_rule)
+            .map(|(script, followup)| (script, Some(followup)))
+            .unwrap_or_else(|| (self.strip_mode_prefix(list_rule), None));
+        let output = match eval_js(script, body, base_url) {
             Ok(result) => result,
             Err(_) => return vec![],
         };
+
+        if let Some(followup_rule) = followup_rule.filter(|rule| !rule.trim().is_empty()) {
+            return match self.detect_mode(followup_rule, &output) {
+                ParseMode::JsonPath => {
+                    self.search_books_json(source, &output, base_url, rule, followup_rule)
+                }
+                ParseMode::XPath => {
+                    self.search_books_xpath(source, &output, base_url, rule, followup_rule)
+                }
+                ParseMode::Regex => {
+                    self.search_books_regex(source, &output, base_url, rule, followup_rule)
+                }
+                ParseMode::Css => {
+                    self.search_books_html(source, &output, base_url, rule, followup_rule)
+                }
+                ParseMode::Js => Vec::new(),
+            };
+        }
 
         if let Some(items) = parse_js_output_items(&output) {
             let mut out = Vec::with_capacity(items.len());
@@ -1799,7 +1820,12 @@ fn eval_field_json_with_ctx(
     };
 
     if let Some(script) = js {
-        if let Ok(res) = eval_js(script, &text, base_url) {
+        let mut bindings = HashMap::new();
+        bindings.insert("result".to_string(), v.clone());
+        let scoped_script = serde_json::to_string(script)
+            .map(|script| format!("(function () {{ return eval({script}); }}).call(globalThis)"))
+            .unwrap_or_else(|_| script.to_string());
+        if let Ok(res) = eval_js_with_bindings(&scoped_script, &text, base_url, &bindings) {
             text = res;
         }
     }
@@ -2027,6 +2053,13 @@ fn strip_mode_prefix(rule: &str) -> &str {
         }
     }
     rule
+}
+
+fn split_leading_js_rule(rule: &str) -> Option<(&str, &str)> {
+    let rule = rule.trim();
+    let script = rule.strip_prefix("<js>")?;
+    let end = script.find("</js>")?;
+    Some((&script[..end], script[end + "</js>".len()..].trim()))
 }
 
 fn strip_js_rule(rule: &str) -> &str {
@@ -2415,6 +2448,41 @@ mod tests {
         assert_eq!(results[0].name, "Alpha");
         assert_eq!(results[0].author, "Tester");
         assert_eq!(results[0].book_url, "https://books.example/alpha");
+    }
+
+    #[test]
+    fn test_search_books_js_then_jsonpath_list() {
+        let engine = RuleEngine::new().unwrap();
+        let source = BookSource {
+            book_source_name: "JS chained JSON".to_string(),
+            book_source_url: "https://source.example".to_string(),
+            rule_search: Some(SearchRule {
+                book_list: Some("<js>result;</js>\n$.data".to_string()),
+                name: Some("$.title".to_string()),
+                author: Some("$.author".to_string()),
+                book_url: Some(
+                    r#"<js>
+let source = result.source;
+let book_url = result.book_url;
+yunurl = java.base64Encode(JSON.stringify({source: source, url: book_url}));
+`data:detailsUrl;base64,${yunurl},{"type":"test"}`
+</js>"#
+                        .to_string(),
+                ),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let results = engine.search_books(
+            &source,
+            r#"{"data":[{"title":"Alpha","author":"Tester","source":"catalog","book_url":"/alpha"}]}"#,
+            "https://books.example/search",
+        );
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "Alpha");
+        assert!(results[0].book_url.starts_with("data:detailsUrl;base64,"));
     }
 
     #[test]

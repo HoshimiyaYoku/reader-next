@@ -86,6 +86,31 @@ fn legacy_book_source_fields_are_migrated_to_current_shape() {
 }
 
 #[test]
+fn legacy_url_migration_preserves_javascript_braces() {
+    let search_script = r#"<js>
+const config = {gender: "boy", host: getServerHost()};
+if (config.host) {
+  result = buildSearchResult(key, "", config.host);
+}
+</js>"#;
+    let login_script = r#"// login bootstrap
+function login() {
+  const payload = {email: "reader@example.com", password: "secret"};
+  java.ajax("/login", payload);
+}"#;
+    let source = book_source_from_value(json!({
+        "bookSourceName": "Script source",
+        "bookSourceUrl": "https://script.example",
+        "searchUrl": search_script,
+        "loginUrl": login_script
+    }))
+    .unwrap();
+
+    assert_eq!(source.search_url.as_deref(), Some(search_script));
+    assert_eq!(source.login_url.as_deref(), Some(login_script));
+}
+
+#[test]
 fn search_last_chapter_extracts_latest_from_toc_text() {
     let engine = RuleEngine::new().unwrap();
     let source = BookSource {

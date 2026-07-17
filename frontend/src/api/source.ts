@@ -2,6 +2,40 @@ import http from './http'
 import type { BookSource, BookSourceTestResponse } from '../types'
 import { MAX_SOURCE_TEST_BATCH_SIZE } from '../utils/sourceTesting'
 
+export interface BookSourceLoginUiItem {
+  name: string
+  type: string
+  action?: string
+  style?: Record<string, unknown>
+}
+
+export interface BookSourceLoginResponse {
+  success: boolean
+  status?: number
+  url?: string
+  checkResult?: string | null
+  bodyPreview?: string
+  bodyHtml?: string
+  mode?: 'legadoUi'
+  loginUi?: BookSourceLoginUiItem[]
+  loginInfo?: Record<string, string>
+  loggedIn?: boolean
+}
+
+export interface BookSourceLoginActionRequest {
+  bookSourceUrl: string
+  loginInfo: Record<string, string>
+  action: string
+}
+
+export interface BookSourceLoginActionResponse {
+  success: boolean
+  messages: string[]
+  loggedIn: boolean
+  result?: string
+  openUrl?: string
+}
+
 export function getBookSources() {
   return http.get<BookSource[]>('/getBookSources').then((r) => r.data)
 }
@@ -11,14 +45,11 @@ export function getDefaultBookSourceOwner() {
 }
 
 export function loginBookSource(bookSourceUrl: string) {
-  return http.post<{
-    success: boolean
-    status: number
-    url: string
-    checkResult?: string | null
-    bodyPreview?: string
-    bodyHtml?: string
-  }>('/loginBookSource', { bookSourceUrl }).then((r) => r.data)
+  return http.post<BookSourceLoginResponse>('/loginBookSource', { bookSourceUrl }).then((r) => r.data)
+}
+
+export function runBookSourceLoginAction(params: BookSourceLoginActionRequest) {
+  return http.post<BookSourceLoginActionResponse>('/bookSourceLoginAction', params).then((r) => r.data)
 }
 
 export function getBookSource(bookSourceUrl: string) {

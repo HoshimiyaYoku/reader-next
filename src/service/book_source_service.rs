@@ -1,5 +1,7 @@
 use crate::error::error::AppError;
-use crate::model::book_source::{book_source_from_value, BookSource};
+use crate::model::book_source::{
+    book_source_from_value, BookSource, BookSourceRuntime, BookSourceRuntimeState,
+};
 use crate::storage::db::repo::BookSourceRepo;
 use std::path::PathBuf;
 use tokio::fs;
@@ -46,8 +48,9 @@ impl BookSourceService {
         if let Some(j) = json {
             let value: serde_json::Value =
                 serde_json::from_str(&j).map_err(|e| AppError::BadRequest(e.to_string()))?;
-            let source =
+            let mut source =
                 book_source_from_value(value).map_err(|e| AppError::BadRequest(e.to_string()))?;
+            self.attach_runtime(user_ns, &mut source).await?;
             Ok(Some(source))
         } else {
             Ok(None)
@@ -56,17 +59,51 @@ impl BookSourceService {
 
     pub async fn list(&self, user_ns: &str) -> Result<Vec<BookSource>, AppError> {
         let rows = self.repo.list(user_ns).await?;
+        let runtime_states = self.repo.list_runtime_states(user_ns).await?;
         let mut out = Vec::with_capacity(rows.len());
         for j in rows {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&j) {
                 if let Ok(s) = book_source_from_value(value) {
-                    out.push(s);
+                    let mut source = s;
+                    let runtime_json = runtime_states.get(&source.book_source_url);
+                    Self::attach_runtime_json(&mut source, runtime_json);
+                    out.push(source);
                 }
             } else if let Ok(s) = serde_json::from_str::<BookSource>(&j) {
-                out.push(s);
+                let mut source = s;
+                let runtime_json = runtime_states.get(&source.book_source_url);
+                Self::attach_runtime_json(&mut source, runtime_json);
+                out.push(source);
             }
         }
         Ok(out)
+    }
+
+    pub async fn save_runtime(&self, user_ns: &str, source: &BookSource) -> Result<(), AppError> {
+        let mut state = source.runtime.snapshot();
+        state.login_info = source.login_info_for_storage(&state.login_info);
+        let json =
+            serde_json::to_string(&state).map_err(|e| AppError::BadRequest(e.to_string()))?;
+        self.repo
+            .upsert_runtime_state(user_ns, &source.book_source_url, &json)
+            .await
+    }
+
+    async fn attach_runtime(&self, user_ns: &str, source: &mut BookSource) -> Result<(), AppError> {
+        let json = self
+            .repo
+            .get_runtime_state(user_ns, &source.book_source_url)
+            .await?;
+        Self::attach_runtime_json(source, json.as_ref());
+        Ok(())
+    }
+
+    fn attach_runtime_json(source: &mut BookSource, json: Option<&String>) {
+        let mut state = json
+            .and_then(|json| serde_json::from_str::<BookSourceRuntimeState>(json).ok())
+            .unwrap_or_default();
+        state.login_info = source.login_info_for_storage(&state.login_info);
+        source.runtime = BookSourceRuntime::from_state(state);
     }
 
     pub async fn delete(&self, user_ns: &str, book_source_url: &str) -> Result<(), AppError> {
@@ -84,6 +121,7 @@ impl BookSourceService {
 
     /// Set a user's sources as the default sources (for new users)
     pub async fn set_as_default(&self, from_ns: &str) -> Result<i64, AppError> {
+        self.repo.delete_runtime_states("__default__").await?;
         let count = self.copy_to(from_ns, "__default__").await?;
         if let Some(dir) = self.default_owner_path.parent() {
             fs::create_dir_all(dir)

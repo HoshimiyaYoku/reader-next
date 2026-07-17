@@ -10,11 +10,12 @@ use crate::model::{
     book_source::{BookSource, ExploreKind},
     search::SearchBook,
 };
-use crate::parser::js::{eval_js, eval_js_with_bindings, with_js_lib};
+use crate::parser::js::{eval_js, eval_js_with_bindings, with_js_source};
 use crate::parser::rule_engine::RuleEngine;
 use crate::storage::cache::file_cache::FileCache;
 use crate::util::hash::md5_hex;
 use crate::util::text::{normalize_source_url, repair_encoded_url};
+use base64::Engine;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -351,6 +352,21 @@ impl BookService {
             .filter(|v| !v.trim().is_empty())
             .ok_or_else(|| AppError::BadRequest("missing loginUrl".to_string()))?;
 
+        if let Some(login_ui) = parse_login_ui(source) {
+            let runtime = source.runtime.snapshot();
+            let login_info = source.login_info_for_storage(&runtime.login_info);
+            return Ok(serde_json::json!({
+                "success": true,
+                "status": 200,
+                "url": "",
+                "mode": "legadoUi",
+                "loginUi": login_ui,
+                "loginInfo": login_info,
+                "loggedIn": runtime.login_header.trim().len() >= 10,
+                "checkResult": "已加载阅读 3 书源登录界面"
+            }));
+        }
+
         if let Some(target_url) = resolve_login_preview_target(source)? {
             let body_html = build_login_preview_html(source, &target_url).unwrap_or_default();
             return Ok(serde_json::json!({
@@ -371,7 +387,7 @@ impl BookService {
             .as_deref()
             .filter(|s| !s.trim().is_empty())
         {
-            Some(with_js_lib(source.js_lib.as_deref(), || {
+            Some(with_js_source(source, || {
                 eval_js(login_check_js, &res.body, &res.url).unwrap_or_default()
             }))
         } else {
@@ -385,6 +401,148 @@ impl BookService {
             "checkResult": check_result,
             "bodyPreview": res.body.chars().take(500).collect::<String>(),
             "bodyHtml": res.body
+        }))
+    }
+
+    pub fn execute_book_source_login_action(
+        &self,
+        source: &BookSource,
+        login_info: HashMap<String, String>,
+        action: &str,
+    ) -> Result<serde_json::Value, AppError> {
+        let login_ui = parse_login_ui(source)
+            .ok_or_else(|| AppError::BadRequest("当前书源未配置有效 loginUi".to_string()))?;
+        let allowed_fields = login_ui
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|item| item.get("type").and_then(serde_json::Value::as_str) != Some("button"))
+            .filter_map(|item| item.get("name").and_then(serde_json::Value::as_str))
+            .collect::<HashSet<_>>();
+        let login_info = login_info
+            .into_iter()
+            .filter(|(key, _)| allowed_fields.contains(key.as_str()))
+            .collect::<HashMap<_, _>>();
+        let stored_login_info = source.login_info_for_storage(&login_info);
+        source.runtime.replace_login_info(login_info.clone());
+        source.runtime.clear_notices();
+
+        let result =
+            self.execute_book_source_login_action_inner(source, &login_ui, &login_info, action);
+        source.runtime.replace_login_info(stored_login_info);
+        result
+    }
+
+    fn execute_book_source_login_action_inner(
+        &self,
+        source: &BookSource,
+        login_ui: &serde_json::Value,
+        login_info: &HashMap<String, String>,
+        action: &str,
+    ) -> Result<serde_json::Value, AppError> {
+        let action = action.trim();
+        if !action.is_empty() && !login_ui_action_allowed(login_ui, action) {
+            return Err(AppError::BadRequest("未知的书源登录操作".to_string()));
+        }
+
+        let login_header_required = action == "login()"
+            && source
+                .login_url
+                .as_deref()
+                .is_some_and(|script| script.contains("putLoginHeader"));
+        let (result, action_success) = if action.is_empty() {
+            (String::new(), true)
+        } else {
+            let login_script = source
+                .login_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| AppError::BadRequest("missing loginUrl".to_string()))?;
+            let login_script = login_script
+                .strip_prefix("@js:")
+                .unwrap_or(login_script)
+                .trim();
+            if action == "user_logout()" && login_script.contains("putLoginHeader(\"\")") {
+                let was_logged_in = !source.runtime.snapshot().login_header.trim().is_empty();
+                source.runtime.set_login_header(String::new());
+                source.runtime.push_notice(if was_logged_in {
+                    "已成功退出登录".to_string()
+                } else {
+                    "当前未登录状态".to_string()
+                });
+                (String::new(), true)
+            } else {
+                let script = format!("{login_script}\n;({action});");
+                match with_js_source(source, || {
+                    eval_js(&script, "", &source.book_source_url)
+                        .map_err(|err| AppError::BadRequest(format!("书源登录脚本执行失败：{err}")))
+                }) {
+                    Ok(result) => (result, true),
+                    Err(script_error) => {
+                        source.runtime.clear_notices();
+                        if let Some(targeted_script) =
+                            targeted_login_action_script(login_script, action)
+                        {
+                            if let Ok(result) = with_js_source(source, || {
+                                eval_js(&targeted_script, "", &source.book_source_url)
+                            }) {
+                                (result, true)
+                            } else if execute_compatible_browser_action(
+                                source,
+                                login_script,
+                                action,
+                            ) {
+                                (String::new(), true)
+                            } else if action == "login()" {
+                                if let Some(success) =
+                                    execute_compatible_form_login(source, login_info)
+                                {
+                                    (String::new(), success)
+                                } else {
+                                    return Err(script_error);
+                                }
+                            } else {
+                                return Err(script_error);
+                            }
+                        } else if execute_compatible_browser_action(source, login_script, action) {
+                            (String::new(), true)
+                        } else if action == "login()" {
+                            if let Some(success) = execute_compatible_form_login(source, login_info)
+                            {
+                                (String::new(), success)
+                            } else {
+                                return Err(script_error);
+                            }
+                        } else {
+                            return Err(script_error);
+                        }
+                    }
+                }
+            }
+        };
+
+        let state = source.runtime.snapshot();
+        let messages = source
+            .runtime
+            .take_notices()
+            .into_iter()
+            .map(|message| redact_login_notice(&message, &login_info, &state.login_header))
+            .collect::<Vec<_>>();
+        let open_url = source
+            .runtime
+            .take_browser_urls()
+            .into_iter()
+            .find(|url| url.starts_with("https://") || url.starts_with("http://"));
+        let logged_in = state.login_header.trim().len() >= 10;
+        let action_success = action_success && (!login_header_required || logged_in);
+
+        Ok(serde_json::json!({
+            "success": action_success,
+            "messages": messages,
+            "loggedIn": logged_in,
+            "result": result,
+            "openUrl": open_url
         }))
     }
 
@@ -1138,7 +1296,7 @@ fn apply_login_check_js(source: &BookSource, res: FetchResponse) -> FetchRespons
         return res;
     };
 
-    with_js_lib(source.js_lib.as_deref(), || {
+    with_js_source(source, || {
         let str_response = StrResponse::from(res.clone());
         let mut bindings = HashMap::new();
         bindings.insert(
@@ -1179,7 +1337,7 @@ fn parse_explore_kinds(source: &BookSource) -> Result<Vec<ExploreKind>, AppError
         return Ok(Vec::new());
     };
 
-    let text = with_js_lib(source.js_lib.as_deref(), || {
+    let text = with_js_source(source, || {
         if let Some(script) = raw.strip_prefix("@js:") {
             eval_js(script, "", &source.book_source_url).map_err(AppError::Internal)
         } else if let Some(script) = raw
@@ -1267,6 +1425,373 @@ fn parse_window_rate(rate: &str) -> Option<(usize, u64)> {
     let limit = limit.trim().parse().ok()?;
     let window = window.trim().parse().ok()?;
     Some((limit, window))
+}
+
+fn parse_login_ui(source: &BookSource) -> Option<serde_json::Value> {
+    let raw = source.login_ui.as_deref()?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let mut value = serde_json::from_str::<serde_json::Value>(raw).ok()?;
+    if let Some(encoded) = value.as_str() {
+        value = serde_json::from_str(encoded).ok()?;
+    }
+    value.as_array().is_some().then_some(value)
+}
+
+fn login_ui_action_allowed(login_ui: &serde_json::Value, action: &str) -> bool {
+    login_ui
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|item| item.get("action").and_then(serde_json::Value::as_str) == Some(action))
+}
+
+fn targeted_login_action_script(login_script: &str, action: &str) -> Option<String> {
+    let name = action.strip_suffix("()")?.trim();
+    let mut chars = name.chars();
+    let first = chars.next()?;
+    if !(first == '_' || first == '$' || first.is_ascii_alphabetic())
+        || !chars.all(|ch| ch == '_' || ch == '$' || ch.is_ascii_alphanumeric())
+    {
+        return None;
+    }
+    let marker = format!("function {name}");
+    let start = login_script.find(&marker)?;
+    let open = login_script[start..].find('{')? + start;
+    let close = find_matching_delimiter(login_script, open, '{', '}')?;
+    Some(format!("{}\n;({action});", &login_script[start..=close]))
+}
+
+fn execute_compatible_browser_action(
+    source: &BookSource,
+    login_script: &str,
+    action: &str,
+) -> bool {
+    let Some(targeted_script) = targeted_login_action_script(login_script, action) else {
+        return false;
+    };
+    let Some(expression) = extract_start_browser_argument(&targeted_script) else {
+        return false;
+    };
+    let Some(target) = eval_login_action_url_expression(&expression, source) else {
+        return false;
+    };
+    let base = login_runtime_base_url(source);
+    let Ok(url) = url::Url::parse(&normalize_source_url(&base)).and_then(|base| base.join(&target))
+    else {
+        return false;
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return false;
+    }
+    source.runtime.push_browser_url(url.to_string());
+    true
+}
+
+fn eval_login_action_url_expression(expression: &str, source: &BookSource) -> Option<String> {
+    let base = login_runtime_base_url(source);
+    let login_header = source.runtime.snapshot().login_header;
+    let encoded_key = (!login_header.trim().is_empty())
+        .then(|| base64::engine::general_purpose::STANDARD.encode(login_header.trim().as_bytes()));
+    let mut output = String::new();
+    for part in split_js_concat(expression) {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        if matches!(
+            part,
+            "source.bookSourceUrl"
+                | "String(source.bookSourceUrl)"
+                | "baseUrl"
+                | "host"
+                | "getServerHost()"
+        ) {
+            output.push_str(&base);
+            continue;
+        }
+        if part == "getSecretKey()" {
+            output.push_str(encoded_key.as_deref()?);
+            continue;
+        }
+        if let Some(value) = decode_js_string_literal(part) {
+            output.push_str(&value);
+            continue;
+        }
+        return None;
+    }
+    (!output.trim().is_empty()).then_some(output)
+}
+
+fn login_runtime_base_url(source: &BookSource) -> String {
+    let runtime = source.runtime.snapshot();
+    serde_json::from_str::<serde_json::Value>(&runtime.variable)
+        .ok()
+        .and_then(|value| {
+            value
+                .as_array()?
+                .first()?
+                .get("host")?
+                .as_str()
+                .map(str::to_string)
+        })
+        .filter(|host| !host.trim().is_empty())
+        .unwrap_or_else(|| source.book_source_url.clone())
+}
+
+fn execute_compatible_form_login(
+    source: &BookSource,
+    login_info: &HashMap<String, String>,
+) -> Option<bool> {
+    let script = source.login_url.as_deref()?;
+    if !script.contains("putLoginHeader")
+        || !script.contains("api_key")
+        || !script.contains("/login")
+    {
+        return None;
+    }
+
+    let email = login_info_value(login_info, &["邮箱", "email"]).unwrap_or_default();
+    let password = login_info_value(login_info, &["密码", "password"]).unwrap_or_default();
+    if email.trim().is_empty() || password.is_empty() {
+        source
+            .runtime
+            .push_notice("请先填写账号和密码后登录".to_string());
+        return Some(false);
+    }
+
+    let targets = compatible_login_targets(source, script);
+    if targets.is_empty() {
+        source.runtime.push_notice(
+            "已阻止通过 HTTP 明文发送账号密码，请切换到 HTTPS 服务器后重试".to_string(),
+        );
+        return Some(false);
+    }
+
+    source.runtime.push_notice("正在登录...".to_string());
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(12))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => {
+            source.runtime.push_notice("登录请求初始化失败".to_string());
+            return Some(false);
+        }
+    };
+    let headers = with_js_source(source, || {
+        crate::crawler::url_analyzer::source_header_spec(source)
+    })
+    .map(|spec| spec.headers)
+    .unwrap_or_default();
+
+    for target in targets {
+        let mut request = client.post(target.clone());
+        for (name, value) in &headers {
+            request = request.header(name, value);
+        }
+        let response = match request
+            .form(&[("email", email), ("password", password)])
+            .send()
+        {
+            Ok(response) => response,
+            Err(_) => continue,
+        };
+        let status = response.status();
+        let value = response
+            .text()
+            .ok()
+            .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok());
+        let Some(value) = value else {
+            if status.is_server_error() {
+                continue;
+            }
+            source
+                .runtime
+                .push_notice("登录服务器返回了无法识别的数据".to_string());
+            return Some(false);
+        };
+        let code_ok = value
+            .get("code")
+            .and_then(|code| {
+                code.as_i64()
+                    .map(|code| code == 200)
+                    .or_else(|| code.as_str().map(|code| code == "200"))
+            })
+            .unwrap_or(false);
+        let api_key = value
+            .pointer("/data/user/api_key")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        if code_ok && api_key.len() >= 10 {
+            source.runtime.set_login_header(api_key.to_string());
+            set_runtime_login_host(source, &target);
+            let nickname = value
+                .pointer("/data/user/nickname")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("用户");
+            source
+                .runtime
+                .push_notice(format!("登录成功，欢迎回来，{nickname}"));
+            return Some(true);
+        }
+        let message = value
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .filter(|message| !message.trim().is_empty())
+            .unwrap_or("账号、密码或服务状态异常");
+        source.runtime.push_notice(format!("登录失败：{message}"));
+        return Some(false);
+    }
+
+    source
+        .runtime
+        .push_notice("连接登录服务器失败，请检查网络或切换服务器".to_string());
+    Some(false)
+}
+
+fn compatible_login_targets(source: &BookSource, script: &str) -> Vec<url::Url> {
+    let configured = login_runtime_base_url(source);
+    let source_url = url::Url::parse(&normalize_source_url(&source.book_source_url)).ok();
+    let trusted_host = source_url.as_ref().and_then(url::Url::host_str);
+    let mut bases = vec![configured];
+    bases.extend(extract_login_hosts(script));
+
+    let mut targets = Vec::new();
+    for base in bases {
+        let Ok(base) = url::Url::parse(&normalize_source_url(&base)) else {
+            continue;
+        };
+        if base.scheme() != "https" {
+            continue;
+        }
+        let Some(host) = base.host_str() else {
+            continue;
+        };
+        if trusted_host.is_some_and(|trusted| !login_host_is_trusted(trusted, host)) {
+            continue;
+        }
+        let Ok(target) = base.join("/login") else {
+            continue;
+        };
+        if !targets.iter().any(|known: &url::Url| known == &target) {
+            targets.push(target);
+        }
+    }
+    targets
+}
+
+fn login_host_is_trusted(source_host: &str, candidate_host: &str) -> bool {
+    if source_host.eq_ignore_ascii_case(candidate_host) {
+        return true;
+    }
+    let Some((_, suffix)) = source_host.split_once('.') else {
+        return false;
+    };
+    suffix.contains('.')
+        && candidate_host
+            .to_ascii_lowercase()
+            .ends_with(&format!(".{}", suffix.to_ascii_lowercase()))
+}
+
+fn extract_login_hosts(script: &str) -> Vec<String> {
+    let Some(marker) = ["var hosts", "let hosts", "const hosts"]
+        .into_iter()
+        .find_map(|marker| script.find(marker))
+    else {
+        return Vec::new();
+    };
+    let Some(open) = script[marker..].find('[').map(|open| open + marker) else {
+        return Vec::new();
+    };
+    let Some(close) = find_matching_delimiter(script, open, '[', ']') else {
+        return Vec::new();
+    };
+    extract_js_string_literals(&script[open + 1..close])
+}
+
+fn extract_js_string_literals(value: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut quote_start = None;
+    let mut quote = '\0';
+    let mut escaped = false;
+    for (idx, ch) in value.char_indices() {
+        if let Some(start) = quote_start {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == quote {
+                if let Some(decoded) = decode_js_string_literal(&value[start..=idx]) {
+                    values.push(decoded);
+                }
+                quote_start = None;
+            }
+            continue;
+        }
+        if matches!(ch, '\'' | '"' | '`') {
+            quote_start = Some(idx);
+            quote = ch;
+        }
+    }
+    values
+}
+
+fn set_runtime_login_host(source: &BookSource, target: &url::Url) {
+    let host = target.origin().ascii_serialization();
+    let runtime = source.runtime.shared();
+    let mut state = runtime.lock().unwrap_or_else(|err| err.into_inner());
+    let mut value = serde_json::from_str::<serde_json::Value>(&state.variable)
+        .unwrap_or_else(|_| serde_json::json!([{}]));
+    if !value.is_array() {
+        value = serde_json::json!([{}]);
+    }
+    let Some(config) = value
+        .as_array_mut()
+        .and_then(|items| items.first_mut())
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+    config.insert("host".to_string(), serde_json::Value::String(host));
+    state.variable = value.to_string();
+}
+
+fn login_info_value<'a>(
+    login_info: &'a HashMap<String, String>,
+    names: &[&str],
+) -> Option<&'a str> {
+    login_info.iter().find_map(|(key, value)| {
+        names
+            .iter()
+            .any(|name| key.eq_ignore_ascii_case(name))
+            .then_some(value.as_str())
+    })
+}
+
+fn redact_login_notice(
+    message: &str,
+    login_info: &HashMap<String, String>,
+    login_header: &str,
+) -> String {
+    let mut redacted = message.to_string();
+    for (key, value) in login_info {
+        let sensitive = ["密码", "password", "token", "密钥"].iter().any(|marker| {
+            key.to_ascii_lowercase()
+                .contains(&marker.to_ascii_lowercase())
+        });
+        if sensitive && value.trim().len() >= 4 {
+            redacted = redacted.replace(value, "***");
+        }
+    }
+    if login_header.trim().len() >= 4 {
+        redacted = redacted.replace(login_header, "***");
+    }
+    redacted
 }
 
 fn resolve_login_preview_target(source: &BookSource) -> Result<Option<String>, AppError> {
@@ -2063,5 +2588,183 @@ mod tests {
         let login_target = resolve_login_preview_target(&source).unwrap();
 
         assert_eq!(login_target.as_deref(), Some("https://v1.vossc.com/login"));
+    }
+
+    #[test]
+    fn legado_login_action_updates_runtime_state() {
+        let (service, storage_dir) = test_book_service("legado-login-action");
+        let source = BookSource {
+            book_source_name: "Aggregate".to_string(),
+            book_source_url: "https://source.example".to_string(),
+            login_url: Some(
+                r#"
+function login() {
+  const info = source.getLoginInfoMap();
+  source.putLoginHeader(info["邮箱"] + "-saved-key");
+  source.setVariable('[{"host":"https://source.example"}]');
+  java.toast("登录成功");
+}
+"#
+                .to_string(),
+            ),
+            login_ui: Some(
+                r#"[
+  {"name":"邮箱","type":"text"},
+  {"name":"密码","type":"password"},
+  {"name":"登录","type":"button","action":"login()"}
+]"#
+                .to_string(),
+            ),
+            ..Default::default()
+        };
+        let login_info = HashMap::from([
+            ("邮箱".to_string(), "reader@example.com".to_string()),
+            ("密码".to_string(), "secret".to_string()),
+            ("未声明字段".to_string(), "ignored".to_string()),
+        ]);
+
+        let result = service
+            .execute_book_source_login_action(&source, login_info, "login()")
+            .unwrap();
+        let runtime = source.runtime.snapshot();
+
+        let _ = std::fs::remove_dir_all(storage_dir);
+        assert_eq!(runtime.login_header, "reader@example.com-saved-key");
+        assert_eq!(runtime.variable, r#"[{"host":"https://source.example"}]"#);
+        assert_eq!(runtime.login_info.get("未声明字段"), None);
+        assert_eq!(runtime.login_info.get("密码"), None);
+        assert_eq!(
+            runtime.login_info.get("邮箱"),
+            Some(&"reader@example.com".to_string())
+        );
+        assert_eq!(result["loggedIn"], true);
+        assert_eq!(result["messages"][0], "登录成功");
+    }
+
+    #[test]
+    fn legado_login_action_rejects_unknown_action_but_keeps_form_values() {
+        let (service, storage_dir) = test_book_service("legado-login-invalid-action");
+        let source = BookSource {
+            book_source_name: "Aggregate".to_string(),
+            book_source_url: "https://source.example".to_string(),
+            login_url: Some("function login() {}".to_string()),
+            login_ui: Some(
+                r#"[{"name":"邮箱","type":"text"},{"name":"登录","type":"button","action":"login()"}]"#
+                    .to_string(),
+            ),
+            ..Default::default()
+        };
+
+        let result = service.execute_book_source_login_action(
+            &source,
+            HashMap::from([("邮箱".to_string(), "reader@example.com".to_string())]),
+            "other()",
+        );
+
+        let _ = std::fs::remove_dir_all(storage_dir);
+        assert!(matches!(result, Err(AppError::BadRequest(_))));
+        assert_eq!(
+            source.runtime.snapshot().login_info.get("邮箱"),
+            Some(&"reader@example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn legado_login_uses_form_fallback_when_vendor_script_cannot_parse() {
+        let (service, storage_dir) = test_book_service("legado-login-form-fallback");
+        let source = BookSource {
+            book_source_name: "Aggregate".to_string(),
+            book_source_url: "https://source.example".to_string(),
+            login_url: Some(
+                r#"function login() {
+  const api_key = "";
+  source.putLoginHeader(api_key);
+  const unsupported = <;
+}
+// /login"#
+                    .to_string(),
+            ),
+            login_ui: Some(
+                r#"[
+  {"name":"邮箱","type":"text"},
+  {"name":"密码","type":"password"},
+  {"name":"登录","type":"button","action":"login()"}
+]"#
+                .to_string(),
+            ),
+            ..Default::default()
+        };
+
+        let result = service
+            .execute_book_source_login_action(
+                &source,
+                HashMap::from([("邮箱".to_string(), String::new())]),
+                "login()",
+            )
+            .unwrap();
+
+        let _ = std::fs::remove_dir_all(storage_dir);
+        assert_eq!(result["success"], false);
+        assert_eq!(result["loggedIn"], false);
+        assert!(result["messages"][0]
+            .as_str()
+            .is_some_and(|message| message.contains("填写账号")));
+    }
+
+    #[test]
+    fn legado_login_fallback_uses_only_https_sibling_hosts() {
+        let source = BookSource {
+            book_source_url: "https://v1.vossc.com".to_string(),
+            ..Default::default()
+        };
+        let targets = compatible_login_targets(
+            &source,
+            r#"
+var hosts = [
+  "https://v1.vossc.com",
+  "https://v2.vossc.com",
+  "http://v3.vossc.com",
+  "https://example.com"
+];
+"#,
+        );
+
+        assert_eq!(
+            targets
+                .into_iter()
+                .map(|url| url.to_string())
+                .collect::<Vec<_>>(),
+            vec![
+                "https://v1.vossc.com/login".to_string(),
+                "https://v2.vossc.com/login".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn legado_login_runs_targeted_button_when_unrelated_vendor_code_cannot_parse() {
+        let (service, storage_dir) = test_book_service("legado-login-targeted-action");
+        let source = BookSource {
+            book_source_name: "Aggregate".to_string(),
+            book_source_url: "https://source.example".to_string(),
+            js_lib: Some("const unsupported_library = <;".to_string()),
+            login_url: Some(
+                r#"const unsupported = <;
+function key() {
+  java.startBrowserAwait(getServerHost() + "/key", "注册");
+}"#
+                .to_string(),
+            ),
+            login_ui: Some(r#"[{"name":"注册","type":"button","action":"key()"}]"#.to_string()),
+            ..Default::default()
+        };
+
+        let result = service
+            .execute_book_source_login_action(&source, HashMap::new(), "key()")
+            .unwrap();
+
+        let _ = std::fs::remove_dir_all(storage_dir);
+        assert_eq!(result["success"], true);
+        assert_eq!(result["openUrl"], "https://source.example/key");
     }
 }

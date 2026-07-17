@@ -46,6 +46,10 @@ pub fn build_router(state: AppState) -> Router {
             post(handlers::login_book_source),
         )
         .route(
+            "/reader3/bookSourceLoginAction",
+            post(handlers::execute_book_source_login_action),
+        )
+        .route(
             "/reader3/getExploreKinds",
             post(handlers::get_explore_kinds),
         )

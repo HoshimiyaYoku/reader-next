@@ -18,7 +18,10 @@ use axum::{
 };
 use regex::{Captures, Regex};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use tokio::{sync::Semaphore, task::JoinSet};
 use url::Url;
 
@@ -28,6 +31,16 @@ const MAX_TEST_SOURCE_BATCH_SIZE: usize = 100;
 pub struct BookSourceUrlParam {
     #[serde(rename = "bookSourceUrl")]
     book_source_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookSourceLoginActionParam {
+    book_source_url: String,
+    #[serde(default)]
+    login_info: HashMap<String, String>,
+    #[serde(default)]
+    action: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -202,6 +215,37 @@ pub async fn login_book_source(
         .await?
         .ok_or_else(|| AppError::NotFound("bookSource not found".to_string()))?;
     let result = state.book_service.login_book_source(&source).await?;
+    Ok(Json(ApiResponse::ok(result)))
+}
+
+pub async fn execute_book_source_login_action(
+    State(state): State<AppState>,
+    auth: AuthContext,
+    Json(param): Json<BookSourceLoginActionParam>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    let user_ns = state
+        .user_service
+        .resolve_user_ns_with_override(auth.access_token(), auth.secure_key(), auth.user_ns())
+        .await
+        .map_err(|_| AppError::BadRequest("NEED_LOGIN".to_string()))?;
+    let source = state
+        .book_source_service
+        .get(&user_ns, &param.book_source_url)
+        .await?
+        .ok_or_else(|| AppError::NotFound("bookSource not found".to_string()))?;
+
+    let service = state.book_service.clone();
+    let execution_source = source.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        service.execute_book_source_login_action(&execution_source, param.login_info, &param.action)
+    })
+    .await
+    .map_err(|err| AppError::Internal(err.into()))??;
+
+    state
+        .book_source_service
+        .save_runtime(&user_ns, &source)
+        .await?;
     Ok(Json(ApiResponse::ok(result)))
 }
 
