@@ -16,7 +16,7 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAME: ghcr.io/maple0517/reader-next
+  IMAGE_NAME: ghcr.io/hoshimiyayoku/reader-next
 
 jobs:
   build:
