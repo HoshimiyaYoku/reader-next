@@ -65,6 +65,10 @@
       :show="showControls || !!store.activePanel"
       :show-add-to-shelf="showAddToShelf"
       :adding-to-shelf="addingToShelf"
+      :horizontal-page-mode="isHorizontalPageMode"
+      :current-page="horizontalCurrentPage"
+      :total-pages="horizontalPageCount"
+      :page-progress="horizontalPageProgress"
       @goHome="goHome"
       @addToShelf="handleAddToShelf"
       @scrollTop="scrollToTop"
@@ -77,6 +81,7 @@
       @ai="openAiBook"
       @tts="handleTTS"
       @progress="openCachePanel"
+      @seekPage="seekHorizontalPage"
     />
 
     <ReaderTtsPanel
@@ -1116,6 +1121,12 @@ import { APP_VIEWPORT_CHANGE_EVENT, syncViewportSize } from '../utils/viewport'
 import { isReaderInteractiveClickTarget } from '../utils/readerClick'
 import { createReaderProgressAutoSaveScheduler, createReaderProgressExitSaver } from '../utils/readerProgressAutoSave'
 import { buildReaderShelfBook, isBookOnShelf } from '../utils/readerShelf'
+import {
+  chooseSavedChapterProgress,
+  clampPageIndex,
+  getPageIndexFromProgress,
+  getPageProgress,
+} from '../utils/readerPagination'
 import { buildChapterSummaryIdentity, isCurrentChapterSummaryIdentity } from '../utils/chapterSummaryState'
 import { buildSummaryRelationshipGraph } from '../utils/summaryRelationshipGraph'
 import { chooseChapterSummaryPlacement, clampChapterSummarySiderWidth, getChapterSummaryFontSize } from '../utils/chapterSummaryLayout'
@@ -1183,6 +1194,7 @@ const scrollContainerRef = ref<HTMLElement>()
 const chapterTextRef = ref<HTMLElement>()
 const showControls = ref(false)
 const isMobile = ref(false)
+const suppressHorizontalPageTransition = ref(false)
 const readerShelfStatus = ref<'checking' | 'available' | 'added'>('checking')
 const addingToShelf = ref(false)
 const showAddToShelf = computed(() => readerShelfStatus.value === 'available' || addingToShelf.value)
@@ -1192,11 +1204,13 @@ let speechTimerTicker: number | null = null
 let suppressNextTapUntil = 0
 let restorePositionTimer: number | null = null
 let persistPositionTimer: number | null = null
+let horizontalTransitionSuppressionId = 0
 const pendingRestorePosition = ref<SavedReadingPosition | null>(null)
 let pendingRestoreAttempts = 0
 let suppressPositionSaveUntil = 0
 let suppressContinuousScrollSyncUntil = 0
 let suppressContinuousAutoLoadUntil = 0
+let pendingChapterNavigationFallback: 'start' | 'end' | null = null
 const restoreStabilizeTimers: number[] = []
 const serverProgressAutoSaveScheduler = createReaderProgressAutoSaveScheduler({
   intervalMs: SERVER_PROGRESS_AUTOSAVE_MS,
@@ -1724,10 +1738,20 @@ const horizontalPageTransform = computed(() => {
   return `translate3d(${-offset}px, 0, 0)`
 })
 const horizontalPageTransitionDuration = computed(() => {
+  if (suppressHorizontalPageTransition.value) return '0ms'
   const duration = Number(config.value.animateDuration) || 0
   if (duration <= 0) return '0ms'
   return `${Math.min(220, duration)}ms`
 })
+const horizontalPageCount = computed(() => Math.max(1, horizontalPages.value.length))
+const horizontalCurrentPage = computed(() => clampPageIndex(
+  horizontalPageIndex.value,
+  horizontalPageCount.value,
+) + 1)
+const horizontalPageProgress = computed(() => getPageProgress(
+  horizontalPageIndex.value,
+  horizontalPageCount.value,
+))
 const {
   continuousChapters,
   continuousLoadingNext,
@@ -1752,8 +1776,8 @@ const {
 )
 
 function syncHorizontalPageState() {
-  const maxPage = Math.max(0, horizontalPages.value.length - 1)
-  const progress = maxPage <= 0 ? 1 : horizontalPageIndex.value / maxPage
+  const maxPage = horizontalPageCount.value - 1
+  const progress = horizontalPageProgress.value
   store.setChapterScrollProgress(progress)
   updateHorizontalEndState()
   if (config.value.enablePreload && maxPage > 0 && horizontalPageIndex.value >= maxPage - 1) {
@@ -1761,6 +1785,13 @@ function syncHorizontalPageState() {
   }
   scheduleSaveReadingPosition()
   serverProgressAutoSaveScheduler.schedule()
+}
+
+function seekHorizontalPage(pageIndex: number) {
+  if (!isHorizontalPageMode.value) return
+  horizontalPageIndex.value = clampPageIndex(pageIndex, horizontalPageCount.value)
+  scrollContainerRef.value?.scrollTo({ left: 0, behavior: 'auto' })
+  syncHorizontalPageState()
 }
 
 function pageForward() {
@@ -1881,8 +1912,9 @@ async function prevChapter() {
   if (targetIndex < 0) return
 
   if (!isContinuousMode.value) {
+    saveReadingPosition({ force: true })
+    pendingChapterNavigationFallback = 'end'
     await store.prevChapter()
-    scrollToTop()
     return
   }
 
@@ -1894,8 +1926,9 @@ async function nextChapter() {
   if (targetIndex >= store.chapters.length) return
 
   if (!isContinuousMode.value) {
+    saveReadingPosition({ force: true })
+    pendingChapterNavigationFallback = 'start'
     await store.nextChapter()
-    scrollToTop()
     return
   }
 
@@ -1938,7 +1971,11 @@ function scrollToBottom() {
   }
 }
 
-function getPositionStorageKey() {
+function getPositionStorageKey(chapterIndex = store.currentIndex) {
+  return store.book?.bookUrl ? `${READER_POSITION_PREFIX}${store.book.bookUrl}:${chapterIndex}` : ''
+}
+
+function getLegacyPositionStorageKey() {
   return store.book?.bookUrl ? `${READER_POSITION_PREFIX}${store.book.bookUrl}` : ''
 }
 
@@ -1968,46 +2005,62 @@ function loadSavedReadingPosition() {
     return
   }
   try {
-    const raw = localStorage.getItem(key)
-    const localSaved = raw ? JSON.parse(raw) as SavedReadingPosition : null
+    const legacyKey = getLegacyPositionStorageKey()
+    const chapterRaw = localStorage.getItem(key)
+    const legacyRaw = legacyKey ? localStorage.getItem(legacyKey) : null
+    const chapterSaved = chapterRaw ? JSON.parse(chapterRaw) as SavedReadingPosition : null
+    const legacySaved = legacyRaw ? JSON.parse(legacyRaw) as SavedReadingPosition : null
     const serverSaved = buildServerSavedPosition()
-
-    let selected: SavedReadingPosition | null = null
-    let source: 'local' | 'server' | 'none' = 'none'
-
-    if (localSaved && localSaved.chapterIndex === store.currentIndex) {
-      selected = localSaved
-      source = 'local'
-    }
-
-    if (serverSaved && serverSaved.chapterIndex === store.currentIndex) {
-      if (!selected || normalizePositionTimestamp(serverSaved.updatedAt) > normalizePositionTimestamp(selected.updatedAt)) {
-        selected = serverSaved
-        source = 'server'
-      }
-    }
+    const normalizedChapterSaved = chapterSaved
+      ? { ...chapterSaved, updatedAt: normalizePositionTimestamp(chapterSaved.updatedAt) }
+      : null
+    const normalizedLegacySaved = legacySaved
+      ? { ...legacySaved, updatedAt: normalizePositionTimestamp(legacySaved.updatedAt) }
+      : null
+    const eligibleServerSaved = pendingChapterNavigationFallback && !chapterSaved && !legacySaved
+      ? null
+      : serverSaved
+    const selection = chooseSavedChapterProgress(
+      store.currentIndex,
+      normalizedChapterSaved,
+      normalizedLegacySaved,
+      eligibleServerSaved,
+    )
+    const selected = selection.position
+    const source = selection.source
 
     if (!selected) {
-      pendingRestorePosition.value = null
+      pendingRestorePosition.value = pendingChapterNavigationFallback
+        ? {
+            chapterIndex: store.currentIndex,
+            progress: pendingChapterNavigationFallback === 'end' ? 1 : 0,
+            updatedAt: Date.now(),
+          }
+        : null
       pendingRestoreAttempts = 0
       clearRestoreStabilizers()
-      debugPositionLog(raw ? 'ignored saved position' : 'no saved position', {
+      debugPositionLog(chapterRaw || legacyRaw ? 'ignored saved position' : 'no saved position', {
         key,
         currentIndex: store.currentIndex,
-        localSaved,
+        chapterSaved,
+        legacySaved,
         serverSaved,
+        fallback: pendingChapterNavigationFallback,
       })
+      pendingChapterNavigationFallback = null
       return
     }
 
     pendingRestorePosition.value = selected
+    pendingChapterNavigationFallback = null
     pendingRestoreAttempts = 0
     clearRestoreStabilizers()
     debugPositionLog('loaded saved position', {
       key,
       saved: selected,
       source,
-      localSaved,
+      chapterSaved,
+      legacySaved,
       serverSaved,
       currentIndex: store.currentIndex,
       accepted: !!pendingRestorePosition.value,
@@ -2131,22 +2184,30 @@ function restoreReadingPositionInternal(saved: SavedReadingPosition | null, fina
   }
 
   if (isHorizontalPageMode.value) {
-    if (store.loading || container.scrollWidth <= container.clientWidth + 4) {
+    if (store.loading || !horizontalPages.value.length) {
       debugPositionLog('restore waiting: horizontal content not ready', {
         saved,
         loading: store.loading,
-        scrollWidth: container.scrollWidth,
-        clientWidth: container.clientWidth,
+        pageCount: horizontalPages.value.length,
       })
       return false
     }
-    const maxScroll = Math.max(0, container.scrollWidth - container.clientWidth)
-    container.scrollTo({ left: maxScroll * Math.max(0, Math.min(1, saved.progress || 0)), behavior: 'auto' })
+    horizontalPageIndex.value = getPageIndexFromProgress(
+      saved.progress || 0,
+      horizontalPageCount.value,
+    )
+    store.setChapterScrollProgress(horizontalPageProgress.value)
+    container.scrollTo({ left: 0, behavior: 'auto' })
+    updateHorizontalEndState()
     if (finalize) {
       pendingRestorePosition.value = null
       pendingRestoreAttempts = 0
     }
-    debugPositionLog('restored horizontal position', { saved, maxScroll })
+    debugPositionLog('restored horizontal position', {
+      saved,
+      pageIndex: horizontalPageIndex.value,
+      pageCount: horizontalPageCount.value,
+    })
     return true
   }
 
@@ -2655,11 +2716,19 @@ function handleKeydown(e: KeyboardEvent) {
       break
     case 'ArrowRight':
       e.preventDefault()
-      nextChapter()
+      if (isHorizontalPageMode.value) {
+        pageForward()
+      } else {
+        nextChapter()
+      }
       break
     case 'ArrowLeft':
       e.preventDefault()
-      prevChapter()
+      if (isHorizontalPageMode.value) {
+        pageBackward()
+      } else {
+        prevChapter()
+      }
       break
     case 'Home':
       e.preventDefault()
@@ -3014,16 +3083,49 @@ watch(
 
 watch(
   [() => store.content, () => config.value.fontSize, () => config.value.fontWeight, () => config.value.lineHeight, () => config.value.paragraphSpacing, () => config.value.firstLineIndent, showSearch, searchQuery],
-  () => {
+  async () => {
     if (isHorizontalPageMode.value) {
+      const suppressionId = ++horizontalTransitionSuppressionId
+      suppressHorizontalPageTransition.value = true
       horizontalPageIndex.value = 0
-      rebuildHorizontalPages()
+      await rebuildHorizontalPages()
+      window.setTimeout(() => {
+        if (suppressionId === horizontalTransitionSuppressionId) {
+          suppressHorizontalPageTransition.value = false
+        }
+      }, 0)
     }
   },
 )
 
+watch(
+  () => horizontalPages.value.length,
+  (pageCount) => {
+    const saved = pendingRestorePosition.value
+    if (
+      !isHorizontalPageMode.value
+      || pageCount <= 0
+      || !saved
+      || saved.chapterIndex !== store.currentIndex
+    ) {
+      return
+    }
+    horizontalPageIndex.value = getPageIndexFromProgress(saved.progress || 0, pageCount)
+    store.setChapterScrollProgress(getPageProgress(horizontalPageIndex.value, pageCount))
+    updateHorizontalEndState()
+  },
+  { flush: 'sync' },
+)
+
 watch(() => store.currentIndex, async () => {
   loadSavedReadingPosition()
+  if (!pendingRestorePosition.value && !isContinuousMode.value) {
+    if (isHorizontalPageMode.value) {
+      resetHorizontalPagePosition()
+    } else {
+      scrollContainerRef.value?.scrollTo({ top: 0, behavior: 'auto' })
+    }
+  }
   resetAutoParagraphIndex()
   if (!store.isSpeaking) {
     clearReadingClass()

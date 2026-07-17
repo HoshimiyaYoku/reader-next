@@ -227,6 +227,8 @@ export function useHorizontalPaging(
       horizontalPages.value = []
       return
     }
+    horizontalPages.value = []
+    isHorizontalAtEnd.value = false
     await nextTick()
     const container = scrollContainerRef.value
     if (!container) return

@@ -47,13 +47,21 @@
     <!-- Bottom Bar -->
     <Transition name="slide-up">
       <div v-show="show" class="m-bottom-bar">
-        <div class="progress-row" @click="$emit('progress')">
-          <div class="progress-track">
-            <!-- Mock slider for now -->
-            <div class="progress-fill" :style="{ width: store.readingProgress }"></div>
-            <div class="progress-thumb" :style="{ left: store.readingProgress }"></div>
-          </div>
-          <span class="page-text">第 1/1 页</span>
+        <div class="progress-row">
+          <input
+            class="page-slider"
+            type="range"
+            min="1"
+            :max="normalizedTotalPages"
+            :value="normalizedCurrentPage"
+            :disabled="!horizontalPageMode || normalizedTotalPages <= 1"
+            :style="{ '--page-progress': `${normalizedPageProgress * 100}%` }"
+            aria-label="当前章节页码"
+            @input="handlePageInput"
+          />
+          <span class="page-text">
+            {{ horizontalPageMode ? `第 ${normalizedCurrentPage}/${normalizedTotalPages} 页` : store.readingProgress }}
+          </span>
         </div>
         <div class="nav-row">
           <div class="nav-btn" :class="{ disabled: !store.hasPrev }" @click="$emit('prev')">
@@ -140,15 +148,19 @@ const theme = computed(() => {
   return store.currentTheme
 })
 
-defineProps<{ 
+const props = defineProps<{
   show: boolean
   isSpeaking?: boolean
   isPaused?: boolean
   showAddToShelf?: boolean
   addingToShelf?: boolean
+  horizontalPageMode?: boolean
+  currentPage?: number
+  totalPages?: number
+  pageProgress?: number
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   goHome: []
   addToShelf: []
   scrollTop: []
@@ -161,7 +173,21 @@ defineEmits<{
   ai: []
   tts: []
   progress: []
+  seekPage: [pageIndex: number]
 }>()
+
+const normalizedTotalPages = computed(() => Math.max(1, Math.floor(props.totalPages || 1)))
+const normalizedCurrentPage = computed(() => (
+  Math.max(1, Math.min(normalizedTotalPages.value, Math.floor(props.currentPage || 1)))
+))
+const normalizedPageProgress = computed(() => (
+  Math.max(0, Math.min(1, props.pageProgress || 0))
+))
+
+function handlePageInput(event: Event) {
+  const input = event.target as HTMLInputElement
+  emit('seekPage', Number(input.value) - 1)
+}
 </script>
 
 <style scoped>
@@ -256,33 +282,65 @@ defineEmits<{
   gap: 12px;
 }
 
-.progress-track {
+.page-slider {
   flex: 1;
+  height: 18px;
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.page-slider::-webkit-slider-runnable-track {
   height: 4px;
-  background: rgba(0,0,0,0.1);
   border-radius: 2px;
-  position: relative;
+  background: linear-gradient(
+    to right,
+    var(--color-primary, #c97f3a) 0,
+    var(--color-primary, #c97f3a) var(--page-progress),
+    rgba(0, 0, 0, 0.1) var(--page-progress),
+    rgba(0, 0, 0, 0.1) 100%
+  );
 }
 
-.progress-fill {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
+.page-slider::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: white;
+  border: 2px solid var(--color-primary, #c97f3a);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+.page-slider::-moz-range-track {
+  height: 4px;
+  border: 0;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.page-slider::-moz-range-progress {
+  height: 4px;
+  border-radius: 2px;
   background: var(--color-primary, #c97f3a);
-  border-radius: 2px;
 }
 
-.progress-thumb {
-  position: absolute;
-  top: 50%;
-  transform: translate(-50%, -50%);
+.page-slider::-moz-range-thumb {
   width: 14px;
   height: 14px;
   border-radius: 50%;
   background: white;
   border: 2px solid var(--color-primary, #c97f3a);
   box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+.page-slider:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 .page-text {
