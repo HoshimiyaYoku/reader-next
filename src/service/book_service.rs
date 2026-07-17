@@ -504,8 +504,12 @@ impl BookService {
                 (String::new(), true)
             } else {
                 let script = format!("{login_script}\n;({action});");
+                let bindings = HashMap::from([(
+                    "result".to_string(),
+                    serde_json::to_value(login_info).unwrap_or_else(|_| json!({})),
+                )]);
                 match with_js_source(source, || {
-                    eval_js(&script, "", &source.book_source_url)
+                    eval_js_with_bindings(&script, "", &source.book_source_url, &bindings)
                         .map_err(|err| AppError::BadRequest(format!("书源登录脚本执行失败：{err}")))
                 }) {
                     Ok(result) => (result, true),
@@ -515,7 +519,12 @@ impl BookService {
                             targeted_login_action_script(login_script, action)
                         {
                             if let Ok(result) = with_js_source(source, || {
-                                eval_js(&targeted_script, "", &source.book_source_url)
+                                eval_js_with_bindings(
+                                    &targeted_script,
+                                    "",
+                                    &source.book_source_url,
+                                    &bindings,
+                                )
                             }) {
                                 (result, true)
                             } else if execute_compatible_browser_action(
@@ -2698,6 +2707,52 @@ function login() {
         );
         assert_eq!(result["loggedIn"], true);
         assert_eq!(result["messages"][0], "登录成功");
+    }
+
+    #[test]
+    fn legado_login_action_exposes_form_values_as_global_result() {
+        let (service, storage_dir) = test_book_service("legado-login-global-result");
+        let source = BookSource {
+            book_source_name: "Aggregate".to_string(),
+            book_source_url: "光遇聚合".to_string(),
+            login_url: Some(
+                r#"
+function login(flag) {
+  if (!result.邮箱 || !result.密码) {
+    java.toast("请先输入账号密码！");
+    return false;
+  }
+  java.toast(result.邮箱);
+  return true;
+}
+"#
+                .to_string(),
+            ),
+            login_ui: Some(
+                r#"[
+  {"name":"邮箱","type":"text"},
+  {"name":"密码","type":"password"},
+  {"name":"登录","type":"button","action":"login(true)"}
+]"#
+                .to_string(),
+            ),
+            ..Default::default()
+        };
+
+        let result = service
+            .execute_book_source_login_action(
+                &source,
+                HashMap::from([
+                    ("邮箱".to_string(), "reader@example.com".to_string()),
+                    ("密码".to_string(), "secret".to_string()),
+                ]),
+                "login(true)",
+            )
+            .unwrap();
+
+        let _ = std::fs::remove_dir_all(storage_dir);
+        assert_eq!(result["success"], true);
+        assert_eq!(result["messages"][0], "reader@example.com");
     }
 
     #[test]

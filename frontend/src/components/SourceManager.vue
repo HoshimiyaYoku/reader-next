@@ -160,6 +160,7 @@ import {
   toBookSourceDeletePayload,
 } from '../utils/sourceSelection'
 import { appendAuthQueryParams } from '../utils/secureAccess'
+import { normalizeSourceLoginUrl } from '../utils/sourceLoginUrl'
 import { chunkBookSourceUrls, mergeBookSourceTestResponses } from '../utils/sourceTesting'
 import SourceEditorPanel from './source-manager/SourceEditorPanel.vue'
 import SourceFilterBar from './source-manager/SourceFilterBar.vue'
@@ -565,7 +566,11 @@ async function handleSourceLoginAction(payload: { action: string; name: string }
     sourceLoginMessages.value = messages
 
     if (result.openUrl?.trim()) {
-      sourceLoginOpenUrl.value = normalizeSourceLoginUrl(result.openUrl)
+      sourceLoginOpenUrl.value = normalizeSourceLoginUrl(
+        result.openUrl,
+        sourceLoginSourceUrl.value,
+        window.location.href,
+      )
       if (!openSourceLoginUrl(sourceLoginOpenUrl.value)) {
         messages.push('浏览器拦截了新窗口，请点击“打开书源页面”')
       }
@@ -603,15 +608,6 @@ function redactSourceLoginResult(result?: string) {
       safeResult = safeResult.split(password).join('••••••')
     })
   return safeResult
-}
-
-function normalizeSourceLoginUrl(rawUrl: string) {
-  const baseUrl = sourceLoginSourceUrl.value || window.location.href
-  const url = new URL(rawUrl, baseUrl)
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new Error(`书源请求打开不受支持的链接：${url.protocol}`)
-  }
-  return url.href
 }
 
 function openSourceLoginUrl(url: string) {
