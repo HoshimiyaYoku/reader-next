@@ -20,12 +20,19 @@ static JS_KV: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(|| Mutex::new(Has
 static JS_LIB_CACHE: Lazy<Mutex<HashMap<String, String>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static JS_HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
-    Client::builder()
-        .gzip(true)
-        .brotli(true)
-        .deflate(true)
-        .build()
-        .expect("failed to build JS HTTP client")
+    std::thread::Builder::new()
+        .name("book-source-js-http-init".to_string())
+        .spawn(|| {
+            Client::builder()
+                .gzip(true)
+                .brotli(true)
+                .deflate(true)
+                .build()
+                .expect("failed to build JS HTTP client")
+        })
+        .expect("failed to spawn JS HTTP client initialization thread")
+        .join()
+        .expect("JS HTTP client initialization thread panicked")
 });
 static JS_DEVICE_ID: Lazy<String> = Lazy::new(|| {
     let mut map = JS_KV.lock().unwrap_or_else(|e| e.into_inner());
@@ -212,6 +219,20 @@ fn eval_js_inner_with_source(
         )?;
         let state = runtime_state.clone();
         source_obj.set(
+            "putLoginInfo",
+            Func::new(move |value: String| -> bool {
+                let Ok(login_info) = serde_json::from_str::<HashMap<String, String>>(&value) else {
+                    return false;
+                };
+                state
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .login_info = login_info;
+                true
+            }),
+        )?;
+        let state = runtime_state.clone();
+        source_obj.set(
             "getLoginHeader",
             Func::new(move || {
                 state
@@ -276,6 +297,23 @@ fn eval_js_inner_with_source(
         )?;
         let state = runtime_state.clone();
         cookie_obj.set(
+            "setCookie",
+            Func::new(move |domain: String, value: String| -> bool {
+                let domain = normalized_cookie_domain(&domain);
+                if domain.is_empty() {
+                    return false;
+                }
+                let mut state = state.lock().unwrap_or_else(|err| err.into_inner());
+                if value.trim().is_empty() {
+                    state.cookies.remove(&domain);
+                } else {
+                    state.cookies.insert(domain, value.trim().to_string());
+                }
+                true
+            }),
+        )?;
+        let state = runtime_state.clone();
+        cookie_obj.set(
             "removeCookie",
             Func::new(move |domain: String| {
                 state
@@ -307,6 +345,42 @@ fn eval_js_inner_with_source(
         let state = runtime_state.clone();
         cache_obj.set(
             "put",
+            Func::new(move |key: String, val: String| -> bool {
+                state
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .java_kv
+                    .insert(key, val);
+                true
+            }),
+        )?;
+        let state = runtime_state.clone();
+        cache_obj.set(
+            "delete",
+            Func::new(move |key: String| -> bool {
+                state
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .java_kv
+                    .remove(&key)
+                    .is_some()
+            }),
+        )?;
+        let state = runtime_state.clone();
+        cache_obj.set(
+            "getFromMemory",
+            Func::new(move |key: String| -> Option<String> {
+                state
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .java_kv
+                    .get(&key)
+                    .cloned()
+            }),
+        )?;
+        let state = runtime_state.clone();
+        cache_obj.set(
+            "putMemory",
             Func::new(move |key: String, val: String| -> bool {
                 state
                     .lock()
@@ -353,11 +427,11 @@ fn eval_js_inner_with_source(
         )?;
         let browser_runtime = runtime.clone();
         java_obj.set(
-            "startBrowserAwait",
+            "__startBrowserAwait",
             Func::new(
                 move |url: String, _title: Opt<String>, _modal: Opt<bool>| -> String {
-                    browser_runtime.push_browser_url(url);
-                    String::new()
+                    browser_runtime.push_browser_url(url.clone());
+                    decode_browser_data_url(&url).unwrap_or_default()
                 },
             ),
         )?;
@@ -381,6 +455,18 @@ fn eval_js_inner_with_source(
             Func::new(|| -> String { JS_DEVICE_ID.clone() }),
         )?;
         java_obj.set("deviceID", Func::new(|| -> String { JS_DEVICE_ID.clone() }))?;
+        let state = runtime_state.clone();
+        java_obj.set(
+            "getCookie",
+            Func::new(move |domain: String, key: Opt<String>| -> String {
+                let state = state.lock().unwrap_or_else(|err| err.into_inner());
+                let cookie = stored_cookie_for_domain(&state.cookies, &domain);
+                key.0
+                    .as_deref()
+                    .map(|key| cookie_value(&cookie, key))
+                    .unwrap_or(cookie)
+            }),
+        )?;
         let state = runtime_state.clone();
         java_obj.set(
             "get",
@@ -521,8 +607,46 @@ fn eval_js_inner_with_source(
             Func::new(|input: String| -> String { strip_whitespace(&input) }),
         )?;
 
-        globals.set("book", Object::new(ctx.clone())?)?;
-        globals.set("chapter", Object::new(ctx.clone())?)?;
+        let book_obj = Object::new(ctx.clone())?;
+        let state = runtime_state.clone();
+        book_obj.set(
+            "getVariable",
+            Func::new(move |key: String| -> String {
+                state
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .java_kv
+                    .get(&format!("__book_variable:{key}"))
+                    .cloned()
+                    .unwrap_or_default()
+            }),
+        )?;
+        let state = runtime_state.clone();
+        book_obj.set(
+            "setVariable",
+            Func::new(move |key: String, value: String| -> bool {
+                state
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .java_kv
+                    .insert(format!("__book_variable:{key}"), value);
+                true
+            }),
+        )?;
+        book_obj.set("setUseReplaceRule", Func::new(|_enabled: bool| true))?;
+        book_obj.set("readConfig", Object::new(ctx.clone())?)?;
+        book_obj.set("durChapterIndex", 0)?;
+        book_obj.set("durChapterTitle", "")?;
+        book_obj.set("order", 0)?;
+        book_obj.set("name", "")?;
+        book_obj.set("author", "")?;
+        book_obj.set("coverUrl", "")?;
+        globals.set("book", book_obj)?;
+
+        let chapter_obj = Object::new(ctx.clone())?;
+        chapter_obj.set("index", 0)?;
+        chapter_obj.set("title", "")?;
+        globals.set("chapter", chapter_obj)?;
         globals.set("title", "")?;
         globals.set("nextChapterUrl", "")?;
         globals.set("rssArticle", Object::new(ctx.clone())?)?;
@@ -547,6 +671,21 @@ source.getLoginInfoMap = function () {
 };
 source.getLoginInfo = function () {
   return source.__getLoginInfoJson() || "{}";
+};
+java.startBrowserAwait = function (url, title, modal) {
+  const target = String(url || "");
+  let body;
+  if (typeof modal === "boolean") {
+    body = java.__startBrowserAwait(target, String(title || ""), modal);
+  } else if (typeof title === "string") {
+    body = java.__startBrowserAwait(target, title);
+  } else {
+    body = java.__startBrowserAwait(target);
+  }
+  return {
+    body: function () { return body || ""; },
+    toString: function () { return body || ""; }
+  };
 };
 "#,
         )
@@ -886,16 +1025,21 @@ fn store_active_source_cookies(url: &str, headers: &reqwest::header::HeaderMap) 
 }
 
 fn cookie_domain_matches(host: &str, domain: &str) -> bool {
-    let domain = domain
+    let domain = normalized_cookie_domain(domain);
+    !domain.is_empty()
+        && (host.eq_ignore_ascii_case(&domain) || host.ends_with(&format!(".{domain}")))
+}
+
+fn normalized_cookie_domain(domain: &str) -> String {
+    domain
         .trim()
         .trim_start_matches('.')
         .trim_start_matches("https://")
         .trim_start_matches("http://")
         .split('/')
         .next()
-        .unwrap_or_default();
-    !domain.is_empty()
-        && (host.eq_ignore_ascii_case(domain) || host.ends_with(&format!(".{domain}")))
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn stored_cookie_for_domain(cookies: &HashMap<String, String>, domain: &str) -> String {
@@ -918,6 +1062,22 @@ fn parse_cookie_pairs(value: &str) -> HashMap<String, String> {
         .filter(|(name, _)| !name.trim().is_empty())
         .map(|(name, value)| (name.trim().to_string(), value.trim().to_string()))
         .collect()
+}
+
+fn decode_browser_data_url(url: &str) -> Option<String> {
+    let data_url = url.strip_prefix("data:")?;
+    let (metadata, payload) = data_url.split_once(',')?;
+    let bytes = if metadata
+        .split(';')
+        .any(|part| part.eq_ignore_ascii_case("base64"))
+    {
+        base64::engine::general_purpose::STANDARD
+            .decode(payload.trim())
+            .ok()?
+    } else {
+        urlencoding::decode(payload).ok()?.into_owned().into_bytes()
+    };
+    String::from_utf8(bytes).ok()
 }
 
 fn split_ajax_spec(spec: &str) -> (&str, Option<&str>) {

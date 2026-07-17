@@ -167,13 +167,14 @@ impl RuleEngine {
         book_url: &str,
     ) -> Book {
         with_js_source(source, || {
-            let rule = source.rule_book_info.clone().unwrap_or_default();
+            let mut rule = source.rule_book_info.clone().unwrap_or_default();
             let mut context = HashMap::new();
+            let prepared_body = prepare_book_info_body(body, base_url, &mut rule);
 
-            let mode = self.detect_mode(rule.name.as_deref().unwrap_or(""), body);
+            let mode = self.detect_mode(rule.name.as_deref().unwrap_or(""), &prepared_body);
             match mode {
                 ParseMode::JsonPath => {
-                    if let Ok(v) = serde_json::from_str::<Value>(body) {
+                    if let Ok(v) = serde_json::from_str::<Value>(&prepared_body) {
                         return parse_book_info_json(
                             source,
                             &v,
@@ -187,7 +188,7 @@ impl RuleEngine {
                 ParseMode::XPath => {
                     return parse_book_info_xpath(
                         source,
-                        body,
+                        &prepared_body,
                         base_url,
                         &rule,
                         book_url,
@@ -196,7 +197,14 @@ impl RuleEngine {
                 }
                 _ => {}
             }
-            parse_book_info_html(source, body, base_url, &rule, book_url, &mut context)
+            parse_book_info_html(
+                source,
+                &prepared_body,
+                base_url,
+                &rule,
+                book_url,
+                &mut context,
+            )
         })
     }
 
@@ -284,9 +292,23 @@ impl RuleEngine {
                     self.detect_mode(&content_rule, &content_body),
                     ParseMode::Js
                 ) {
-                    let script = self.strip_mode_prefix(&content_rule);
+                    let (script, followup_rule) = split_leading_js_rule(&content_rule)
+                        .map(|(script, followup)| (script, Some(followup)))
+                        .unwrap_or_else(|| (self.strip_mode_prefix(&content_rule), None));
                     if let Ok(res) = eval_js(script, &content_body, base_url) {
-                        return res;
+                        if let Some(followup_rule) =
+                            followup_rule.filter(|value| !value.trim().is_empty())
+                        {
+                            if let Ok(value) = serde_json::from_str::<Value>(&res) {
+                                if let Some(content) =
+                                    jsonpath::jsonpath_first_string(&value, followup_rule)
+                                {
+                                    return content;
+                                }
+                            }
+                        } else {
+                            return res;
+                        }
                     }
                 }
 
@@ -565,10 +587,31 @@ impl RuleEngine {
         list_rule: &str,
         ctx: &mut HashMap<String, String>,
     ) -> (Vec<BookChapter>, Vec<String>) {
-        let output = match eval_js(self.strip_mode_prefix(list_rule), body, base_url) {
+        let (script, followup_rule) = split_leading_js_rule(list_rule)
+            .map(|(script, followup)| (script, Some(followup)))
+            .unwrap_or_else(|| (self.strip_mode_prefix(list_rule), None));
+        let output = match eval_js(script, body, base_url) {
             Ok(result) => result,
             Err(_) => return (vec![], vec![]),
         };
+
+        if let Some(followup_rule) = followup_rule.filter(|rule| !rule.trim().is_empty()) {
+            return match self.detect_mode(followup_rule, &output) {
+                ParseMode::JsonPath => {
+                    parse_chapter_list_json(&output, base_url, rule, followup_rule, ctx)
+                }
+                ParseMode::XPath => {
+                    parse_chapter_list_xpath(&output, base_url, rule, followup_rule, ctx)
+                }
+                ParseMode::Regex => {
+                    self.parse_chapter_list_regex(&output, base_url, rule, followup_rule)
+                }
+                ParseMode::Css => {
+                    parse_chapter_list_html(&output, base_url, rule, followup_rule, ctx)
+                }
+                ParseMode::Js => (vec![], vec![]),
+            };
+        }
 
         if let Some(items) = parse_js_output_items(&output) {
             let mut out = Vec::with_capacity(items.len());
@@ -2093,6 +2136,36 @@ fn prepare_toc_body(body: &str, base_url: &str, rule: &TocRule) -> String {
     }
 }
 
+fn prepare_book_info_body(body: &str, base_url: &str, rule: &mut BookInfoRule) -> String {
+    let Some(init_rule) = rule
+        .init
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return body.to_string();
+    };
+    let (script, followup_rule) =
+        if let Some((script, followup_rule)) = split_leading_js_rule(init_rule) {
+            (script, Some(followup_rule.trim().to_string()))
+        } else if matches!(
+            init_rule,
+            value if value.starts_with("@js:") || value.starts_with("js:")
+        ) {
+            (strip_js_rule(init_rule), None)
+        } else {
+            return body.to_string();
+        };
+
+    match eval_js(script, body, base_url) {
+        Ok(result) if !result.trim().is_empty() => {
+            rule.init = followup_rule.filter(|value| !value.is_empty());
+            result
+        }
+        _ => body.to_string(),
+    }
+}
+
 fn apply_toc_format_js(chapters: &mut [BookChapter], format_js: Option<&str>, base_url: &str) {
     let Some(script) = format_js.filter(|s| !s.trim().is_empty()) else {
         return;
@@ -2342,7 +2415,7 @@ fn is_truthy(value: String) -> bool {
 mod tests {
     use super::*;
     use crate::model::book_source::BookSource;
-    use crate::model::rule::{BookInfoRule, SearchRule, TocRule};
+    use crate::model::rule::{BookInfoRule, ContentRule, SearchRule, TocRule};
 
     #[test]
     fn test_detect_mode() {
@@ -2399,6 +2472,40 @@ mod tests {
         assert_eq!(results[0].name, "Fallback Book");
         assert_eq!(results[0].author, "Fallback Author");
         assert_eq!(results[0].intro.as_deref(), Some("Fallback Intro"));
+    }
+
+    #[test]
+    fn test_book_info_js_init_then_jsonpath_scope() {
+        let engine = RuleEngine::new().unwrap();
+        let source = BookSource {
+            book_source_name: "JS detail".to_string(),
+            book_source_url: "https://source.example".to_string(),
+            rule_book_info: Some(BookInfoRule {
+                init: Some("<js>String(java.hexDecodeToString(result));</js>\n$.data".to_string()),
+                name: Some("$.book_name".to_string()),
+                author: Some("$.author".to_string()),
+                toc_url: Some("$.toc_url".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let body = hex::encode(
+            r#"{"data":{"book_name":"Alpha","author":"Tester","toc_url":"https://source.example/catalog"}}"#,
+        );
+
+        let book = engine.book_info(
+            &source,
+            &body,
+            "data:;base64,eyJ0eXBlIjoiZGV0YWlsIn0=",
+            "data:;base64,eyJ0eXBlIjoiZGV0YWlsIn0=",
+        );
+
+        assert_eq!(book.name, "Alpha");
+        assert_eq!(book.author, "Tester");
+        assert_eq!(
+            book.toc_url.as_deref(),
+            Some("https://source.example/catalog")
+        );
     }
 
     #[test]
@@ -2515,6 +2622,33 @@ yunurl = java.base64Encode(JSON.stringify({source: source, url: book_url}));
     }
 
     #[test]
+    fn test_chapter_list_js_then_jsonpath_list() {
+        let engine = RuleEngine::new().unwrap();
+        let source = BookSource {
+            book_source_name: "JS chained TOC".to_string(),
+            book_source_url: "https://source.example".to_string(),
+            rule_toc: Some(TocRule {
+                chapter_list: Some("<js>result;</js>\n$.data".to_string()),
+                chapter_name: Some("$.title".to_string()),
+                chapter_url: Some("$.url".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let (chapters, next_urls) = engine.chapter_list(
+            &source,
+            r#"{"data":[{"title":"One","url":"/1"},{"title":"Two","url":"/2"}]}"#,
+            "https://books.example/catalog",
+        );
+
+        assert!(next_urls.is_empty());
+        assert_eq!(chapters.len(), 2);
+        assert_eq!(chapters[0].title, "One");
+        assert_eq!(chapters[0].url, "https://books.example/1");
+    }
+
+    #[test]
     fn test_chapter_list_keeps_real_chapterlist_container() {
         let engine = RuleEngine::new().unwrap();
         let source = BookSource {
@@ -2589,5 +2723,25 @@ yunurl = java.base64Encode(JSON.stringify({source: source, url: book_url}));
         );
         assert_eq!(book.name, "Book-Alias");
         assert_eq!(book.author, "Tester");
+    }
+
+    #[test]
+    fn test_content_js_then_jsonpath_field() {
+        let engine = RuleEngine::new().unwrap();
+        let source = BookSource {
+            book_source_name: "JS content".to_string(),
+            book_source_url: "https://source.example".to_string(),
+            rule_content: Some(ContentRule {
+                content: Some(
+                    r#"<js>JSON.stringify({content:"Chapter body"});</js>$.content"#.to_string(),
+                ),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let content = engine.content(&source, "unused", "https://books.example/chapter/1");
+
+        assert_eq!(content, "Chapter body");
     }
 }

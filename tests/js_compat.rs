@@ -38,3 +38,72 @@ function getSecretKey() {
 
     assert_eq!(result, "saved-api-key");
 }
+
+#[test]
+fn legado_cookie_and_browser_await_apis_persist_source_state() {
+    let source = BookSource {
+        book_source_url: "https://source.example".to_string(),
+        ..Default::default()
+    };
+
+    let result = with_js_source(&source, || {
+        eval_js(
+            r#"
+cookie.setCookie("https://v1.example.test", "qttoken=saved-token");
+const page = java.startBrowserAwait(
+  "data:text/html;base64,PGh0bWw+PGJvZHk+U2V0dGluZ3M8L2JvZHk+PC9odG1sPg==",
+  "设置"
+);
+JSON.stringify({
+  token: java.getCookie("v1.example.test", "qttoken"),
+  body: page.body()
+})
+"#,
+            "",
+            &source.book_source_url,
+        )
+    })
+    .unwrap();
+    let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+
+    assert_eq!(value["token"], "saved-token");
+    assert_eq!(value["body"], "<html><body>Settings</body></html>");
+    assert_eq!(
+        source
+            .runtime
+            .snapshot()
+            .cookies
+            .get("v1.example.test")
+            .map(String::as_str),
+        Some("qttoken=saved-token")
+    );
+}
+
+#[test]
+fn legado_book_variable_api_is_available_to_detail_scripts() {
+    let source = BookSource {
+        book_source_url: "https://source.example".to_string(),
+        ..Default::default()
+    };
+
+    let result = with_js_source(&source, || {
+        eval_js(
+            r#"
+book.setVariable("custom", "voice-7");
+JSON.stringify({
+  custom: book.getVariable("custom"),
+  chapterIndex: book.durChapterIndex,
+  replaceRule: book.setUseReplaceRule(false)
+})
+"#,
+            "",
+            &source.book_source_url,
+        )
+    })
+    .unwrap();
+    let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+
+    assert_eq!(value["custom"], "voice-7");
+    assert_eq!(value["chapterIndex"], 0);
+    assert_eq!(value["replaceRule"], true);
+}

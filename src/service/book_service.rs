@@ -7,7 +7,7 @@ use crate::error::error::AppError;
 use crate::model::{
     book::Book,
     book_chapter::BookChapter,
-    book_source::{BookSource, ExploreKind},
+    book_source::{BookSource, BookSourceRuntimeState, ExploreKind},
     search::SearchBook,
 };
 use crate::parser::js::{eval_js, eval_js_with_bindings, with_js_source};
@@ -135,6 +135,31 @@ impl BookService {
         result
     }
 
+    async fn parse_chapter_list_response(
+        &self,
+        source: &BookSource,
+        res: FetchResponse,
+    ) -> Result<(Vec<BookChapter>, Vec<String>), AppError> {
+        let parser = self.parser.clone();
+        let source = source.clone();
+        run_parser_blocking(move || parser.chapter_list(&source, &res.body, &res.url)).await
+    }
+
+    async fn parse_content_response(
+        &self,
+        source: &BookSource,
+        res: FetchResponse,
+    ) -> Result<(String, Option<String>), AppError> {
+        let parser = self.parser.clone();
+        let source = source.clone();
+        run_parser_blocking(move || {
+            let content = parser.content(&source, &res.body, &res.url);
+            let next_url = parser.next_content_url(&source, &res.body, &res.url);
+            (content, next_url)
+        })
+        .await
+    }
+
     async fn wait_for_rate(&self, source: &BookSource) {
         let Some(rate) = source.concurrent_rate.as_deref().map(str::trim) else {
             return;
@@ -251,7 +276,10 @@ impl BookService {
         })?;
         let res = apply_login_check_js(source, res);
         tracing::debug!("fetch success, body length: {}", res.body.len());
-        let books = self.parser.search_books(source, &res.body, &res.url);
+        let parser = self.parser.clone();
+        let source = source.clone();
+        let books =
+            run_parser_blocking(move || parser.search_books(&source, &res.body, &res.url)).await?;
         tracing::info!("found {} books", books.len());
         Ok(books)
     }
@@ -272,7 +300,9 @@ impl BookService {
             .await;
 
         let res = apply_login_check_js(source, self.fetch_with_rate(source, spec).await?);
-        Ok(self.parser.explore_books(source, &res.body, &res.url))
+        let parser = self.parser.clone();
+        let source = source.clone();
+        run_parser_blocking(move || parser.explore_books(&source, &res.body, &res.url)).await
     }
 
     pub fn explore_kinds(&self, source: &BookSource) -> Result<Vec<ExploreKind>, AppError> {
@@ -362,7 +392,7 @@ impl BookService {
                 "mode": "legadoUi",
                 "loginUi": login_ui,
                 "loginInfo": login_info,
-                "loggedIn": runtime.login_header.trim().len() >= 10,
+                "loggedIn": runtime_has_login(&runtime),
                 "checkResult": "已加载阅读 3 书源登录界面"
             }));
         }
@@ -534,7 +564,7 @@ impl BookService {
             .take_browser_urls()
             .into_iter()
             .find(|url| url.starts_with("https://") || url.starts_with("http://"));
-        let logged_in = state.login_header.trim().len() >= 10;
+        let logged_in = runtime_has_login(&state);
         let action_success = action_success && (!login_header_required || logged_in);
 
         Ok(serde_json::json!({
@@ -555,7 +585,10 @@ impl BookService {
         let res = self
             .fetch_source_url(user_ns, source, book_url, &source.book_source_url)
             .await?;
-        Ok(self.parser.book_info(source, &res.body, &res.url, book_url))
+        let parser = self.parser.clone();
+        let source = source.clone();
+        let book_url = book_url.to_string();
+        run_parser_blocking(move || parser.book_info(&source, &res.body, &res.url, &book_url)).await
     }
 
     pub async fn get_chapter_list(
@@ -608,7 +641,7 @@ impl BookService {
         let res = self
             .fetch_source_url(user_ns, source, toc_url, &source.book_source_url)
             .await?;
-        let (chapters, next_urls) = self.parser.chapter_list(source, &res.body, &res.url);
+        let (chapters, next_urls) = self.parse_chapter_list_response(source, res).await?;
 
         visited_page_urls.insert(toc_url.to_string());
 
@@ -645,7 +678,7 @@ impl BookService {
                 let res = self
                     .fetch_source_url(user_ns, source, &url, &source.book_source_url)
                     .await?;
-                let (chapters, _) = self.parser.chapter_list(source, &res.body, &res.url);
+                let (chapters, _) = self.parse_chapter_list_response(source, res).await?;
 
                 for ch in chapters {
                     if seen_chapter_urls.contains(&ch.url) {
@@ -673,7 +706,7 @@ impl BookService {
                 let res = self
                     .fetch_source_url(user_ns, source, &current_url, &source.book_source_url)
                     .await?;
-                let (chapters, next_urls) = self.parser.chapter_list(source, &res.body, &res.url);
+                let (chapters, next_urls) = self.parse_chapter_list_response(source, res).await?;
 
                 for ch in chapters {
                     if seen_chapter_urls.contains(&ch.url) {
@@ -739,7 +772,7 @@ impl BookService {
                 .fetch_source_url(user_ns, source, &current_url, &source.book_source_url)
                 .await?;
             tracing::debug!("get_content fetch done, body len={}", res.body.len());
-            let content = self.parser.content(source, &res.body, &res.url);
+            let (content, next_url) = self.parse_content_response(source, res).await?;
             tracing::debug!("get_content parsed content len={}", content.len());
 
             if !content.is_empty() {
@@ -750,7 +783,7 @@ impl BookService {
             }
 
             // Check for next page
-            if let Some(next_url) = self.parser.next_content_url(source, &res.body, &res.url) {
+            if let Some(next_url) = next_url {
                 tracing::debug!("get_content found next_url: {}", next_url);
                 if should_follow_content_page(chapter_url, &current_url, &next_url) {
                     current_url = next_url;
@@ -1287,6 +1320,16 @@ impl BookService {
     }
 }
 
+async fn run_parser_blocking<T, F>(task: F) -> Result<T, AppError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    tokio::task::spawn_blocking(task)
+        .await
+        .map_err(|err| AppError::Internal(anyhow::anyhow!("book source parser task failed: {err}")))
+}
+
 fn apply_login_check_js(source: &BookSource, res: FetchResponse) -> FetchResponse {
     let Some(script) = source
         .login_check_js
@@ -1792,6 +1835,22 @@ fn redact_login_notice(
         redacted = redacted.replace(login_header, "***");
     }
     redacted
+}
+
+fn runtime_has_login(state: &BookSourceRuntimeState) -> bool {
+    state.login_header.trim().len() >= 10
+        || state.cookies.values().any(|cookie| {
+            cookie.split(';').any(|pair| {
+                let Some((name, value)) = pair.trim().split_once('=') else {
+                    return false;
+                };
+                let name = name.to_ascii_lowercase();
+                value.trim().len() >= 4
+                    && ["token", "session", "auth"]
+                        .iter()
+                        .any(|marker| name.contains(marker))
+            })
+        })
 }
 
 fn resolve_login_preview_target(source: &BookSource) -> Result<Option<String>, AppError> {

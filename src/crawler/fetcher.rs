@@ -1,4 +1,5 @@
 use crate::crawler::http_client::HttpClient;
+use base64::Engine;
 use encoding_rs::Encoding;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -72,6 +73,10 @@ pub struct StrResponse {
 }
 
 pub async fn fetch(client: &HttpClient, req: RequestSpec) -> anyhow::Result<FetchResponse> {
+    if req.url.starts_with("data:") {
+        return fetch_data_url(&req);
+    }
+
     let mut last_err: Option<anyhow::Error> = None;
     let max_retries = req.retry;
     for attempt in 0..=max_retries {
@@ -169,6 +174,52 @@ pub async fn fetch(client: &HttpClient, req: RequestSpec) -> anyhow::Result<Fetc
         }
     }
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("fetch failed")))
+}
+
+fn fetch_data_url(req: &RequestSpec) -> anyhow::Result<FetchResponse> {
+    let data_url = req
+        .url
+        .strip_prefix("data:")
+        .ok_or_else(|| anyhow::anyhow!("invalid data URL"))?;
+    let (metadata, payload) = data_url
+        .split_once(',')
+        .ok_or_else(|| anyhow::anyhow!("invalid data URL: missing payload"))?;
+    let is_base64 = metadata
+        .split(';')
+        .any(|part| part.eq_ignore_ascii_case("base64"));
+    let bytes = if is_base64 {
+        base64::engine::general_purpose::STANDARD
+            .decode(payload.trim())
+            .map_err(|err| anyhow::anyhow!("invalid base64 data URL: {err}"))?
+    } else {
+        urlencoding::decode(payload)
+            .map_err(|err| anyhow::anyhow!("invalid percent-encoded data URL: {err}"))?
+            .into_owned()
+            .into_bytes()
+    };
+    let body = if req
+        .response_type
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        hex::encode(&bytes)
+    } else {
+        decode_body(&bytes, req.charset.as_deref(), None)
+    };
+    let content_type = metadata
+        .split(';')
+        .next()
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string);
+
+    Ok(FetchResponse {
+        url: req.url.clone(),
+        status: 200,
+        body,
+        content_type,
+        headers: Vec::new(),
+        is_successful: true,
+    })
 }
 
 fn decode_body(bytes: &[u8], charset: Option<&str>, content_type: Option<&str>) -> String {
@@ -275,5 +326,21 @@ mod tests {
         let text = decode_body(bytes, None, None);
 
         assert!(text.contains("飞卢小说"));
+    }
+
+    #[test]
+    fn data_url_with_response_type_returns_hex_payload() {
+        let response = fetch_data_url(&RequestSpec {
+            url: "data:;base64,eyJrZXkiOiLmtYvor5UifQ==".to_string(),
+            response_type: Some("gysearch".to_string()),
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert_eq!(response.status, 200);
+        assert_eq!(
+            String::from_utf8(hex::decode(response.body).unwrap()).unwrap(),
+            r#"{"key":"测试"}"#
+        );
     }
 }
