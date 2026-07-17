@@ -1,6 +1,13 @@
 const APP_VIEWPORT_CHANGE_EVENT = 'app-viewport-change'
 const STABILIZE_DELAYS = [0, 120, 320, 760]
 
+export function shouldUseLayoutViewportForStandalone(
+  displayModeStandalone: boolean,
+  navigatorStandalone?: boolean,
+) {
+  return displayModeStandalone || navigatorStandalone === true
+}
+
 function getViewportMetrics() {
   if (typeof window === 'undefined') {
     return {
@@ -22,8 +29,20 @@ function getViewportMetrics() {
   const validWidths = layoutWidthCandidates.filter(value => Number.isFinite(value) && value > 0)
   const height = validHeights.length ? Math.max(...validHeights) : 0
   const width = validWidths.length ? Math.max(...validWidths) : 0
-  const visualHeight = viewport?.height && viewport.height > 0 ? viewport.height : height
-  const visualWidth = viewport?.width && viewport.width > 0 ? viewport.width : width
+  const navigatorStandalone = (window.navigator as Navigator & { standalone?: boolean }).standalone
+  const useLayoutViewport = shouldUseLayoutViewportForStandalone(
+    window.matchMedia?.('(display-mode: standalone)').matches === true,
+    navigatorStandalone,
+  )
+  // iOS can report visualViewport a few pixels shorter in home-screen mode,
+  // leaving an unused strip below full-screen views. There are no browser
+  // controls in standalone mode, so the layout viewport is the correct size.
+  const visualHeight = useLayoutViewport
+    ? height
+    : viewport?.height && viewport.height > 0 ? viewport.height : height
+  const visualWidth = useLayoutViewport
+    ? width
+    : viewport?.width && viewport.width > 0 ? viewport.width : width
   const offsetTop = Math.max(0, viewport?.offsetTop || 0)
   const offsetLeft = Math.max(0, viewport?.offsetLeft || 0)
   const offsetBottom = Math.max(0, height - visualHeight - offsetTop)
