@@ -8,6 +8,17 @@ export function shouldUseLayoutViewportForStandalone(
   return displayModeStandalone || navigatorStandalone === true
 }
 
+export function resolveViewportHeightCssValue(
+  measuredHeight: number,
+  useLayoutViewport: boolean,
+  supportsLargeViewportUnit: boolean,
+) {
+  if (useLayoutViewport) {
+    return supportsLargeViewportUnit ? '100lvh' : '100vh'
+  }
+  return `${roundViewportValue(measuredHeight)}px`
+}
+
 function getViewportMetrics() {
   if (typeof window === 'undefined') {
     return {
@@ -19,6 +30,7 @@ function getViewportMetrics() {
       offsetLeft: 0,
       offsetBottom: 0,
       offsetRight: 0,
+      useLayoutViewport: false,
     }
   }
 
@@ -57,6 +69,7 @@ function getViewportMetrics() {
     offsetLeft,
     offsetBottom,
     offsetRight,
+    useLayoutViewport,
   }
 }
 
@@ -71,9 +84,19 @@ function setViewportCssVariables() {
   const metrics = getViewportMetrics()
   if (!metrics.height || !metrics.width) return false
 
-  const nextHeight = `${roundViewportValue(metrics.height)}px`
+  const supportsLargeViewportUnit = typeof CSS !== 'undefined'
+    && CSS.supports('height', '100lvh')
+  const nextHeight = resolveViewportHeightCssValue(
+    metrics.height,
+    metrics.useLayoutViewport,
+    supportsLargeViewportUnit,
+  )
   const nextWidth = `${roundViewportValue(metrics.width)}px`
-  const nextVisualHeight = `${roundViewportValue(metrics.visualHeight)}px`
+  const nextVisualHeight = resolveViewportHeightCssValue(
+    metrics.visualHeight,
+    metrics.useLayoutViewport,
+    supportsLargeViewportUnit,
+  )
   const nextVisualWidth = `${roundViewportValue(metrics.visualWidth)}px`
   const nextOffsetTop = `${roundViewportValue(metrics.offsetTop)}px`
   const nextOffsetLeft = `${roundViewportValue(metrics.offsetLeft)}px`
