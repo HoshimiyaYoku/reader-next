@@ -15,6 +15,7 @@ use crate::model::ai_book_catchup::{
     AiBookCatchupCancelRequest, AiBookCatchupStartRequest, AiBookCatchupStatusRequest,
     AiBookCatchupTaskView,
 };
+use crate::model::book_chapter::BookChapter;
 use crate::service::ai_book_catchup_service::{
     fetch_content_fn, generate_digest_fn, generate_patch_fn, next_catchup_start_index,
     save_memory_fn, CatchupBookContext, CatchupChapter,
@@ -377,6 +378,7 @@ pub async fn start_ai_book_catchup(
                 let fetch_user_ns = user_ns_for_task.clone();
                 let fetch_book_url = book_url_for_task.clone();
                 let fetch_origin = shelf_book_for_task.origin.clone();
+                let fetch_book = shelf_book_for_task.clone();
                 let digest_state = state_for_task.clone();
                 let patch_state = state_for_task.clone();
                 Ok(CatchupBookContext {
@@ -402,6 +404,7 @@ pub async fn start_ai_book_catchup(
                         let fetch_user_ns = fetch_user_ns.clone();
                         let fetch_book_url = fetch_book_url.clone();
                         let fetch_origin = fetch_origin.clone();
+                        let fetch_book = fetch_book.clone();
                         async move {
                             if is_local_txt_origin(&fetch_origin)
                                 || fetch_book_url.starts_with("local-txt:")
@@ -419,13 +422,20 @@ pub async fn start_ai_book_catchup(
                                 Some(&fetch_book_url),
                             )
                             .await?;
+                            let book_chapter = BookChapter {
+                                title: chapter.title,
+                                url: chapter.chapter_url,
+                                index: chapter.index,
+                                ..Default::default()
+                            };
                             fetch_state
                                 .book_service
-                                .get_content(
+                                .get_content_for_chapter(
                                     &fetch_user_ns,
-                                    &fetch_book_url,
                                     &source,
-                                    &chapter.chapter_url,
+                                    &fetch_book,
+                                    &book_chapter,
+                                    None,
                                 )
                                 .await
                         }
@@ -559,10 +569,9 @@ async fn load_catchup_chapters(
         Some(&book_url),
     )
     .await?;
-    let toc_url = shelf_book.toc_url.as_deref().unwrap_or(&book_url);
     let chapters = state
         .book_service
-        .get_chapter_list_with_cache(user_ns, &source, toc_url, false)
+        .get_chapter_list_with_cache_for_book(user_ns, &source, shelf_book, false)
         .await?;
     let mut items = Vec::with_capacity(chapters.len());
     for chapter in chapters {

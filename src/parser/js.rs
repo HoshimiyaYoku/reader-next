@@ -47,6 +47,7 @@ type Aes128CbcDecryptor = cbc::Decryptor<Aes128>;
 thread_local! {
     static ACTIVE_JS_LIB: RefCell<Option<String>> = const { RefCell::new(None) };
     static ACTIVE_SOURCE: RefCell<Option<JsSourceContext>> = const { RefCell::new(None) };
+    static ACTIVE_JS_BINDINGS: RefCell<HashMap<String, JsonValue>> = RefCell::new(HashMap::new());
 }
 
 #[derive(Clone)]
@@ -74,6 +75,20 @@ pub fn with_js_source<T>(source: &BookSource, f: impl FnOnce() -> T) -> T {
     ACTIVE_SOURCE.with(|cell| {
         let previous = cell.replace(Some(context));
         let result = with_js_lib(source.js_lib.as_deref(), f);
+        cell.replace(previous);
+        result
+    })
+}
+
+/// Run Legado JavaScript with request-scoped objects such as `book` and `chapter`.
+/// Nested calls inherit the outer bindings and may override individual keys.
+pub fn with_js_bindings<T>(bindings: &HashMap<String, JsonValue>, f: impl FnOnce() -> T) -> T {
+    ACTIVE_JS_BINDINGS.with(|cell| {
+        let previous = cell.borrow().clone();
+        let mut merged = previous.clone();
+        merged.extend(bindings.clone());
+        cell.replace(merged);
+        let result = f();
         cell.replace(previous);
         result
     })
@@ -156,6 +171,7 @@ fn eval_js_inner_with_source(
     bindings: Option<&HashMap<String, JsonValue>>,
 ) -> anyhow::Result<String> {
     let active_source = ACTIVE_SOURCE.with(|cell| cell.borrow().clone());
+    let active_bindings = ACTIVE_JS_BINDINGS.with(|cell| cell.borrow().clone());
     let rt = Runtime::new()?;
     let ctx = Context::full(&rt)?;
     ctx.with(|ctx| {
@@ -651,10 +667,12 @@ fn eval_js_inner_with_source(
         globals.set("nextChapterUrl", "")?;
         globals.set("rssArticle", Object::new(ctx.clone())?)?;
 
+        for (key, value) in &active_bindings {
+            apply_js_binding(&ctx, &globals, key, value)?;
+        }
         if let Some(bindings) = bindings {
             for (key, value) in bindings {
-                let js_value = ctx.json_parse(value.to_string())?;
-                globals.set(key.as_str(), js_value)?;
+                apply_js_binding(&ctx, &globals, key, value)?;
             }
         }
 
@@ -718,6 +736,29 @@ java.startBrowserAwait = function (url, title, modal) {
         };
         Ok(result)
     })
+}
+
+fn apply_js_binding<'js>(
+    ctx: &rquickjs::Ctx<'js>,
+    globals: &Object<'js>,
+    key: &str,
+    value: &JsonValue,
+) -> anyhow::Result<()> {
+    // Keep compatibility methods installed on the default Legado book/chapter
+    // objects while filling their serialized fields from the current request.
+    if matches!(key, "book" | "chapter") {
+        if let Some(properties) = value.as_object() {
+            let target: Object = globals.get(key)?;
+            for (property, value) in properties {
+                let js_value = ctx.json_parse(value.to_string())?;
+                target.set(property.as_str(), js_value)?;
+            }
+            return Ok(());
+        }
+    }
+    let js_value = ctx.json_parse(value.to_string())?;
+    globals.set(key, js_value)?;
+    Ok(())
 }
 
 fn is_http_url(value: &str) -> bool {
@@ -1116,4 +1157,33 @@ fn split_ajax_spec(spec: &str) -> (&str, Option<&str>) {
     }
 
     (spec, None)
+}
+
+#[cfg(test)]
+mod context_binding_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn request_bindings_fill_book_and_chapter_without_losing_compat_methods() {
+        let bindings = HashMap::from([
+            ("book".to_string(), json!({ "name": "聚合测试书" })),
+            (
+                "chapter".to_string(),
+                json!({ "title": "第一章", "index": 7 }),
+            ),
+            ("title".to_string(), json!("第一章")),
+        ]);
+
+        let result = with_js_bindings(&bindings, || {
+            eval_js(
+                "book.name + '|' + chapter.title + '|' + chapter.index + '|' + title + '|' + typeof book.getVariable",
+                "",
+                "https://example.test/book",
+            )
+        })
+        .unwrap();
+
+        assert_eq!(result, "聚合测试书|第一章|7|第一章|function");
+    }
 }

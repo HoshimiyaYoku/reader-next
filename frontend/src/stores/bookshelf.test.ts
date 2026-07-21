@@ -136,6 +136,30 @@ describe('bookshelf search state', () => {
     })).toBeNull()
   })
 
+  it('restores search depth and remaining-source progress from cache', () => {
+    const store = useBookshelfStore()
+    const params = {
+      key: '星门',
+      scope: 'all' as const,
+      group: '',
+      sourceUrl: '',
+    }
+
+    store.cacheSearchResults({
+      ...params,
+      results: [],
+      page: 2,
+      lastIndex: 23,
+      hasMoreSources: true,
+    })
+
+    expect(store.getCachedSearchProgress(params)).toEqual({
+      page: 2,
+      lastIndex: 23,
+      hasMoreSources: true,
+    })
+  })
+
   it('pauses an in-progress search and caches partial results for reader return', () => {
     const store = useBookshelfStore()
     const book = {

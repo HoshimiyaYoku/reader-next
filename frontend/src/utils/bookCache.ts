@@ -12,6 +12,7 @@ export async function resolveBookChapters(book: Book) {
   return getChapterList({
     bookUrl: book.bookUrl,
     bookSourceUrl: book.origin,
+    book,
   })
 }
 
@@ -34,7 +35,11 @@ export async function cacheBookToBrowser(params: {
     }
     const content = await getBookContent({
       chapterUrl: chapter.url,
+      bookUrl: params.book.bookUrl,
       bookSourceUrl: params.book.origin,
+      book: params.book,
+      chapter,
+      nextChapterUrl: chapters[chapter.index + 1]?.url,
     })
     await setBrowserCachedChapter({
       bookUrl: params.book.bookUrl,

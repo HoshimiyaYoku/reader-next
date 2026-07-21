@@ -10,7 +10,7 @@ use crate::model::{
     book_source::{BookSource, BookSourceRuntimeState, ExploreKind},
     search::SearchBook,
 };
-use crate::parser::js::{eval_js, eval_js_with_bindings, with_js_source};
+use crate::parser::js::{eval_js, eval_js_with_bindings, with_js_bindings, with_js_source};
 use crate::parser::rule_engine::RuleEngine;
 use crate::storage::cache::file_cache::FileCache;
 use crate::util::hash::md5_hex;
@@ -110,14 +110,16 @@ impl BookService {
         self.source_cookies.write().await.remove(&key);
     }
 
-    async fn fetch_source_url(
+    async fn fetch_source_url_with_bindings(
         &self,
         user_ns: &str,
         source: &BookSource,
         url_rule: &str,
         base_url: &str,
+        bindings: HashMap<String, serde_json::Value>,
     ) -> Result<FetchResponse, AppError> {
-        let mut spec = analyze_url(url_rule, "", 1, base_url, source)?;
+        let mut spec =
+            with_js_bindings(&bindings, || analyze_url(url_rule, "", 1, base_url, source))?;
         self.apply_source_cookie(user_ns, source, &mut spec.headers)
             .await;
         let res = self.fetch_with_rate(source, spec).await?;
@@ -139,23 +141,32 @@ impl BookService {
         &self,
         source: &BookSource,
         res: FetchResponse,
+        bindings: HashMap<String, serde_json::Value>,
     ) -> Result<(Vec<BookChapter>, Vec<String>), AppError> {
         let parser = self.parser.clone();
-        let source = source.clone();
-        run_parser_blocking(move || parser.chapter_list(&source, &res.body, &res.url)).await
+        let source_for_parser = source.clone();
+        run_parser_blocking(move || {
+            with_js_bindings(&bindings, || {
+                parser.chapter_list(&source_for_parser, &res.body, &res.url)
+            })
+        })
+        .await
     }
 
     async fn parse_content_response(
         &self,
         source: &BookSource,
         res: FetchResponse,
+        bindings: HashMap<String, serde_json::Value>,
     ) -> Result<(String, Option<String>), AppError> {
         let parser = self.parser.clone();
         let source = source.clone();
         run_parser_blocking(move || {
-            let content = parser.content(&source, &res.body, &res.url);
-            let next_url = parser.next_content_url(&source, &res.body, &res.url);
-            (content, next_url)
+            with_js_bindings(&bindings, || {
+                let content = parser.content(&source, &res.body, &res.url);
+                let next_url = parser.next_content_url(&source, &res.body, &res.url);
+                (content, next_url)
+            })
         })
         .await
     }
@@ -585,38 +596,49 @@ impl BookService {
         }))
     }
 
-    pub async fn get_book_info(
+    pub async fn get_book_info_with_book(
         &self,
         user_ns: &str,
         source: &BookSource,
-        book_url: &str,
+        book: &Book,
     ) -> Result<Book, AppError> {
+        let bindings = legado_js_bindings(Some(book), None, None);
         let res = self
-            .fetch_source_url(user_ns, source, book_url, &source.book_source_url)
+            .fetch_source_url_with_bindings(
+                user_ns,
+                source,
+                &book.book_url,
+                &source.book_source_url,
+                bindings.clone(),
+            )
             .await?;
         let parser = self.parser.clone();
-        let source = source.clone();
-        let book_url = book_url.to_string();
-        run_parser_blocking(move || parser.book_info(&source, &res.body, &res.url, &book_url)).await
+        let source_for_parser = source.clone();
+        let source_url = source.book_source_url.clone();
+        let input_book = book.clone();
+        let book_url = input_book.book_url.clone();
+        let mut parsed = run_parser_blocking(move || {
+            with_js_bindings(&bindings, || {
+                parser.book_info(&source_for_parser, &res.body, &res.url, &book_url)
+            })
+        })
+        .await?;
+        preserve_book_context(&mut parsed, &input_book, &source_url);
+        Ok(parsed)
     }
 
-    pub async fn get_chapter_list(
+    pub async fn get_chapter_list_with_cache_for_book(
         &self,
         user_ns: &str,
         source: &BookSource,
-        toc_url: &str,
-    ) -> Result<Vec<BookChapter>, AppError> {
-        self.get_chapter_list_with_cache(user_ns, source, toc_url, false)
-            .await
-    }
-
-    pub async fn get_chapter_list_with_cache(
-        &self,
-        user_ns: &str,
-        source: &BookSource,
-        toc_url: &str,
+        book: &Book,
         force_refresh: bool,
     ) -> Result<Vec<BookChapter>, AppError> {
+        let toc_url = book
+            .toc_url
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(&book.book_url);
         // Check cache first (unless force refresh)
         if !force_refresh {
             if let Ok(Some(cached)) = self.load_chapter_list_cache(user_ns, toc_url).await {
@@ -626,7 +648,7 @@ impl BookService {
             }
         }
         let (chapters, _) = self
-            .get_chapter_list_with_pagination(user_ns, source, toc_url)
+            .get_chapter_list_with_pagination(user_ns, source, book, toc_url)
             .await?;
         // Save to cache
         let _ = self
@@ -639,6 +661,7 @@ impl BookService {
         &self,
         user_ns: &str,
         source: &BookSource,
+        book: &Book,
         toc_url: &str,
     ) -> Result<(Vec<BookChapter>, Vec<String>), AppError> {
         let mut all_chapters = Vec::new();
@@ -647,10 +670,18 @@ impl BookService {
         let mut chapter_index = 0i32;
 
         // Fetch first page
+        let bindings = legado_js_bindings(Some(book), None, None);
+        let base_url = if book.book_url.trim().is_empty() {
+            source.book_source_url.as_str()
+        } else {
+            book.book_url.as_str()
+        };
         let res = self
-            .fetch_source_url(user_ns, source, toc_url, &source.book_source_url)
+            .fetch_source_url_with_bindings(user_ns, source, toc_url, base_url, bindings.clone())
             .await?;
-        let (chapters, next_urls) = self.parse_chapter_list_response(source, res).await?;
+        let (chapters, next_urls) = self
+            .parse_chapter_list_response(source, res, bindings.clone())
+            .await?;
 
         visited_page_urls.insert(toc_url.to_string());
 
@@ -685,9 +716,17 @@ impl BookService {
                 visited_page_urls.insert(url.clone());
 
                 let res = self
-                    .fetch_source_url(user_ns, source, &url, &source.book_source_url)
+                    .fetch_source_url_with_bindings(
+                        user_ns,
+                        source,
+                        &url,
+                        base_url,
+                        bindings.clone(),
+                    )
                     .await?;
-                let (chapters, _) = self.parse_chapter_list_response(source, res).await?;
+                let (chapters, _) = self
+                    .parse_chapter_list_response(source, res, bindings.clone())
+                    .await?;
 
                 for ch in chapters {
                     if seen_chapter_urls.contains(&ch.url) {
@@ -713,9 +752,17 @@ impl BookService {
                 visited_page_urls.insert(current_url.clone());
 
                 let res = self
-                    .fetch_source_url(user_ns, source, &current_url, &source.book_source_url)
+                    .fetch_source_url_with_bindings(
+                        user_ns,
+                        source,
+                        &current_url,
+                        base_url,
+                        bindings.clone(),
+                    )
                     .await?;
-                let (chapters, next_urls) = self.parse_chapter_list_response(source, res).await?;
+                let (chapters, next_urls) = self
+                    .parse_chapter_list_response(source, res, bindings.clone())
+                    .await?;
 
                 for ch in chapters {
                     if seen_chapter_urls.contains(&ch.url) {
@@ -745,13 +792,16 @@ impl BookService {
         Ok((all_chapters, visited_page_urls.into_iter().collect()))
     }
 
-    pub async fn get_content(
+    pub async fn get_content_for_chapter(
         &self,
         user_ns: &str,
-        book_url: &str,
         source: &BookSource,
-        chapter_url: &str,
+        book: &Book,
+        chapter: &BookChapter,
+        next_chapter_url: Option<&str>,
     ) -> Result<String, AppError> {
+        let book_url = &book.book_url;
+        let chapter_url = &chapter.url;
         let book_key = md5_hex(book_url);
         tracing::debug!(
             "get_content called, chapter_url={}, book_key={}",
@@ -767,6 +817,13 @@ impl BookService {
         let mut all_content = String::new();
         let mut visited_urls = std::collections::HashSet::new();
         let mut current_url = chapter_url.to_string();
+        let bindings = legado_js_bindings(Some(book), Some(chapter), next_chapter_url);
+        let base_url = book
+            .toc_url
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| (!book.book_url.trim().is_empty()).then_some(book.book_url.as_str()))
+            .unwrap_or(source.book_source_url.as_str());
 
         // Follow pagination to get all content pages
         loop {
@@ -778,10 +835,18 @@ impl BookService {
 
             tracing::debug!("get_content fetching: {}", current_url);
             let res = self
-                .fetch_source_url(user_ns, source, &current_url, &source.book_source_url)
+                .fetch_source_url_with_bindings(
+                    user_ns,
+                    source,
+                    &current_url,
+                    base_url,
+                    bindings.clone(),
+                )
                 .await?;
             tracing::debug!("get_content fetch done, body len={}", res.body.len());
-            let (content, next_url) = self.parse_content_response(source, res).await?;
+            let (content, next_url) = self
+                .parse_content_response(source, res, bindings.clone())
+                .await?;
             tracing::debug!("get_content parsed content len={}", content.len());
 
             if !content.is_empty() {
@@ -1063,20 +1128,23 @@ impl BookService {
         Ok(count)
     }
 
-    pub async fn cache_chapter(
+    pub async fn cache_chapter_for_book(
         &self,
         user_ns: &str,
-        book_url: &str,
         source: &BookSource,
-        chapter_url: &str,
+        book: &Book,
+        chapter: &BookChapter,
+        next_chapter_url: Option<&str>,
         refresh: bool,
     ) -> Result<(), AppError> {
+        let book_url = &book.book_url;
+        let chapter_url = &chapter.url;
         let book_key = md5_hex(book_url);
         if refresh {
             let _ = self.cache.remove(user_ns, &book_key, chapter_url).await;
         }
         let _ = self
-            .get_content(user_ns, book_url, source, chapter_url)
+            .get_content_for_chapter(user_ns, source, book, chapter, next_chapter_url)
             .await?;
         Ok(())
     }
@@ -1327,6 +1395,81 @@ impl BookService {
         }
         Ok(())
     }
+}
+
+fn legado_js_bindings(
+    book: Option<&Book>,
+    chapter: Option<&BookChapter>,
+    next_chapter_url: Option<&str>,
+) -> HashMap<String, serde_json::Value> {
+    let mut bindings = HashMap::new();
+    if let Some(book) = book {
+        bindings.insert(
+            "book".to_string(),
+            serde_json::to_value(book).unwrap_or_default(),
+        );
+    }
+    if let Some(chapter) = chapter {
+        bindings.insert(
+            "chapter".to_string(),
+            serde_json::to_value(chapter).unwrap_or_default(),
+        );
+        bindings.insert("title".to_string(), json!(chapter.title));
+    }
+    bindings.insert(
+        "nextChapterUrl".to_string(),
+        json!(next_chapter_url.unwrap_or_default()),
+    );
+    bindings
+}
+
+fn preserve_book_context(parsed: &mut Book, input: &Book, source_url: &str) {
+    if parsed.name.trim().is_empty() {
+        parsed.name = input.name.clone();
+    }
+    if parsed.author.trim().is_empty() {
+        parsed.author = input.author.clone();
+    }
+    if parsed.book_url.trim().is_empty() {
+        parsed.book_url = input.book_url.clone();
+    }
+    if parsed.origin.trim().is_empty() {
+        parsed.origin = if input.origin.trim().is_empty() {
+            source_url.to_string()
+        } else {
+            input.origin.clone()
+        };
+    }
+    macro_rules! preserve_optional {
+        ($field:ident) => {
+            if parsed.$field.is_none() {
+                parsed.$field = input.$field.clone();
+            }
+        };
+    }
+    preserve_optional!(origin_name);
+    preserve_optional!(cover_url);
+    preserve_optional!(toc_url);
+    preserve_optional!(charset);
+    preserve_optional!(custom_cover_url);
+    preserve_optional!(can_update);
+    preserve_optional!(dur_chapter_index);
+    preserve_optional!(dur_chapter_pos);
+    preserve_optional!(dur_chapter_time);
+    preserve_optional!(dur_chapter_title);
+    preserve_optional!(intro);
+    preserve_optional!(latest_chapter_title);
+    preserve_optional!(last_check_time);
+    preserve_optional!(total_chapter_num);
+    preserve_optional!(r#type);
+    preserve_optional!(group);
+    preserve_optional!(word_count);
+    preserve_optional!(info_html);
+    preserve_optional!(toc_html);
+    preserve_optional!(kind);
+    preserve_optional!(update_time);
+    preserve_optional!(can_re_name);
+    preserve_optional!(download_urls);
 }
 
 async fn run_parser_blocking<T, F>(task: F) -> Result<T, AppError>

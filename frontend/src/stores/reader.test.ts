@@ -2,13 +2,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useAppStore } from './app'
 import { useReaderStore } from './reader'
-import { getBookContent, getChapterList, getShelfBook, saveBookProgress } from '../api/bookshelf'
+import { getBookContent, getBookInfo, getChapterList, getShelfBook, saveBookProgress } from '../api/bookshelf'
 import { getBrowserCachedChapter, setBrowserCachedChapter } from '../utils/browserCache'
 import type { Book } from '../types'
 
 vi.mock('../api/bookshelf', () => ({
   getChapterList: vi.fn(),
   getBookContent: vi.fn(),
+  getBookInfo: vi.fn(),
   getShelfBook: vi.fn(),
   saveBookProgress: vi.fn(),
   setBookSource: vi.fn(),
@@ -67,6 +68,8 @@ describe('reader local txt chapters', () => {
     })
     vi.mocked(getBookContent).mockReset()
     vi.mocked(getChapterList).mockReset()
+    vi.mocked(getBookInfo).mockReset()
+    vi.mocked(getBookInfo).mockRejectedValue(new Error('book info not mocked'))
     vi.mocked(getShelfBook).mockReset()
     vi.mocked(saveBookProgress).mockReset()
     vi.mocked(saveBookProgress).mockResolvedValue('ok')
@@ -106,11 +109,14 @@ describe('reader local txt chapters', () => {
     await expect(readerStore.fetchChapterContent(0)).resolves.toBe('本地正文')
 
     expect(getBrowserCachedChapter).not.toHaveBeenCalled()
-    expect(getBookContent).toHaveBeenCalledWith({
+    expect(getBookContent).toHaveBeenCalledWith(expect.objectContaining({
       chapterUrl: 'local-txt:abc123#0',
+      bookUrl: 'local-txt:abc123',
       bookSourceUrl: 'local-txt',
+      book: expect.objectContaining({ bookUrl: 'local-txt:abc123' }),
+      chapter: { title: '第一章', url: 'local-txt:abc123#0', index: 0 },
       refresh: 0,
-    })
+    }))
   })
 
   it('loads the latest server reading progress before opening a stale local book', async () => {
@@ -147,10 +153,11 @@ describe('reader local txt chapters', () => {
     expect(readerStore.book?.durChapterIndex).toBe(5)
     expect(readerStore.book?.durChapterPos).toBe(7200)
     expect(readerStore.currentIndex).toBe(5)
-    expect(getChapterList).toHaveBeenCalledWith({
+    expect(getChapterList).toHaveBeenCalledWith(expect.objectContaining({
       bookUrl: 'book-1',
       bookSourceUrl: 'source-1',
-    })
+      book: serverBook,
+    }))
   })
 
   it('prefers newer server progress when restoring the persisted reader session', async () => {
@@ -196,17 +203,21 @@ describe('reader local txt chapters', () => {
     const restored = await readerStore.restorePersistedSession()
 
     expect(getShelfBook).toHaveBeenCalledWith('book-restore')
-    expect(getChapterList).toHaveBeenCalledWith({
+    expect(getChapterList).toHaveBeenCalledWith(expect.objectContaining({
       bookUrl: 'book-restore',
       bookSourceUrl: 'source-1',
-    })
+      book: serverBook,
+    }))
     expect(readerStore.chapters.length).toBe(5)
     expect(getBrowserCachedChapter).toHaveBeenCalledWith('book-restore', 'chapter-5')
-    expect(getBookContent).toHaveBeenCalledWith({
+    expect(getBookContent).toHaveBeenCalledWith(expect.objectContaining({
       chapterUrl: 'chapter-5',
+      bookUrl: 'book-restore',
       bookSourceUrl: 'source-1',
+      book: expect.objectContaining({ bookUrl: 'book-restore' }),
+      chapter: { title: '第5章', url: 'chapter-5', index: 4 },
       refresh: 0,
-    })
+    }))
     expect(restored).toBe(true)
     expect(readerStore.currentIndex).toBe(4)
     expect(readerStore.book?.durChapterPos).toBe(6400)
@@ -256,11 +267,14 @@ describe('reader local txt chapters', () => {
     expect(restored).toBe(true)
     expect(readerStore.currentIndex).toBe(0)
     expect(readerStore.book?.durChapterPos).toBe(0)
-    expect(getBookContent).toHaveBeenCalledWith({
+    expect(getBookContent).toHaveBeenCalledWith(expect.objectContaining({
       chapterUrl: 'chapter-1',
+      bookUrl: 'book-restore',
       bookSourceUrl: 'source-1',
+      book: expect.objectContaining({ bookUrl: 'book-restore' }),
+      chapter: { title: '第1章', url: 'chapter-1', index: 0 },
       refresh: 0,
-    })
+    }))
   })
 })
 

@@ -72,6 +72,20 @@
       @addToShelf="handleAddToShelf"
     />
 
+    <div class="search-more">
+      <button
+        type="button"
+        class="search-more-btn"
+        :disabled="isSearching"
+        @click="doSearch(searchKey, true)"
+      >
+        {{ isSearching ? '正在扩展搜索…' : '搜索更多' }}
+      </button>
+      <span class="search-more-hint">
+        {{ searchHasMoreSources ? '继续搜索尚未完成的书源' : `继续搜索第 ${searchPage + 1} 页` }}
+      </span>
+    </div>
+
     <BookDetailModal
       v-model="showBookDetail"
       :book="selectedBook"
@@ -91,6 +105,7 @@ import { saveBook } from '../api/bookshelf'
 import BookGrid from './BookGrid.vue'
 import BookDetailModal from './BookDetailModal.vue'
 import type { Book, SearchBook } from '../types'
+import { getSearchRequestProgress } from '../utils/searchPagination'
 
 import { storeToRefs } from 'pinia'
 
@@ -107,6 +122,9 @@ const {
   searchScope,
   searchGroup: selectedGroup,
   searchSourceUrl: selectedSourceUrl,
+  searchPage,
+  searchLastIndex,
+  searchHasMoreSources,
 } = storeToRefs(shelfStore)
 
 let eventSource: EventSource | null = null
@@ -183,7 +201,18 @@ function currentSearchParams(key = searchKey.value) {
   }
 }
 
-function doSearch(key: string) {
+function cacheCurrentSearch(searchParams: ReturnType<typeof currentSearchParams>) {
+  shelfStore.cacheSearchResults({
+    ...searchParams,
+    page: searchPage.value,
+    lastIndex: searchLastIndex.value,
+    hasMoreSources: searchHasMoreSources.value,
+    results: shelfStore.searchResults,
+  })
+}
+
+function doSearch(key: string, append = false) {
+  if (shelfStore.isSearching) return
   closeEventSource()
   const searchParams = currentSearchParams(key)
   shelfStore.persistSearchPreferences()
@@ -200,18 +229,34 @@ function doSearch(key: string) {
     return
   }
 
-  const cachedResults = shelfStore.getCachedSearchResults(searchParams)
-  if (cachedResults) {
+  const cachedResults = append ? null : shelfStore.getCachedSearchResults(searchParams)
+  if (cachedResults !== null) {
     shelfStore.searchResults = cachedResults
+    const cachedProgress = shelfStore.getCachedSearchProgress(searchParams)
+    searchPage.value = cachedProgress?.page ?? 1
+    searchLastIndex.value = cachedProgress?.lastIndex ?? -1
+    searchHasMoreSources.value = cachedProgress?.hasMoreSources ?? false
     shelfStore.isSearching = false
     return
   }
 
-  shelfStore.searchResults = []
+  const requestProgress = getSearchRequestProgress({
+    page: searchPage.value,
+    lastIndex: searchLastIndex.value,
+    hasMoreSources: searchHasMoreSources.value,
+  }, append)
+  if (!append) {
+    shelfStore.searchResults = []
+    searchPage.value = 1
+    searchLastIndex.value = -1
+    searchHasMoreSources.value = false
+  }
   shelfStore.isSearching = true
 
   eventSource = searchBookMultiSSE({
     key,
+    page: requestProgress.page,
+    lastIndex: requestProgress.lastIndex,
     concurrentCount: 24,
     bookSourceGroup: searchScope.value === 'group' ? selectedGroup.value : undefined,
     bookSourceUrl: searchScope.value === 'source' ? selectedSourceUrl.value : undefined,
@@ -228,12 +273,19 @@ function doSearch(key: string) {
     } catch { /* skip */ }
   }
 
-  eventSource.addEventListener('end', () => {
+  eventSource.addEventListener('end', (event) => {
+    try {
+      const data = JSON.parse((event as MessageEvent).data)
+      searchPage.value = Number.isFinite(data.page) ? data.page : requestProgress.page
+      searchLastIndex.value = Number.isFinite(data.lastIndex) ? data.lastIndex : requestProgress.lastIndex
+      searchHasMoreSources.value = data.hasMore === true
+    } catch {
+      searchPage.value = requestProgress.page
+      searchLastIndex.value = requestProgress.lastIndex
+      searchHasMoreSources.value = false
+    }
     shelfStore.isSearching = false
-    shelfStore.cacheSearchResults({
-      ...searchParams,
-      results: shelfStore.searchResults,
-    })
+    cacheCurrentSearch(searchParams)
     closeEventSource()
   })
 
@@ -466,6 +518,40 @@ defineEmits<{
   background: var(--color-bg-elevated);
   color: var(--color-text);
   font-size: var(--text-sm);
+}
+
+.search-more {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-6) 0 calc(var(--space-8) + var(--safe-area-bottom));
+}
+
+.search-more-btn {
+  min-width: 148px;
+  min-height: 44px;
+  padding: 0 var(--space-6);
+  border-radius: var(--radius-full);
+  color: white;
+  background: var(--color-primary);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+  transition: opacity var(--duration-fast), transform var(--duration-fast);
+}
+
+.search-more-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.search-more-btn:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.search-more-hint {
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
 }
 
 @media (max-width: 720px) {

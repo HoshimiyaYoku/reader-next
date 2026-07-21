@@ -6,6 +6,7 @@ import { useAiBookStore } from './aiBook'
 import {
   getChapterList,
   getBookContent,
+  getBookInfo,
   getShelfBook,
   saveBookProgress,
   setBookSource as apiSetBookSource,
@@ -520,6 +521,7 @@ export const useReaderStore = defineStore('reader', () => {
       restoredChapters = await getChapterList({
         bookUrl: latestBook.bookUrl,
         bookSourceUrl: latestBook.origin,
+        book: latestBook,
       }).catch(() => session.chapters)
       nextIndex = Math.max(0, Math.min(restoredChapters.length - 1, latestBook.durChapterIndex || 0))
       nextProgress = decodeServerProgress(latestBook.durChapterPos)
@@ -1294,7 +1296,17 @@ export const useReaderStore = defineStore('reader', () => {
   /* ─── Book / chapter ops ─── */
   async function loadBook(b: Book) {
     loading.value = true
-    const latestBook = await resolveLatestShelfBook(b)
+    let latestBook = await resolveLatestShelfBook(b)
+    if (!isLocalTxtBook(latestBook)) {
+      const bookInfo = await getBookInfo(
+        latestBook.bookUrl,
+        latestBook.origin,
+        latestBook,
+      ).catch(() => null)
+      if (bookInfo) {
+        latestBook = { ...latestBook, ...bookInfo }
+      }
+    }
     book.value = latestBook
     chapters.value = []
     content.value = ''
@@ -1309,7 +1321,9 @@ export const useReaderStore = defineStore('reader', () => {
     try {
       chapters.value = await getChapterList({
         bookUrl: latestBook.bookUrl,
+        ...(latestBook.tocUrl ? { tocUrl: latestBook.tocUrl } : {}),
         bookSourceUrl: latestBook.origin,
+        book: latestBook,
       })
       if (chapters.value.length) {
         currentIndex.value = Math.max(0, Math.min(currentIndex.value, chapters.value.length - 1))
@@ -1418,7 +1432,11 @@ export const useReaderStore = defineStore('reader', () => {
     try {
       chapterContent = await getBookContent({
         chapterUrl: chapter.url,
+        bookUrl: book.value.bookUrl,
         bookSourceUrl: book.value.origin,
+        book: book.value,
+        chapter,
+        nextChapterUrl: chapters.value[index + 1]?.url,
         refresh: forceRefresh ? 1 : 0,
       })
     } catch (error) {
@@ -1572,6 +1590,7 @@ export const useReaderStore = defineStore('reader', () => {
       chapters.value = await getChapterList({
         bookUrl: book.value.bookUrl,
         bookSourceUrl: book.value.origin,
+        book: book.value,
         refresh: 1,
       })
       const targetIndex = Math.max(0, Math.min(chapters.value.length - 1, currentIndex.value))

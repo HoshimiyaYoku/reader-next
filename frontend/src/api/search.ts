@@ -17,15 +17,19 @@ export function searchBookMulti(params: {
  */
 export function searchBookMultiSSE(params: {
   key: string
+  page?: number
   bookSourceGroup?: string
   bookSourceUrl?: string
+  lastIndex?: number
   concurrentCount?: number
   searchSize?: number
 }) {
   const query = new URLSearchParams()
   query.set('key', params.key)
+  if (params.page) query.set('page', String(params.page))
   if (params.bookSourceGroup) query.set('bookSourceGroup', params.bookSourceGroup)
   if (params.bookSourceUrl) query.set('bookSourceUrl', params.bookSourceUrl)
+  if (typeof params.lastIndex !== 'undefined') query.set('lastIndex', String(params.lastIndex))
   if (params.concurrentCount) query.set('concurrentCount', String(params.concurrentCount))
   if (params.searchSize) query.set('searchSize', String(params.searchSize))
 

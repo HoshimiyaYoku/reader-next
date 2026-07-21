@@ -61,14 +61,15 @@ export function deleteBooks(books: Partial<Book>[]) {
   return http.post<{ deleted: number }>('/deleteBooks', books).then((r) => r.data)
 }
 
-export function getBookInfo(url: string, origin?: string) {
-  return http.post<Book>('/getBookInfo', { url, bookSourceUrl: origin }).then((r) => r.data)
+export function getBookInfo(url: string, origin?: string, book?: Partial<Book>) {
+  return http.post<Book>('/getBookInfo', { url, bookSourceUrl: origin, book }).then((r) => r.data)
 }
 
 export function getChapterList(params: {
   bookUrl?: string
   tocUrl?: string
   bookSourceUrl?: string
+  book?: Partial<Book>
   refresh?: number
 }) {
   return http.post<BookChapter[]>('/getChapterList', params).then((r) => r.data)
@@ -76,7 +77,11 @@ export function getChapterList(params: {
 
 export function getBookContent(params: {
   chapterUrl?: string
+  bookUrl?: string
   bookSourceUrl?: string
+  book?: Partial<Book>
+  chapter?: Partial<BookChapter>
+  nextChapterUrl?: string
   index?: number
   refresh?: number
 }) {

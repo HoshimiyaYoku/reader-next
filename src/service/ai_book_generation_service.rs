@@ -22,6 +22,7 @@ use crate::model::ai_proxy::{
     ai_proxy_timeout, build_ai_proxy_url, format_ai_proxy_upstream_error,
 };
 use crate::model::book::Book;
+use crate::model::book_chapter::BookChapter;
 use crate::service::ai_book_memory_v3::{
     merge_ai_book_memory_v3, normalize_knowledge_patch_v3, select_ai_book_chapter_view_v3,
     select_ai_book_display_memory_v3, select_working_context_v3,
@@ -382,10 +383,9 @@ impl AiBookGenerationService {
         let source = self
             .resolve_book_source(user_ns, shelf_book, &book_url)
             .await?;
-        let toc_url = shelf_book.toc_url.as_deref().unwrap_or(&book_url);
         let chapters = self
             .book_service
-            .get_chapter_list_with_cache(user_ns, &source, toc_url, false)
+            .get_chapter_list_with_cache_for_book(user_ns, &source, shelf_book, false)
             .await?;
         let chapter = chapters
             .into_iter()
@@ -414,8 +414,14 @@ impl AiBookGenerationService {
         let source = self
             .resolve_book_source(user_ns, shelf_book, &book_url)
             .await?;
+        let book_chapter = BookChapter {
+            title: chapter.title.clone(),
+            url: chapter.chapter_url.clone(),
+            index: chapter.index,
+            ..Default::default()
+        };
         self.book_service
-            .get_content(user_ns, &book_url, &source, &chapter.chapter_url)
+            .get_content_for_chapter(user_ns, &source, shelf_book, &book_chapter, None)
             .await
     }
 

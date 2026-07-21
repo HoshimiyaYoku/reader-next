@@ -14,6 +14,7 @@ import type { Book, BookGroup, SearchBook } from '../types'
 import { deleteBrowserBookCache, listBrowserCacheSummary } from '../utils/browserCache'
 import { isLocalTxtBook } from '../utils/localBook'
 import { clearRecentReadBooks, getRecentReadBookKey, loadRecentReadBooks, removeRecentReadBook } from '../utils/recentBooks'
+import type { SearchProgress } from '../utils/searchPagination'
 
 type SearchScope = 'all' | 'group' | 'source'
 
@@ -27,7 +28,7 @@ type SearchCacheParams = SearchPreferences & {
   key: string
 }
 
-type SearchCacheEntry = SearchCacheParams & {
+type SearchCacheEntry = SearchCacheParams & SearchProgress & {
   results: SearchBook[]
   updatedAt: number
 }
@@ -201,6 +202,9 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
   const searchScope = ref<SearchScope>(searchPreferences.scope)
   const searchGroup = ref('')
   const searchSourceUrl = ref('')
+  const searchPage = ref(1)
+  const searchLastIndex = ref(-1)
+  const searchHasMoreSources = ref(false)
   const searchCache = ref<SearchCacheEntry[]>([])
 
   function persistSearchPreferences() {
@@ -235,9 +239,12 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
     searchResults.value = []
     searchKey.value = ''
     isSearching.value = false
+    searchPage.value = 1
+    searchLastIndex.value = -1
+    searchHasMoreSources.value = false
   }
 
-  function getCachedSearchResults(params: SearchCacheParams) {
+  function findCachedSearchEntry(params: SearchCacheParams) {
     const cacheKey = buildSearchCacheKey(params)
     const now = Date.now()
     const entry = searchCache.value.find((item) => buildSearchCacheKey(item) === cacheKey)
@@ -246,15 +253,32 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
       searchCache.value = searchCache.value.filter((item) => item !== entry)
       return null
     }
-    return entry.results.slice()
+    return entry
   }
 
-  function cacheSearchResults(params: SearchCacheParams & { results: SearchBook[] }) {
+  function getCachedSearchResults(params: SearchCacheParams) {
+    return findCachedSearchEntry(params)?.results.slice() ?? null
+  }
+
+  function getCachedSearchProgress(params: SearchCacheParams): SearchProgress | null {
+    const entry = findCachedSearchEntry(params)
+    if (!entry) return null
+    return {
+      page: entry.page,
+      lastIndex: entry.lastIndex,
+      hasMoreSources: entry.hasMoreSources,
+    }
+  }
+
+  function cacheSearchResults(params: SearchCacheParams & { results: SearchBook[] } & Partial<SearchProgress>) {
     const entry: SearchCacheEntry = {
       key: params.key.trim(),
       scope: params.scope,
       group: params.group || '',
       sourceUrl: params.sourceUrl || '',
+      page: params.page ?? 1,
+      lastIndex: params.lastIndex ?? -1,
+      hasMoreSources: params.hasMoreSources ?? false,
       results: params.results.slice(),
       updatedAt: Date.now(),
     }
@@ -272,6 +296,9 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
       scope: searchScope.value,
       group: searchScope.value === 'group' ? searchGroup.value : '',
       sourceUrl: searchScope.value === 'source' ? searchSourceUrl.value : '',
+      page: searchPage.value,
+      lastIndex: searchLastIndex.value,
+      hasMoreSources: searchHasMoreSources.value,
       results: searchResults.value,
     })
     isSearching.value = false
@@ -375,8 +402,9 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
     groups, activeGroupId, displayGroups, filteredBooks,
     fetchGroups, saveGroup, removeGroup,
     searchResults, isSearching, searchKey,
+    searchPage, searchLastIndex, searchHasMoreSources,
     searchScope, searchGroup, searchSourceUrl, startSearch, clearSearch, isSearchMode,
-    persistSearchPreferences, getCachedSearchResults, cacheSearchResults, pauseSearch,
+    persistSearchPreferences, getCachedSearchResults, getCachedSearchProgress, cacheSearchResults, pauseSearch,
     editMode,
     selectedBookUrls, toggleSelection, selectAll, clearSelection,
     bulkDelete, bulkSetGroup, reorderBooks, moveBookToFront,
