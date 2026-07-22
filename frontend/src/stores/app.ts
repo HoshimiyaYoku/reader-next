@@ -6,29 +6,59 @@ import type { UserInfo, VersionUpdateInfo } from '../types'
 import { applySystemTheme } from '../utils/systemUi'
 import { computeNeedSecureKey, readStoredSecureKey, SECURE_KEY_STORAGE_KEY } from '../utils/secureAccess'
 
+export type ThemeMode = 'system' | 'light' | 'dark'
+type ResolvedTheme = Exclude<ThemeMode, 'system'>
+
 export const useAppStore = defineStore('app', () => {
   const STATS_KEY = 'reader-stats'
   // ─── Theme ───
-  const savedTheme = localStorage.getItem('theme') as 'light' | 'dark' | null
+  const savedTheme = localStorage.getItem('theme') as ResolvedTheme | null
+  const savedThemeMode = localStorage.getItem('themeMode') as ThemeMode | null
   const legacyReaderNight = localStorage.getItem('reader-isNight') === 'true'
-  const theme = ref<'light' | 'dark'>(
-    savedTheme || (legacyReaderNight ? 'dark' : 'light')
+  const prefersDark = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia('(prefers-color-scheme: dark)')
+    : null
+  const systemTheme = ref<ResolvedTheme>(prefersDark?.matches ? 'dark' : 'light')
+  const themeMode = ref<ThemeMode>(
+    savedThemeMode && ['system', 'light', 'dark'].includes(savedThemeMode)
+      ? savedThemeMode
+      : savedTheme || (legacyReaderNight ? 'dark' : 'system')
   )
+  const theme = computed<ResolvedTheme>(() => (
+    themeMode.value === 'system' ? systemTheme.value : themeMode.value
+  ))
 
-  function setTheme(value: 'light' | 'dark') {
-    theme.value = value
-    localStorage.setItem('theme', value)
-    applySystemTheme(value)
+  function setThemeMode(value: ThemeMode) {
+    themeMode.value = value
+  }
+
+  function setTheme(value: ResolvedTheme) {
+    setThemeMode(value)
   }
 
   function toggleTheme() {
     setTheme(theme.value === 'light' ? 'dark' : 'light')
   }
 
+  watch(themeMode, (val) => {
+    localStorage.setItem('themeMode', val)
+  }, { immediate: true })
+
   watch(theme, (val) => {
     localStorage.setItem('theme', val)
     applySystemTheme(val)
   }, { immediate: true })
+
+  const handleSystemThemeChange = (event: MediaQueryListEvent) => {
+    systemTheme.value = event.matches ? 'dark' : 'light'
+  }
+  if (prefersDark) {
+    if (typeof prefersDark.addEventListener === 'function') {
+      prefersDark.addEventListener('change', handleSystemThemeChange)
+    } else {
+      prefersDark.addListener(handleSystemThemeChange)
+    }
+  }
 
   // ─── User ───
   const userInfo = ref<UserInfo | null>(null)
@@ -266,7 +296,7 @@ export const useAppStore = defineStore('app', () => {
   }
 
   return {
-    theme, setTheme, toggleTheme,
+    theme, themeMode, setTheme, setThemeMode, toggleTheme,
     userInfo, isSecureMode, needSecureKey, secureKeyRequired, adminAuthorized, secureKey, isLoggedIn,
     versionUpdate, versionUpdateLoading, versionUpdateChecked, canCheckVersionUpdate, hasVersionUpdateReminder,
     fetchUserInfo, setUser, clearUser, setSecureKey, updateUserInfo, checkVersionUpdate, dismissVersionUpdateReminder,

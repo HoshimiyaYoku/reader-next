@@ -90,6 +90,24 @@ describe('reader local txt chapters', () => {
     expect(readerStore.displayContent).toBe('爱学习')
   })
 
+  it('keeps typography shared while day and night colors are configured separately', () => {
+    const readerStore = useReaderStore()
+    readerStore.updateConfig('fontSize', 22)
+    readerStore.updateReaderColor('light', 'backgroundColor', '#fff4dc')
+    readerStore.updateReaderColor('light', 'textColor', '#3a2a1e')
+    readerStore.updateReaderColor('dark', 'backgroundColor', '#101722')
+    readerStore.updateReaderColor('dark', 'textColor', '#d7deea')
+
+    readerStore.setThemeMode('light')
+    expect(readerStore.currentTheme.body).toBe('#fff4dc')
+    expect(readerStore.currentTheme.fontColor).toBe('#3a2a1e')
+
+    readerStore.setThemeMode('dark')
+    expect(readerStore.currentTheme.body).toBe('#101722')
+    expect(readerStore.currentTheme.fontColor).toBe('#d7deea')
+    expect(readerStore.config.fontSize).toBe(22)
+  })
+
   it('fetches uploaded local txt content from backend even when browser reports offline', async () => {
     vi.mocked(getBookContent).mockResolvedValue('本地正文')
     vi.mocked(getBrowserCachedChapter).mockResolvedValue(null)

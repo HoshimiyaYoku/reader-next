@@ -7,22 +7,65 @@
     <div class="settings-sep"></div>
 
     <div class="settings-body">
-      <!-- 阅读主题 -->
       <div class="setting-row">
-        <label>阅读主题</label>
-        <div class="theme-swatches">
-          <button
-            v-for="(t, i) in themePresets"
-            :key="i"
-            class="swatch"
-            :class="{ active: store.themeIndex === i && !store.isNight }"
-            :style="{ background: t.body }"
-            @click="store.setThemeIndex(i)"
-          >
-            <svg v-if="store.themeIndex === i && !store.isNight" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5" /></svg>
-          </button>
+        <label>显示模式</label>
+        <div class="btn-group">
+          <button class="opt-btn" :class="{ active: store.themeMode === 'system' }" @click="store.setThemeMode('system')">跟随系统</button>
+          <button class="opt-btn" :class="{ active: store.themeMode === 'light' }" @click="store.setThemeMode('light')">白天</button>
+          <button class="opt-btn" :class="{ active: store.themeMode === 'dark' }" @click="store.setThemeMode('dark')">黑夜</button>
         </div>
       </div>
+
+      <div class="theme-style-grid">
+        <section class="theme-style-card">
+          <div class="theme-style-title">白天样式</div>
+          <label class="color-field">
+            <span>背景颜色</span>
+            <input type="color" :value="store.dayColorStyle.backgroundColor" @input="updateColor('light', 'backgroundColor', $event)" />
+            <code>{{ store.dayColorStyle.backgroundColor }}</code>
+          </label>
+          <label class="color-field">
+            <span>文字颜色</span>
+            <input type="color" :value="store.dayColorStyle.textColor" @input="updateColor('light', 'textColor', $event)" />
+            <code>{{ store.dayColorStyle.textColor }}</code>
+          </label>
+          <div class="theme-swatches" aria-label="白天预设">
+            <button
+              v-for="item in dayThemePresets"
+              :key="item.index"
+              class="swatch"
+              :title="item.preset.name"
+              :style="{ background: item.preset.body, color: item.preset.fontColor }"
+              @click="store.applyThemePreset('light', item.index)"
+            ><span>A</span></button>
+          </div>
+        </section>
+
+        <section class="theme-style-card">
+          <div class="theme-style-title">黑夜样式</div>
+          <label class="color-field">
+            <span>背景颜色</span>
+            <input type="color" :value="store.nightColorStyle.backgroundColor" @input="updateColor('dark', 'backgroundColor', $event)" />
+            <code>{{ store.nightColorStyle.backgroundColor }}</code>
+          </label>
+          <label class="color-field">
+            <span>文字颜色</span>
+            <input type="color" :value="store.nightColorStyle.textColor" @input="updateColor('dark', 'textColor', $event)" />
+            <code>{{ store.nightColorStyle.textColor }}</code>
+          </label>
+          <div class="theme-swatches" aria-label="黑夜预设">
+            <button
+              v-for="item in nightThemePresets"
+              :key="item.index"
+              class="swatch"
+              :title="item.preset.name"
+              :style="{ background: item.preset.body, color: item.preset.fontColor }"
+              @click="store.applyThemePreset('dark', item.index)"
+            ><span>A</span></button>
+          </div>
+        </section>
+      </div>
+      <div class="setting-hint theme-hint">白天与黑夜只分别保存背景色和文字色，字体、字号、行距等排版设置始终共用。</div>
 
       <!-- 正文字体 -->
       <div class="setting-row">
@@ -404,8 +447,17 @@ const aiBookStore = useAiBookStore()
 const appStore = useAppStore()
 const config = computed(() => store.config)
 const theme = computed(() => store.currentTheme)
+const dayThemePresets = themePresets.slice(0, -2).map((preset, index) => ({ preset, index }))
+const nightThemePresets = themePresets.slice(-2).map((preset, offset) => ({
+  preset,
+  index: themePresets.length - 2 + offset,
+}))
 const serverModelLoaded = ref(false)
 const canUseServerModel = computed(() => Boolean(aiBookStore.serverModelConfig?.canUseServerModel))
+
+function updateColor(mode: 'light' | 'dark', key: 'backgroundColor' | 'textColor', event: Event) {
+  store.updateReaderColor(mode, key, (event.target as HTMLInputElement).value)
+}
 
 function step(key: 'fontSize' | 'fontWeight' | 'pageWidth' | 'animateDuration' | 'scrollPixel' | 'pageSpeed', delta: number, min: number, max: number) {
   const val = Math.max(min, Math.min(max, (config.value[key] as number) + delta))
@@ -555,6 +607,52 @@ onMounted(async () => {
   opacity: 0.65;
 }
 
+.theme-hint {
+  margin-top: -12px;
+}
+
+.theme-style-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.theme-style-card {
+  padding: 14px;
+  border: 1px solid rgba(127, 127, 127, 0.2);
+  border-radius: 14px;
+  background: rgba(127, 127, 127, 0.06);
+}
+
+.theme-style-title {
+  margin-bottom: 10px;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.color-field {
+  display: grid;
+  grid-template-columns: 1fr 36px 64px;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.color-field input {
+  width: 36px;
+  height: 30px;
+  padding: 2px;
+  border: 1px solid rgba(127, 127, 127, 0.25);
+  border-radius: 8px;
+  background: transparent;
+}
+
+.color-field code {
+  font-size: 11px;
+  opacity: 0.72;
+}
+
 .server-speech-note {
   margin-left: 90px;
   padding: 12px 14px;
@@ -598,6 +696,11 @@ onMounted(async () => {
   width: 16px;
   height: 16px;
   color: var(--color-primary, #c97f3a);
+}
+
+.swatch span {
+  font-size: 14px;
+  font-weight: 700;
 }
 
 /* Button groups */
@@ -677,6 +780,10 @@ onMounted(async () => {
 @media (max-width: 420px) {
   .read-settings {
     padding: 16px;
+  }
+
+  .theme-style-grid {
+    grid-template-columns: 1fr;
   }
 
   .settings-header {

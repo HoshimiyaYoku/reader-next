@@ -19,10 +19,13 @@ import type { Book, BookGroup, Bookmark, BookSource, ReplaceRule, RssSource } fr
 const BACKUP_VERSION = 1
 const LOCAL_STORAGE_KEYS = [
   'theme',
+  'themeMode',
   'reader-stats',
   'readConfig',
   'reader-themeIndex',
   'reader-isNight',
+  'reader-dayColorStyle',
+  'reader-nightColorStyle',
   'reader-speechConfig',
   'reader-last-session',
   'reader-currentIndex',

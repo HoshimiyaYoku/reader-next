@@ -276,7 +276,18 @@
             <div class="theme-toggle">
               <button
                 class="theme-option"
-                :class="{ active: appStore.theme === 'light' }"
+                :class="{ active: appStore.themeMode === 'system' }"
+                @click="setTheme('system')"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                  <rect x="3" y="4" width="18" height="12" rx="2" />
+                  <path d="M8 20h8M12 16v4" />
+                </svg>
+                跟随系统
+              </button>
+              <button
+                class="theme-option"
+                :class="{ active: appStore.themeMode === 'light' }"
                 @click="setTheme('light')"
               >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
@@ -287,7 +298,7 @@
               </button>
               <button
                 class="theme-option"
-                :class="{ active: appStore.theme === 'dark' }"
+                :class="{ active: appStore.themeMode === 'dark' }"
                 @click="setTheme('dark')"
               >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
@@ -473,8 +484,8 @@ function refreshCache() {
   close()
 }
 
-function setTheme(t: 'light' | 'dark') {
-  appStore.setTheme(t)
+function setTheme(t: 'system' | 'light' | 'dark') {
+  appStore.setThemeMode(t)
 }
 
 async function handleInstallPwa() {

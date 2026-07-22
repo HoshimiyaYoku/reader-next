@@ -170,6 +170,28 @@ export const themePresets: ThemePreset[] = [
   { name: '暗夜', body: '#141414', content: '#16213e', fontColor: '#c8c8c8', popup: '#141414' },
 ]
 
+export type ReaderColorMode = 'light' | 'dark'
+export interface ReaderColorStyle {
+  backgroundColor: string
+  textColor: string
+}
+
+function loadReaderColorStyle(key: string, fallback: ReaderColorStyle): ReaderColorStyle {
+  try {
+    const saved = JSON.parse(localStorage.getItem(key) || '{}') as Partial<ReaderColorStyle>
+    return {
+      backgroundColor: typeof saved.backgroundColor === 'string' && saved.backgroundColor
+        ? saved.backgroundColor
+        : fallback.backgroundColor,
+      textColor: typeof saved.textColor === 'string' && saved.textColor
+        ? saved.textColor
+        : fallback.textColor,
+    }
+  } catch {
+    return { ...fallback }
+  }
+}
+
 /* ─── Font presets ─── */
 export const fontPresets = [
   { label: '系统', value: 'system', family: '' },
@@ -333,25 +355,80 @@ export const useReaderStore = defineStore('reader', () => {
   }
 
   /* ─── Theme ─── */
-  const themeIndex = ref(parseInt(localStorage.getItem('reader-themeIndex') || '0'))
+  const storedThemeIndex = parseInt(localStorage.getItem('reader-themeIndex') || '0')
+  const themeIndex = ref(Number.isInteger(storedThemeIndex) && themePresets[storedThemeIndex]
+    ? storedThemeIndex
+    : 0)
+  const legacyDayTheme = themePresets[themeIndex.value] || themePresets[0]
+  const dayColorStyle = reactive(loadReaderColorStyle('reader-dayColorStyle', {
+    backgroundColor: legacyDayTheme.body,
+    textColor: legacyDayTheme.fontColor,
+  }))
+  const nightPreset = themePresets[themePresets.length - 1]
+  const nightColorStyle = reactive(loadReaderColorStyle('reader-nightColorStyle', {
+    backgroundColor: nightPreset.body,
+    textColor: nightPreset.fontColor,
+  }))
+  const themeMode = computed(() => appStore.themeMode)
   const isNight = computed({
     get: () => appStore.theme === 'dark',
     set: (value: boolean) => {
-      appStore.setTheme(value ? 'dark' : 'light')
+      appStore.setThemeMode(value ? 'dark' : 'light')
       localStorage.setItem('reader-isNight', String(value))
     },
   })
 
   const currentTheme = computed(() => {
-    if (isNight.value) return themePresets[themePresets.length - 1]
-    return themePresets[themeIndex.value] || themePresets[0]
+    const colors = isNight.value ? nightColorStyle : dayColorStyle
+    return {
+      name: isNight.value ? '夜间自定义' : '白天自定义',
+      body: colors.backgroundColor,
+      content: colors.backgroundColor,
+      popup: colors.backgroundColor,
+      fontColor: colors.textColor,
+    }
   })
 
   function setThemeIndex(idx: number) {
+    const preset = themePresets[idx]
+    if (!preset) return
     themeIndex.value = idx
-    isNight.value = false
+    dayColorStyle.backgroundColor = preset.body
+    dayColorStyle.textColor = preset.fontColor
+    persistReaderColorStyle('light')
+    appStore.setThemeMode('light')
     localStorage.setItem('reader-themeIndex', String(idx))
     localStorage.setItem('reader-isNight', 'false')
+  }
+
+  function setThemeMode(mode: 'system' | ReaderColorMode) {
+    appStore.setThemeMode(mode)
+    localStorage.setItem('reader-isNight', String(appStore.theme === 'dark'))
+  }
+
+  function persistReaderColorStyle(mode: ReaderColorMode) {
+    const colors = mode === 'dark' ? nightColorStyle : dayColorStyle
+    localStorage.setItem(`reader-${mode === 'dark' ? 'night' : 'day'}ColorStyle`, JSON.stringify(colors))
+  }
+
+  function updateReaderColor(mode: ReaderColorMode, key: keyof ReaderColorStyle, value: string) {
+    if (!value) return
+    const colors = mode === 'dark' ? nightColorStyle : dayColorStyle
+    colors[key] = value
+    persistReaderColorStyle(mode)
+  }
+
+  function applyThemePreset(mode: ReaderColorMode, idx: number) {
+    const preset = themePresets[idx]
+    if (!preset) return
+    const colors = mode === 'dark' ? nightColorStyle : dayColorStyle
+    colors.backgroundColor = preset.body
+    colors.textColor = preset.fontColor
+    if (mode === 'light') {
+      themeIndex.value = idx
+      localStorage.setItem('reader-themeIndex', String(idx))
+    }
+    persistReaderColorStyle(mode)
   }
 
   function toggleNight() {
@@ -1732,7 +1809,8 @@ export const useReaderStore = defineStore('reader', () => {
       getPersistedReaderSession, restorePersistedSession,
       persistProgress, flushProgressToServer, flushProgressToServerKeepalive,
       config, updateConfig, resetConfig, saveConfig,
-    themeIndex, isNight, currentTheme, setThemeIndex, toggleNight,
+    themeIndex, themeMode, isNight, currentTheme, dayColorStyle, nightColorStyle,
+    setThemeIndex, setThemeMode, updateReaderColor, applyThemePreset, toggleNight,
     autoReading, autoReadingTimer, toggleAutoReading, stopAutoReading,
     activePanel, openPanel, togglePanel, backPanel, closePanel,
     bookmarks, fetchBookmarks, addBookmark, removeBookmark, removeBookmarks,
