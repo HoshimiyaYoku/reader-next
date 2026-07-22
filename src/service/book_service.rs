@@ -686,17 +686,16 @@ impl BookService {
         visited_page_urls.insert(toc_url.to_string());
 
         // Add first page chapters with deduplication
-        for ch in chapters {
+        for mut ch in chapters {
             if seen_chapter_urls.contains(&ch.url) {
                 continue;
             }
             seen_chapter_urls.insert(ch.url.clone());
-            all_chapters.push(BookChapter {
-                title: ch.title,
-                url: ch.url,
-                index: chapter_index,
-                ..Default::default()
-            });
+            ch.index = chapter_index;
+            if ch.book_url.is_none() {
+                ch.book_url = Some(book.book_url.clone());
+            }
+            all_chapters.push(ch);
             chapter_index += 1;
         }
 
@@ -728,17 +727,16 @@ impl BookService {
                     .parse_chapter_list_response(source, res, bindings.clone())
                     .await?;
 
-                for ch in chapters {
+                for mut ch in chapters {
                     if seen_chapter_urls.contains(&ch.url) {
                         continue;
                     }
                     seen_chapter_urls.insert(ch.url.clone());
-                    all_chapters.push(BookChapter {
-                        title: ch.title,
-                        url: ch.url,
-                        index: chapter_index,
-                        ..Default::default()
-                    });
+                    ch.index = chapter_index;
+                    if ch.book_url.is_none() {
+                        ch.book_url = Some(book.book_url.clone());
+                    }
+                    all_chapters.push(ch);
                     chapter_index += 1;
                 }
             }
@@ -764,17 +762,16 @@ impl BookService {
                     .parse_chapter_list_response(source, res, bindings.clone())
                     .await?;
 
-                for ch in chapters {
+                for mut ch in chapters {
                     if seen_chapter_urls.contains(&ch.url) {
                         continue;
                     }
                     seen_chapter_urls.insert(ch.url.clone());
-                    all_chapters.push(BookChapter {
-                        title: ch.title,
-                        url: ch.url,
-                        index: chapter_index,
-                        ..Default::default()
-                    });
+                    ch.index = chapter_index;
+                    if ch.book_url.is_none() {
+                        ch.book_url = Some(book.book_url.clone());
+                    }
+                    all_chapters.push(ch);
                     chapter_index += 1;
                 }
 
@@ -1470,6 +1467,7 @@ fn preserve_book_context(parsed: &mut Book, input: &Book, source_url: &str) {
     preserve_optional!(update_time);
     preserve_optional!(can_re_name);
     preserve_optional!(download_urls);
+    preserve_optional!(variable);
 }
 
 async fn run_parser_blocking<T, F>(task: F) -> Result<T, AppError>

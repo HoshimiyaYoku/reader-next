@@ -1589,6 +1589,7 @@ export const useReaderStore = defineStore('reader', () => {
       preloadedContent.value.clear()
       chapters.value = await getChapterList({
         bookUrl: book.value.bookUrl,
+        ...(book.value.tocUrl ? { tocUrl: book.value.tocUrl } : {}),
         bookSourceUrl: book.value.origin,
         book: book.value,
         refresh: 1,

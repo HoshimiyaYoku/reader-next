@@ -47,6 +47,14 @@
     <!-- Bottom Bar -->
     <Transition name="slide-up">
       <div v-show="show" class="m-bottom-bar">
+        <div class="chapter-status-row" aria-live="polite">
+          <span class="chapter-status-title">
+            {{ store.currentChapter?.title || '正在加载章节' }}
+          </span>
+          <span class="chapter-status-count">
+            {{ store.chapters.length ? `第 ${store.currentIndex + 1} / ${store.chapters.length} 章` : '暂无目录' }}
+          </span>
+        </div>
         <div class="progress-row">
           <input
             class="page-slider"
@@ -274,6 +282,30 @@ function handlePageInput(event: Event) {
   gap: 16px;
   box-sizing: border-box;
   pointer-events: auto;
+}
+
+.chapter-status-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.chapter-status-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.chapter-status-count {
+  flex: 0 0 auto;
+  font-size: 12px;
+  opacity: 0.65;
+  white-space: nowrap;
 }
 
 .progress-row {

@@ -30,4 +30,6 @@ pub struct Book {
     pub update_time: Option<String>,
     pub can_re_name: Option<String>,
     pub download_urls: Option<String>,
+    /// Per-book variables written by Legado aggregation rules.
+    pub variable: Option<String>,
 }

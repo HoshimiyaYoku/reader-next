@@ -11,9 +11,9 @@ use reqwest::Method;
 use rquickjs::function::{Func, Opt};
 use rquickjs::{Context, Object, Runtime, Value};
 use serde_json::Value as JsonValue;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 static JS_KV: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(|| Mutex::new(HashMap::new()));
@@ -48,6 +48,7 @@ thread_local! {
     static ACTIVE_JS_LIB: RefCell<Option<String>> = const { RefCell::new(None) };
     static ACTIVE_SOURCE: RefCell<Option<JsSourceContext>> = const { RefCell::new(None) };
     static ACTIVE_JS_BINDINGS: RefCell<HashMap<String, JsonValue>> = RefCell::new(HashMap::new());
+    static ACTIVE_CHAPTER_VARIABLE_TARGET: Cell<bool> = const { Cell::new(false) };
 }
 
 #[derive(Clone)]
@@ -92,6 +93,106 @@ pub fn with_js_bindings<T>(bindings: &HashMap<String, JsonValue>, f: impl FnOnce
         cell.replace(previous);
         result
     })
+}
+
+pub fn with_chapter_variable_target<T>(f: impl FnOnce() -> T) -> T {
+    ACTIVE_CHAPTER_VARIABLE_TARGET.with(|cell| {
+        let previous = cell.replace(true);
+        let result = f();
+        cell.set(previous);
+        result
+    })
+}
+
+pub fn current_book_variable() -> Option<String> {
+    current_scoped_variable("__book_variable:")
+}
+
+pub fn current_chapter_variable() -> Option<String> {
+    current_scoped_variable("__chapter_variable:")
+}
+
+pub fn reset_book_variable() {
+    reset_scoped_variable("__book_variable:");
+}
+
+pub fn reset_chapter_variable() {
+    reset_scoped_variable("__chapter_variable:");
+}
+
+fn current_scoped_variable(prefix: &str) -> Option<String> {
+    ACTIVE_SOURCE.with(|cell| {
+        let source = cell.borrow();
+        let source = source.as_ref()?;
+        let state = source.runtime.shared();
+        let values = scoped_variable_map(
+            &state.lock().unwrap_or_else(|err| err.into_inner()).java_kv,
+            prefix,
+        );
+        (!values.is_empty())
+            .then(|| serde_json::to_string(&values).unwrap_or_else(|_| "{}".to_string()))
+    })
+}
+
+fn reset_scoped_variable(prefix: &str) {
+    ACTIVE_SOURCE.with(|cell| {
+        let source = cell.borrow();
+        let Some(source) = source.as_ref() else {
+            return;
+        };
+        source
+            .runtime
+            .shared()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .java_kv
+            .retain(|key, _| !key.starts_with(prefix));
+    });
+}
+
+fn scoped_variable_map(values: &HashMap<String, String>, prefix: &str) -> HashMap<String, String> {
+    values
+        .iter()
+        .filter_map(|(key, value)| {
+            key.strip_prefix(prefix)
+                .map(|key| (key.to_string(), value.clone()))
+        })
+        .collect()
+}
+
+fn binding_variable_map(
+    active: &HashMap<String, JsonValue>,
+    explicit: Option<&HashMap<String, JsonValue>>,
+    target: &str,
+) -> Option<HashMap<String, String>> {
+    let binding = explicit
+        .and_then(|bindings| bindings.get(target))
+        .or_else(|| active.get(target))?;
+    let variable = binding.as_object()?.get("variable")?;
+    Some(variable_json_map(variable))
+}
+
+fn variable_json_map(value: &JsonValue) -> HashMap<String, String> {
+    let parsed = match value {
+        JsonValue::String(raw) => serde_json::from_str::<JsonValue>(raw).ok(),
+        JsonValue::Object(_) => Some(value.clone()),
+        _ => None,
+    };
+    parsed
+        .and_then(|value| value.as_object().cloned())
+        .map(|values| {
+            values
+                .into_iter()
+                .map(|(key, value)| {
+                    let value = value
+                        .as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| value.to_string());
+                    (key, value)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub fn eval_js(script: &str, input: &str, base_url: &str) -> anyhow::Result<String> {
@@ -202,6 +303,26 @@ fn eval_js_inner_with_source(
             .map(|source| source.runtime.clone())
             .unwrap_or_default();
         let runtime_state = runtime.shared();
+        let has_chapter_binding = bindings.is_some_and(|values| values.contains_key("chapter"))
+            || active_bindings.contains_key("chapter")
+            || ACTIVE_CHAPTER_VARIABLE_TARGET.with(Cell::get);
+        let (stored_book_variables, stored_chapter_variables) = {
+            let state = runtime_state
+                .lock()
+                .unwrap_or_else(|err| err.into_inner());
+            (
+                scoped_variable_map(&state.java_kv, "__book_variable:"),
+                scoped_variable_map(&state.java_kv, "__chapter_variable:"),
+            )
+        };
+        let book_variables = Arc::new(Mutex::new(
+            binding_variable_map(&active_bindings, bindings, "book")
+                .unwrap_or(stored_book_variables),
+        ));
+        let chapter_variables = Arc::new(Mutex::new(
+            binding_variable_map(&active_bindings, bindings, "chapter")
+                .unwrap_or(stored_chapter_variables),
+        ));
         let source_url = active_source
             .as_ref()
             .map(|source| source.book_source_url.clone())
@@ -484,11 +605,29 @@ fn eval_js_inner_with_source(
             }),
         )?;
         let state = runtime_state.clone();
+        let book_values = book_variables.clone();
+        let chapter_values = chapter_variables.clone();
         java_obj.set(
             "get",
             Func::new(move |key: String| -> Option<String> {
                 if is_http_url(&key) {
                     return java_request_simple("GET", &key, None).ok();
+                }
+                if let Some(value) = chapter_values
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .get(&key)
+                    .cloned()
+                {
+                    return Some(value);
+                }
+                if let Some(value) = book_values
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .get(&key)
+                    .cloned()
+                {
+                    return Some(value);
                 }
                 state
                     .lock()
@@ -505,18 +644,34 @@ fn eval_js_inner_with_source(
             }),
         )?;
         let state = runtime_state.clone();
+        let book_values = book_variables.clone();
+        let chapter_values = chapter_variables.clone();
         java_obj.set(
             "put",
             Func::new(move |key: String, value: String| -> String {
                 if is_http_url(&key) {
                     return java_request_simple("PUT", &key, Some(value)).unwrap_or_default();
                 }
-                state
-                    .lock()
-                    .unwrap_or_else(|err| err.into_inner())
-                    .java_kv
-                    .insert(key, value);
-                String::new()
+                let mut state = state.lock().unwrap_or_else(|err| err.into_inner());
+                if has_chapter_binding {
+                    chapter_values
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .insert(key.clone(), value.clone());
+                    state
+                        .java_kv
+                        .insert(format!("__chapter_variable:{key}"), value.clone());
+                } else {
+                    book_values
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .insert(key.clone(), value.clone());
+                    state
+                        .java_kv
+                        .insert(format!("__book_variable:{key}"), value.clone());
+                }
+                state.java_kv.insert(key, value.clone());
+                value
             }),
         )?;
         java_obj.set(
@@ -625,22 +780,52 @@ fn eval_js_inner_with_source(
 
         let book_obj = Object::new(ctx.clone())?;
         let state = runtime_state.clone();
+        let values = book_variables.clone();
         book_obj.set(
             "getVariable",
             Func::new(move |key: String| -> String {
-                state
+                values
                     .lock()
                     .unwrap_or_else(|err| err.into_inner())
-                    .java_kv
-                    .get(&format!("__book_variable:{key}"))
+                    .get(&key)
                     .cloned()
+                    .or_else(|| {
+                        state
+                            .lock()
+                            .unwrap_or_else(|err| err.into_inner())
+                            .java_kv
+                            .get(&format!("__book_variable:{key}"))
+                            .cloned()
+                    })
                     .unwrap_or_default()
             }),
         )?;
         let state = runtime_state.clone();
+        let values = book_variables.clone();
         book_obj.set(
             "setVariable",
             Func::new(move |key: String, value: String| -> bool {
+                values
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .insert(key.clone(), value.clone());
+                state
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .java_kv
+                    .insert(format!("__book_variable:{key}"), value);
+                true
+            }),
+        )?;
+        let state = runtime_state.clone();
+        let values = book_variables.clone();
+        book_obj.set(
+            "putVariable",
+            Func::new(move |key: String, value: String| -> bool {
+                values
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .insert(key.clone(), value.clone());
                 state
                     .lock()
                     .unwrap_or_else(|err| err.into_inner())
@@ -660,6 +845,61 @@ fn eval_js_inner_with_source(
         globals.set("book", book_obj)?;
 
         let chapter_obj = Object::new(ctx.clone())?;
+        let state = runtime_state.clone();
+        let values = chapter_variables.clone();
+        chapter_obj.set(
+            "getVariable",
+            Func::new(move |key: String| -> String {
+                values
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .get(&key)
+                    .cloned()
+                    .or_else(|| {
+                        state
+                            .lock()
+                            .unwrap_or_else(|err| err.into_inner())
+                            .java_kv
+                            .get(&format!("__chapter_variable:{key}"))
+                            .cloned()
+                    })
+                    .unwrap_or_default()
+            }),
+        )?;
+        let state = runtime_state.clone();
+        let values = chapter_variables.clone();
+        chapter_obj.set(
+            "setVariable",
+            Func::new(move |key: String, value: String| -> bool {
+                values
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .insert(key.clone(), value.clone());
+                state
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .java_kv
+                    .insert(format!("__chapter_variable:{key}"), value);
+                true
+            }),
+        )?;
+        let state = runtime_state.clone();
+        let values = chapter_variables.clone();
+        chapter_obj.set(
+            "putVariable",
+            Func::new(move |key: String, value: String| -> bool {
+                values
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .insert(key.clone(), value.clone());
+                state
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .java_kv
+                    .insert(format!("__chapter_variable:{key}"), value);
+                true
+            }),
+        )?;
         chapter_obj.set("index", 0)?;
         chapter_obj.set("title", "")?;
         globals.set("chapter", chapter_obj)?;
@@ -1167,23 +1407,52 @@ mod context_binding_tests {
     #[test]
     fn request_bindings_fill_book_and_chapter_without_losing_compat_methods() {
         let bindings = HashMap::from([
-            ("book".to_string(), json!({ "name": "聚合测试书" })),
+            (
+                "book".to_string(),
+                json!({ "name": "聚合测试书", "variable": "{\"bookToken\":\"saved-book\"}" }),
+            ),
             (
                 "chapter".to_string(),
-                json!({ "title": "第一章", "index": 7 }),
+                json!({ "title": "第一章", "index": 7, "variable": "{\"chapterToken\":\"saved-chapter\"}" }),
             ),
             ("title".to_string(), json!("第一章")),
         ]);
 
         let result = with_js_bindings(&bindings, || {
             eval_js(
-                "book.name + '|' + chapter.title + '|' + chapter.index + '|' + title + '|' + typeof book.getVariable",
+                "book.name + '|' + chapter.title + '|' + chapter.index + '|' + title + '|' + book.getVariable('bookToken') + '|' + chapter.getVariable('chapterToken') + '|' + java.get('chapterToken') + '|' + typeof book.putVariable",
                 "",
                 "https://example.test/book",
             )
         })
         .unwrap();
 
-        assert_eq!(result, "聚合测试书|第一章|7|第一章|function");
+        assert_eq!(
+            result,
+            "聚合测试书|第一章|7|第一章|saved-book|saved-chapter|saved-chapter|function"
+        );
+    }
+
+    #[test]
+    fn aggregation_variables_written_by_book_and_java_are_serializable() {
+        let source = BookSource {
+            book_source_url: "https://source.example".to_string(),
+            ..Default::default()
+        };
+
+        let variable = with_js_source(&source, || {
+            reset_book_variable();
+            eval_js(
+                "book.putVariable('token', 'saved'); java.put('route', 'detail-1');",
+                "",
+                "https://source.example/search",
+            )
+            .unwrap();
+            current_book_variable().unwrap()
+        });
+        let variable: JsonValue = serde_json::from_str(&variable).unwrap();
+
+        assert_eq!(variable["token"], "saved");
+        assert_eq!(variable["route"], "detail-1");
     }
 }

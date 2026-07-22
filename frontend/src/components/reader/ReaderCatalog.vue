@@ -20,11 +20,14 @@
       <div class="header-actions">
         <button
           v-if="activeTab === 'chapters'"
-          class="icon-btn"
+          class="refresh-btn"
           :disabled="store.chaptersLoading"
+          title="重新从书源获取目录"
+          aria-label="刷新目录"
           @click="refreshCatalog"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" /></svg>
+          <span>{{ store.chaptersLoading ? '刷新中' : '刷新目录' }}</span>
         </button>
         <button class="close-btn" @click="store.closePanel()">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12" /></svg>
@@ -222,9 +225,14 @@ async function goToChapter(index: number) {
 }
 
 async function refreshCatalog() {
-  await store.refreshChapters()
-  await refreshCachedChapterState()
-  scrollToCurrent()
+  try {
+    await store.refreshChapters()
+    await refreshCachedChapterState()
+    scrollToCurrent()
+    appStore.showToast(`目录已刷新，共 ${store.chapters.length} 章`, 'success')
+  } catch (error) {
+    appStore.showToast((error as Error).message || '目录刷新失败', 'error')
+  }
 }
 
 async function refreshCachedChapterState() {
@@ -337,9 +345,8 @@ function formatDate(ts?: number) {
   border-bottom-color: var(--color-primary, #c97f3a);
 }
 
-.icon-btn,
+.refresh-btn,
 .close-btn {
-  width: 32px;
   height: 32px;
   display: flex;
   align-items: center;
@@ -352,13 +359,30 @@ function formatDate(ts?: number) {
   cursor: pointer;
 }
 
+.refresh-btn {
+  gap: 5px;
+  padding: 0 9px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.close-btn {
+  width: 32px;
+}
+
+.refresh-btn svg,
+.close-btn svg {
+  width: 17px;
+  height: 17px;
+}
+
 .header-actions {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.icon-btn:disabled {
+.refresh-btn:disabled {
   opacity: 0.35;
   cursor: default;
 }

@@ -3317,6 +3317,9 @@ fn merge_book(target: &mut Book, info: Book) {
     if target.toc_url.is_none() {
         target.toc_url = info.toc_url;
     }
+    if target.variable.is_none() {
+        target.variable = info.variable;
+    }
     if target.intro.is_none() {
         target.intro = info.intro;
     }

@@ -371,13 +371,7 @@ function handleBookInfo(book: Book | SearchBook) {
 
 async function handleAddToShelf(book: Book | SearchBook) {
   try {
-    await saveBook({
-      name: book.name,
-      author: book.author,
-      bookUrl: book.bookUrl,
-      origin: book.origin,
-      coverUrl: book.coverUrl,
-    })
+    await saveBook({ ...(book as Book) })
     appStore.showToast(`"${book.name}" 已加入书架`, 'success')
     shelfStore.fetchBooks()
   } catch (e: unknown) {
