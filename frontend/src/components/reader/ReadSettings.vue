@@ -258,20 +258,26 @@
         <div class="btn-group">
           <button class="opt-btn" :class="{ active: store.speechConfig.provider === 'system' }" @click="store.setSpeechProvider('system')">系统语音</button>
           <button class="opt-btn" :class="{ active: store.speechConfig.provider === 'openai' }" @click="store.setSpeechProvider('openai')">OpenAI Speech</button>
+          <button class="opt-btn" :class="{ active: store.speechConfig.provider === 'azure' }" @click="store.setSpeechProvider('azure')">Azure Speech</button>
         </div>
       </div>
 
-      <div v-if="store.speechConfig.provider === 'system'" class="setting-row setting-row-top">
-        <label>朗读音源</label>
-        <select class="voice-select" :value="store.speechConfig.voiceName" @change="handleVoiceChange">
-          <option value="">系统默认</option>
-          <option v-for="voice in store.voiceList" :key="voice.name" :value="voice.name">
-            {{ voice.name }} ({{ voice.lang }})
-          </option>
-        </select>
-      </div>
+      <template v-if="store.speechConfig.provider === 'system'">
+        <div class="setting-row setting-row-top">
+          <label>朗读音源</label>
+          <select class="voice-select" :value="store.speechConfig.voiceName" @change="handleVoiceChange">
+            <option value="">系统默认</option>
+            <option v-for="voice in store.voiceList" :key="voice.name" :value="voice.name">
+              {{ voice.name }} ({{ voice.lang }})
+            </option>
+          </select>
+        </div>
+        <div class="setting-hint">
+          Microsoft Edge 暴露的微软在线语音会自动出现在音源列表中；此模式使用浏览器 Web Speech 能力，不调用未公开的 Edge“大声朗读”接口。
+        </div>
+      </template>
 
-      <template v-else>
+      <template v-else-if="store.speechConfig.provider === 'openai'">
         <div class="setting-row">
           <label>模型来源</label>
           <div class="btn-group">
@@ -386,8 +392,81 @@
 
         <div class="setting-hint">
           少字多请求会按短句细分并预加载更多片段；多字少请求会合并较短段落，只预加载下一段。
-          <template v-if="store.speechConfig.openaiSource === 'browser'">URL 和 Key 仅保存在当前浏览器。</template>
+          <template v-if="store.speechConfig.openaiSource === 'browser'">支持填写基础地址、`/v1` 地址或完整 `/audio/speech` 地址。HTTP、本机和局域网地址由浏览器直连；公共 HTTPS 地址由 Reader Next 后端转发以规避跨域限制。URL 和 Key 配置仅保存在当前浏览器，Key 不写入 WebDAV 备份。</template>
           <template v-else>后端配置由管理员维护，权限不足时朗读请求会失败。</template>
+        </div>
+      </template>
+
+      <template v-else>
+        <div class="setting-row setting-row-top">
+          <label>Azure 区域</label>
+          <input
+            class="voice-select"
+            type="text"
+            :value="store.speechConfig.azureRegion"
+            placeholder="eastasia"
+            autocomplete="off"
+            @input="store.setAzureSpeechRegion(($event.target as HTMLInputElement).value)"
+          >
+        </div>
+
+        <div class="setting-row setting-row-top">
+          <label>Speech Key</label>
+          <input
+            class="voice-select"
+            type="password"
+            :value="store.speechConfig.azureApiKey"
+            placeholder="Azure Speech 资源密钥"
+            autocomplete="off"
+            @input="store.setAzureSpeechApiKey(($event.target as HTMLInputElement).value)"
+          >
+        </div>
+
+        <div class="setting-row setting-row-top">
+          <label>Azure 音色</label>
+          <input
+            class="voice-select"
+            type="text"
+            list="azure-speech-voices"
+            :value="store.speechConfig.azureVoice"
+            placeholder="zh-CN-XiaoxiaoNeural"
+            @input="store.setAzureSpeechVoice(($event.target as HTMLInputElement).value)"
+          >
+          <datalist id="azure-speech-voices">
+            <option value="zh-CN-XiaoxiaoNeural" />
+            <option value="zh-CN-XiaoyiNeural" />
+            <option value="zh-CN-YunxiNeural" />
+            <option value="zh-CN-YunjianNeural" />
+            <option value="zh-CN-YunyangNeural" />
+            <option value="zh-TW-HsiaoChenNeural" />
+            <option value="zh-HK-HiuMaanNeural" />
+          </datalist>
+        </div>
+
+        <div class="setting-row setting-row-top">
+          <label>音频格式</label>
+          <select
+            class="voice-select"
+            :value="store.speechConfig.azureFormat"
+            @change="store.setAzureSpeechFormat(($event.target as HTMLSelectElement).value as 'audio-24khz-48kbitrate-mono-mp3' | 'audio-48khz-96kbitrate-mono-mp3' | 'riff-24khz-16bit-mono-pcm' | 'webm-24khz-16bit-mono-opus')"
+          >
+            <option value="audio-24khz-48kbitrate-mono-mp3">MP3 24kHz / 48kbps</option>
+            <option value="audio-48khz-96kbitrate-mono-mp3">MP3 48kHz / 96kbps</option>
+            <option value="riff-24khz-16bit-mono-pcm">WAV 24kHz PCM</option>
+            <option value="webm-24khz-16bit-mono-opus">WebM 24kHz Opus</option>
+          </select>
+        </div>
+
+        <div class="setting-row setting-row-top">
+          <label>请求模式</label>
+          <div class="btn-group">
+            <button class="opt-btn" :class="{ active: store.speechConfig.openaiRequestMode === 'chunked' }" @click="store.setOpenAISpeechRequestMode('chunked')">少字多请求</button>
+            <button class="opt-btn" :class="{ active: store.speechConfig.openaiRequestMode === 'merged' }" @click="store.setOpenAISpeechRequestMode('merged')">多字少请求</button>
+          </div>
+        </div>
+
+        <div class="setting-hint">
+          使用微软官方 Azure Speech REST API，请填写 Speech 资源区域、密钥和完整音色名。Azure 语速范围为 0.5–2.0，语调范围为 0.5–1.5。密钥仅保存在当前浏览器且不写入 WebDAV 备份，语音请求经 Reader Next 后端转发。
         </div>
       </template>
 
@@ -400,7 +479,7 @@
         </div>
       </div>
 
-      <div v-if="store.speechConfig.provider === 'system'" class="setting-row">
+      <div v-if="store.speechConfig.provider !== 'openai'" class="setting-row">
         <label>朗读音调</label>
         <div class="stepper">
           <button class="step-btn" @click="adjustSpeechPitch(-0.1)">—</button>

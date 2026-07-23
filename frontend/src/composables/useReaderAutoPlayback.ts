@@ -231,7 +231,7 @@ export function useReaderAutoPlayback(
   }
 
   function ensureSpeechChunkState(paragraph: HTMLElement) {
-    if (store.speechConfig.provider !== 'openai') {
+    if (store.speechConfig.provider === 'system') {
       return {
         text: paragraph.innerText.trim(),
         nextParagraph: getNextParagraphFrom(paragraph),
@@ -253,7 +253,7 @@ export function useReaderAutoPlayback(
   function getUpcomingSpeechChunks(startParagraph: HTMLElement | null) {
     const chunks: string[] = []
 
-    if (store.speechConfig.provider !== 'openai') {
+    if (store.speechConfig.provider === 'system') {
       return chunks
     }
 
@@ -532,7 +532,7 @@ export function useReaderAutoPlayback(
           chunkIndex: currentSpeechSegmentIndex,
           chunkCount: currentSpeechSegments.length,
         })
-        if (store.speechConfig.provider === 'openai' && currentSpeechParagraph === current && currentSpeechSegmentIndex < currentSpeechSegments.length - 1) {
+        if (store.speechConfig.provider !== 'system' && currentSpeechParagraph === current && currentSpeechSegmentIndex < currentSpeechSegments.length - 1) {
           currentSpeechSegmentIndex += 1
           continueSpeechTarget(current, false)
           return

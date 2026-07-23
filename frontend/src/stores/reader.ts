@@ -26,6 +26,7 @@ import {
   DEFAULT_OPENAI_BASE_URL,
   requestOpenAISpeechAudio,
 } from '../utils/openaiSpeech'
+import { requestAzureSpeechAudio } from '../utils/azureSpeech'
 
 const READER_SESSION_KEY = 'reader-last-session'
 const READER_READ_HISTORY_PREFIX = 'reader-read-history:'
@@ -145,8 +146,15 @@ function migrateLegacyReadConfig(saved: Partial<ReadConfig> & Record<string, unk
   return merged
 }
 
-function normalizeNumber(value: unknown, fallback: number, min = Number.NEGATIVE_INFINITY) {
-  return typeof value === 'number' && Number.isFinite(value) && value >= min ? value : fallback
+function normalizeNumber(
+  value: unknown,
+  fallback: number,
+  min = Number.NEGATIVE_INFINITY,
+  max = Number.POSITIVE_INFINITY,
+) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= min
+    ? Math.min(value, max)
+    : fallback
 }
 
 /* ─── Theme presets ─── */
@@ -214,10 +222,15 @@ interface PreloadedOpenAIAudio {
 
 const OPENAI_AUDIO_PRELOAD_LIMIT = 8
 
-export type SpeechProvider = 'system' | 'openai'
+export type SpeechProvider = 'system' | 'openai' | 'azure'
 export type OpenAISpeechSource = 'browser' | 'server'
 export type OpenAISpeechFormat = 'mp3' | 'wav' | 'opus' | 'flac' | 'pcm'
 export type OpenAISpeechRequestMode = 'chunked' | 'merged'
+export type AzureSpeechFormat =
+  | 'audio-24khz-48kbitrate-mono-mp3'
+  | 'audio-48khz-96kbitrate-mono-mp3'
+  | 'riff-24khz-16bit-mono-pcm'
+  | 'webm-24khz-16bit-mono-opus'
 
 interface SpeechConfig {
   provider: SpeechProvider
@@ -232,6 +245,10 @@ interface SpeechConfig {
   openaiVoice: string
   openaiFormat: OpenAISpeechFormat
   openaiRequestMode: OpenAISpeechRequestMode
+  azureRegion: string
+  azureApiKey: string
+  azureVoice: string
+  azureFormat: AzureSpeechFormat
 }
 
 const defaultSpeechConfig: SpeechConfig = {
@@ -247,6 +264,10 @@ const defaultSpeechConfig: SpeechConfig = {
   openaiVoice: 'vivian',
   openaiFormat: 'mp3',
   openaiRequestMode: 'chunked',
+  azureRegion: '',
+  azureApiKey: '',
+  azureVoice: 'zh-CN-XiaoxiaoNeural',
+  azureFormat: 'audio-24khz-48kbitrate-mono-mp3',
 }
 
 function loadSpeechConfig(): SpeechConfig {
@@ -259,7 +280,7 @@ function loadSpeechConfig(): SpeechConfig {
 
 function migrateSpeechConfig(saved: Partial<SpeechConfig>): SpeechConfig {
   const merged = { ...defaultSpeechConfig, ...saved }
-  if (merged.provider !== 'system' && merged.provider !== 'openai') {
+  if (!['system', 'openai', 'azure'].includes(merged.provider)) {
     merged.provider = defaultSpeechConfig.provider
   }
   if (merged.openaiSource !== 'browser' && merged.openaiSource !== 'server') {
@@ -271,8 +292,26 @@ function migrateSpeechConfig(saved: Partial<SpeechConfig>): SpeechConfig {
   if (merged.openaiRequestMode !== 'chunked' && merged.openaiRequestMode !== 'merged') {
     merged.openaiRequestMode = defaultSpeechConfig.openaiRequestMode
   }
-  merged.speechRate = normalizeNumber(merged.speechRate, defaultSpeechConfig.speechRate, 0.5)
-  merged.speechPitch = normalizeNumber(merged.speechPitch, defaultSpeechConfig.speechPitch, 0.5)
+  if (![
+    'audio-24khz-48kbitrate-mono-mp3',
+    'audio-48khz-96kbitrate-mono-mp3',
+    'riff-24khz-16bit-mono-pcm',
+    'webm-24khz-16bit-mono-opus',
+  ].includes(merged.azureFormat)) {
+    merged.azureFormat = defaultSpeechConfig.azureFormat
+  }
+  merged.speechRate = normalizeNumber(
+    merged.speechRate,
+    defaultSpeechConfig.speechRate,
+    0.5,
+    merged.provider === 'azure' ? 2 : 3,
+  )
+  merged.speechPitch = normalizeNumber(
+    merged.speechPitch,
+    defaultSpeechConfig.speechPitch,
+    0.5,
+    merged.provider === 'azure' ? 1.5 : 2,
+  )
   merged.stopAfterMinutes = normalizeNumber(merged.stopAfterMinutes, defaultSpeechConfig.stopAfterMinutes, 0)
   return merged
 }
@@ -703,7 +742,19 @@ export const useReaderStore = defineStore('reader', () => {
     if (speechConfig.openaiSource === 'server') return true
     return !!speechConfig.openaiBaseUrl.trim()
   })
-  const speechProviderLabel = computed(() => speechConfig.provider === 'openai' ? 'OpenAI Speech' : '系统语音')
+  const azureSpeechConfigured = computed(() => (
+    !!speechConfig.azureRegion.trim()
+    && !!speechConfig.azureApiKey.trim()
+    && !!speechConfig.azureVoice.trim()
+  ))
+  const remoteSpeechConfigured = computed(() => (
+    speechConfig.provider === 'azure' ? azureSpeechConfigured.value : openAISpeechConfigured.value
+  ))
+  const speechProviderLabel = computed(() => {
+    if (speechConfig.provider === 'openai') return 'OpenAI Speech'
+    if (speechConfig.provider === 'azure') return 'Microsoft Azure Speech'
+    return '系统语音'
+  })
   const speechStopAt = ref(0)
   let speechStopTimer: number | null = null
   let synth: SpeechSynthesis | null = typeof window !== 'undefined' ? window.speechSynthesis : null
@@ -771,7 +822,13 @@ export const useReaderStore = defineStore('reader', () => {
   }
 
   function setSpeechProvider(provider: SpeechProvider) {
+    if (speechConfig.provider === provider) return
+    stopTTS(false)
     speechConfig.provider = provider
+    if (provider === 'azure') {
+      speechConfig.speechRate = Math.min(speechConfig.speechRate, 2)
+      speechConfig.speechPitch = Math.min(speechConfig.speechPitch, 1.5)
+    }
     clearPreloadedOpenAIAudio()
     saveSpeechConfig()
   }
@@ -818,31 +875,76 @@ export const useReaderStore = defineStore('reader', () => {
     saveSpeechConfig()
   }
 
+  function setAzureSpeechRegion(region: string) {
+    speechConfig.azureRegion = region.trim()
+    clearPreloadedOpenAIAudio()
+    saveSpeechConfig()
+  }
+
+  function setAzureSpeechApiKey(apiKey: string) {
+    speechConfig.azureApiKey = apiKey.trim()
+    clearPreloadedOpenAIAudio()
+    saveSpeechConfig()
+  }
+
+  function setAzureSpeechVoice(voice: string) {
+    speechConfig.azureVoice = voice.trim()
+    clearPreloadedOpenAIAudio()
+    saveSpeechConfig()
+  }
+
+  function setAzureSpeechFormat(format: AzureSpeechFormat) {
+    speechConfig.azureFormat = format
+    clearPreloadedOpenAIAudio()
+    saveSpeechConfig()
+  }
+
   function setSpeechRate(rate: number) {
-    speechConfig.speechRate = rate
+    const max = speechConfig.provider === 'azure' ? 2 : 3
+    speechConfig.speechRate = Math.max(0.5, Math.min(max, rate))
     clearPreloadedOpenAIAudio()
     saveSpeechConfig()
   }
 
   function setSpeechPitch(pitch: number) {
-    speechConfig.speechPitch = pitch
+    const max = speechConfig.provider === 'azure' ? 1.5 : 2
+    speechConfig.speechPitch = Math.max(0.5, Math.min(max, pitch))
+    clearPreloadedOpenAIAudio()
     saveSpeechConfig()
   }
 
   function buildOpenAIAudioCacheKey(rawText: string) {
     return [
+      speechConfig.provider,
       speechConfig.openaiSource,
       speechConfig.openaiBaseUrl.trim(),
       speechConfig.openaiApiKey.trim(),
       speechConfig.openaiModel,
       speechConfig.openaiVoice,
       speechConfig.openaiFormat,
+      speechConfig.azureRegion.trim(),
+      speechConfig.azureApiKey.trim(),
+      speechConfig.azureVoice,
+      speechConfig.azureFormat,
       speechConfig.speechRate.toFixed(1),
+      speechConfig.speechPitch.toFixed(1),
       rawText,
     ].join('::')
   }
 
   async function fetchOpenAIAudioBlob(rawText: string, signal?: AbortSignal) {
+    if (speechConfig.provider === 'azure') {
+      return requestAzureSpeechAudio({
+        region: speechConfig.azureRegion,
+        subscriptionKey: speechConfig.azureApiKey,
+        input: rawText.slice(0, 4096),
+        voice: speechConfig.azureVoice,
+        outputFormat: speechConfig.azureFormat,
+        rate: speechConfig.speechRate,
+        pitch: speechConfig.speechPitch,
+        signal,
+      })
+    }
     return requestOpenAISpeechAudio({
       source: speechConfig.openaiSource,
       baseUrl: speechConfig.openaiBaseUrl,
@@ -880,7 +982,7 @@ export const useReaderStore = defineStore('reader', () => {
   }
 
   async function preloadOpenAITTS(rawText?: string | string[] | null) {
-    if (speechConfig.provider !== 'openai' || !openAISpeechConfigured.value) return
+    if (speechConfig.provider === 'system' || !remoteSpeechConfigured.value) return
     const texts = Array.isArray(rawText) ? rawText : [rawText || '']
     const normalizedTexts = texts.map((item) => item.trim()).filter(Boolean)
     if (!normalizedTexts.length) return
@@ -1145,13 +1247,15 @@ export const useReaderStore = defineStore('reader', () => {
   }
 
   async function startOpenAITTS(rawText: string, options: TTSOptions, sessionId: number) {
-    if (!openAISpeechConfigured.value) {
-      const error = new Error('请先配置 OpenAI Speech')
+    if (!remoteSpeechConfigured.value) {
+      const error = new Error(speechConfig.provider === 'azure'
+        ? '请先配置 Azure 区域、密钥和音色'
+        : '请先配置 OpenAI Speech')
       appStore.showToast(error.message, 'warning')
       options.onError?.(error)
       return
     }
-    if (speechConfig.openaiSource === 'server') {
+    if (speechConfig.provider === 'openai' && speechConfig.openaiSource === 'server') {
       const serverConfig = await aiBookStore.loadServerModelConfig()
       if (!serverConfig?.canUseServerModel) {
         const error = new Error('当前账号没有使用后端模型配置的权限')
@@ -1171,8 +1275,9 @@ export const useReaderStore = defineStore('reader', () => {
     isSpeechLoading.value = true
     logTTS('openai speak queued', {
       sessionId,
+      provider: speechConfig.provider,
       model: speechConfig.openaiModel,
-      voice: speechConfig.openaiVoice,
+      voice: speechConfig.provider === 'azure' ? speechConfig.azureVoice : speechConfig.openaiVoice,
       text: rawText.slice(0, 80),
     })
     const playBlob = (blob: Blob, controller: AbortController) => {
@@ -1222,7 +1327,7 @@ export const useReaderStore = defineStore('reader', () => {
         if (!isCurrentTTSSession(sessionId)) return
         isSpeaking.value = false
         isPaused.value = false
-        const error = new Error('OpenAI Speech 音频播放失败')
+        const error = new Error(`${speechProviderLabel.value} 音频播放失败`)
         logTTS('openai onerror', { sessionId, text: rawText.slice(0, 40) })
         options.onError?.(error)
       }
@@ -1276,7 +1381,7 @@ export const useReaderStore = defineStore('reader', () => {
       currentOpenAIAbortController = null
       currentOpenAIAudio = null
       logTTS('openai request catch', { sessionId, message: error.message, text: rawText.slice(0, 40) })
-      appStore.showToast(error.message || 'OpenAI Speech 请求失败', 'error')
+      appStore.showToast(error.message || `${speechProviderLabel.value} 请求失败`, 'error')
       options.onError?.(error)
     })
   }
@@ -1316,7 +1421,7 @@ export const useReaderStore = defineStore('reader', () => {
       }
     }
 
-    if (speechConfig.provider === 'openai') {
+    if (speechConfig.provider !== 'system') {
       void startOpenAITTS(rawText, options, sessionId)
       return
     }
@@ -1325,7 +1430,7 @@ export const useReaderStore = defineStore('reader', () => {
   }
 
   function pauseTTS() {
-    if (speechConfig.provider === 'openai') {
+    if (speechConfig.provider !== 'system') {
       if (!currentOpenAIAudio) return
       if (currentOpenAIAudio.paused) {
         void currentOpenAIAudio.play()
@@ -1819,10 +1924,11 @@ export const useReaderStore = defineStore('reader', () => {
     switchSource, preloadNextChapter, preloadAroundChapter,
     refreshChapters,
     isSpeaking, isSpeechLoading, isPaused, startTTS, pauseTTS, stopTTS,
-    voiceList, speechConfig, speechStopAt, speechProviderLabel, openAISpeechConfigured,
+    voiceList, speechConfig, speechStopAt, speechProviderLabel, openAISpeechConfigured, azureSpeechConfigured,
     systemTtsNativeEventsReliable,
     fetchVoices, setVoiceName, setSpeechProvider, setSpeechRate, setSpeechPitch, setSpeechStopTimer, clearSpeechStopTimer,
     setOpenAISpeechSource, setOpenAISpeechBaseUrl, setOpenAISpeechApiKey, setOpenAISpeechModel, setOpenAISpeechVoice, setOpenAISpeechFormat, setOpenAISpeechRequestMode, preloadOpenAITTS,
+    setAzureSpeechRegion, setAzureSpeechApiKey, setAzureSpeechVoice, setAzureSpeechFormat,
     displayContent, processContentForDisplay,
     isAutoScrolling,
   }

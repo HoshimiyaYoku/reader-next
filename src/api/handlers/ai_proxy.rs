@@ -4,8 +4,12 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use serde::Deserialize;
 use serde_json::Map;
 use serde_json::Value;
+use std::net::{IpAddr, SocketAddr};
+use std::time::Duration;
+use tokio::net::lookup_host;
 use url::Url;
 
 use crate::api::{auth::AuthContext, AppState};
@@ -17,6 +21,62 @@ use crate::model::ai_proxy::{
 };
 
 const MAX_PROXY_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+const MAX_PROXY_SPEECH_AUDIO_BYTES: u64 = 20 * 1024 * 1024;
+const MAX_AZURE_TTS_TEXT_CHARS: usize = 10_000;
+const AZURE_TTS_USER_AGENT: &str = concat!("reader-next/", env!("CARGO_PKG_VERSION"));
+const AZURE_TTS_OUTPUT_FORMATS: &[&str] = &[
+    "audio-16khz-32kbitrate-mono-mp3",
+    "audio-16khz-64kbitrate-mono-mp3",
+    "audio-16khz-128kbitrate-mono-mp3",
+    "audio-24khz-48kbitrate-mono-mp3",
+    "audio-24khz-96kbitrate-mono-mp3",
+    "audio-24khz-160kbitrate-mono-mp3",
+    "audio-48khz-96kbitrate-mono-mp3",
+    "audio-48khz-192kbitrate-mono-mp3",
+    "ogg-16khz-16bit-mono-opus",
+    "ogg-24khz-16bit-mono-opus",
+    "ogg-48khz-16bit-mono-opus",
+    "raw-8khz-8bit-mono-alaw",
+    "raw-8khz-8bit-mono-mulaw",
+    "raw-8khz-16bit-mono-pcm",
+    "raw-16khz-16bit-mono-pcm",
+    "raw-16khz-16bit-mono-truesilk",
+    "raw-24khz-16bit-mono-pcm",
+    "raw-24khz-16bit-mono-truesilk",
+    "raw-48khz-16bit-mono-pcm",
+    "riff-8khz-8bit-mono-alaw",
+    "riff-8khz-8bit-mono-mulaw",
+    "riff-8khz-16bit-mono-pcm",
+    "riff-16khz-16kbps-mono-siren",
+    "riff-16khz-16bit-mono-pcm",
+    "riff-24khz-16bit-mono-pcm",
+    "riff-48khz-16bit-mono-pcm",
+    "webm-16khz-16bit-mono-opus",
+    "webm-24khz-16bit-mono-opus",
+    "webm-48khz-16bit-mono-opus",
+];
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AzureTtsRequest {
+    region: String,
+    subscription_key: String,
+    text: String,
+    voice: String,
+    output_format: String,
+    rate: Option<f32>,
+    pitch: Option<f32>,
+}
+
+struct ValidatedAzureTtsRequest<'a> {
+    region: &'a str,
+    subscription_key: &'a str,
+    text: &'a str,
+    voice: &'a str,
+    output_format: &'a str,
+    rate: f32,
+    pitch: f32,
+}
 
 pub async fn ai_proxy(
     State(state): State<AppState>,
@@ -24,6 +84,8 @@ pub async fn ai_proxy(
     Json(req): Json<AiProxyRequest>,
 ) -> Result<Response, AppError> {
     require_proxy_user(&state, &auth).await?;
+    let is_custom_speech_target =
+        !req.use_server_config && req.full_url && req.kind == Some(AiModelKind::Speech);
     let (endpoint, kind, path, mut body) = resolve_ai_proxy_target(&state, &auth, req).await?;
     let target_hint = if endpoint.use_full_url {
         endpoint.base_url.as_str()
@@ -39,10 +101,19 @@ pub async fn ai_proxy(
     let target = build_ai_proxy_url(&endpoint.base_url, &path, endpoint.use_full_url)
         .map_err(AppError::BadRequest)?;
     let use_gemini_api_key_header = should_use_gemini_api_key_header(&target, &path, kind);
-    let client = ai_proxy_client()?;
+    let client = if is_custom_speech_target {
+        public_https_speech_proxy_client(&target).await?
+    } else {
+        ai_proxy_client()?
+    };
+    let accept = if kind == Some(AiModelKind::Speech) {
+        "audio/*,application/octet-stream;q=0.9,*/*;q=0.8"
+    } else {
+        "application/json"
+    };
     let mut builder = client
         .post(target)
-        .header(reqwest::header::ACCEPT, "application/json")
+        .header(reqwest::header::ACCEPT, accept)
         .json(&body);
 
     if let Some(api_key) = Some(endpoint.api_key.as_str())
@@ -57,7 +128,16 @@ pub async fn ai_proxy(
     }
 
     let upstream = builder.send().await.map_err(map_ai_proxy_http_error)?;
-    response_from_upstream(upstream).await
+    if kind == Some(AiModelKind::Speech) {
+        response_from_upstream_limited(
+            upstream,
+            MAX_PROXY_SPEECH_AUDIO_BYTES,
+            "语音音频超过代理大小限制",
+        )
+        .await
+    } else {
+        response_from_upstream(upstream).await
+    }
 }
 
 async fn resolve_ai_proxy_target(
@@ -575,6 +655,197 @@ pub async fn ai_proxy_image(
     Ok(build_response(status, content_type, body))
 }
 
+pub async fn azure_tts(
+    State(state): State<AppState>,
+    auth: AuthContext,
+    Json(req): Json<AzureTtsRequest>,
+) -> Result<Response, AppError> {
+    require_proxy_user(&state, &auth).await?;
+    let req = validate_azure_tts_request(&req).map_err(AppError::BadRequest)?;
+    let target = azure_tts_endpoint(req.region).map_err(AppError::BadRequest)?;
+    let ssml = build_azure_tts_ssml(req.text, req.voice, req.rate, req.pitch);
+    let client = ai_proxy_client()?;
+    let upstream = build_azure_tts_request(&client, target, &req, ssml)
+        .send()
+        .await
+        .map_err(map_ai_proxy_http_error)?;
+
+    response_from_upstream_limited(
+        upstream,
+        MAX_PROXY_SPEECH_AUDIO_BYTES,
+        "Azure Speech 音频超过代理大小限制",
+    )
+    .await
+}
+
+fn build_azure_tts_request(
+    client: &reqwest::Client,
+    target: Url,
+    req: &ValidatedAzureTtsRequest<'_>,
+    ssml: String,
+) -> reqwest::RequestBuilder {
+    client
+        .post(target)
+        .header("Ocp-Apim-Subscription-Key", req.subscription_key)
+        .header(reqwest::header::CONTENT_TYPE, "application/ssml+xml")
+        .header("X-Microsoft-OutputFormat", req.output_format)
+        .header(reqwest::header::USER_AGENT, AZURE_TTS_USER_AGENT)
+        .body(ssml)
+}
+
+fn validate_azure_tts_request(
+    req: &AzureTtsRequest,
+) -> Result<ValidatedAzureTtsRequest<'_>, String> {
+    let region = validate_azure_region(&req.region)?;
+
+    let subscription_key = req.subscription_key.trim();
+    if subscription_key.is_empty() {
+        return Err("Azure Speech 订阅密钥不能为空".to_string());
+    }
+    if subscription_key.len() > 512
+        || !subscription_key
+            .bytes()
+            .all(|value| value.is_ascii_graphic())
+    {
+        return Err("Azure Speech 订阅密钥格式无效".to_string());
+    }
+
+    let text = req.text.trim();
+    if text.is_empty() {
+        return Err("朗读文本不能为空".to_string());
+    }
+    if text.chars().count() > MAX_AZURE_TTS_TEXT_CHARS {
+        return Err(format!(
+            "单次朗读文本不能超过 {MAX_AZURE_TTS_TEXT_CHARS} 个字符"
+        ));
+    }
+    if !text.chars().all(is_valid_xml_char) {
+        return Err("朗读文本包含无效控制字符".to_string());
+    }
+
+    let voice = req.voice.trim();
+    if voice.is_empty() {
+        return Err("Azure Speech 音色不能为空".to_string());
+    }
+    if voice.chars().count() > 128 || !voice.chars().all(is_valid_xml_char) {
+        return Err("Azure Speech 音色格式无效".to_string());
+    }
+
+    let output_format = req.output_format.trim();
+    if !AZURE_TTS_OUTPUT_FORMATS.contains(&output_format) {
+        return Err("不支持的 Azure Speech 音频格式".to_string());
+    }
+
+    let rate = req.rate.unwrap_or(1.0);
+    if !rate.is_finite() || !(0.5..=2.0).contains(&rate) {
+        return Err("Azure Speech 语速必须在 0.5 到 2.0 之间".to_string());
+    }
+    let pitch = req.pitch.unwrap_or(1.0);
+    if !pitch.is_finite() || !(0.5..=1.5).contains(&pitch) {
+        return Err("Azure Speech 语调必须在 0.5 到 1.5 之间".to_string());
+    }
+
+    Ok(ValidatedAzureTtsRequest {
+        region,
+        subscription_key,
+        text,
+        voice,
+        output_format,
+        rate,
+        pitch,
+    })
+}
+
+fn validate_azure_region(region: &str) -> Result<&str, String> {
+    let region = region.trim();
+    if region.is_empty() {
+        return Err("Azure Speech 区域不能为空".to_string());
+    }
+    if region.len() > 64
+        || !region
+            .bytes()
+            .all(|value| value.is_ascii_alphanumeric() || value == b'-')
+        || region.starts_with('-')
+        || region.ends_with('-')
+    {
+        return Err("Azure Speech 区域格式无效".to_string());
+    }
+    Ok(region)
+}
+
+fn azure_tts_endpoint(region: &str) -> Result<Url, String> {
+    let region = validate_azure_region(region)?;
+    Url::parse(&format!(
+        "https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
+    ))
+    .map_err(|_| "Azure Speech 区域格式无效".to_string())
+}
+
+fn build_azure_tts_ssml(text: &str, voice: &str, rate: f32, pitch: f32) -> String {
+    let locale = azure_voice_locale(voice);
+    let rate = azure_prosody_percentage(rate);
+    let pitch = azure_prosody_percentage(pitch);
+    format!(
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+<speak version=\"1.0\" xmlns=\"http://www.w3.org/2001/10/synthesis\" xml:lang=\"{}\">\
+<voice name=\"{}\"><prosody rate=\"{}\" pitch=\"{}\">{}</prosody></voice></speak>",
+        escape_xml(locale),
+        escape_xml(voice),
+        escape_xml(&rate),
+        escape_xml(&pitch),
+        escape_xml(text),
+    )
+}
+
+fn azure_voice_locale(voice: &str) -> &str {
+    let Some((language, rest)) = voice.split_once('-') else {
+        return "zh-CN";
+    };
+    let Some((region, _)) = rest.split_once('-') else {
+        return "zh-CN";
+    };
+    if (language.len() == 2 || language.len() == 3)
+        && language.bytes().all(|value| value.is_ascii_alphabetic())
+        && (region.len() == 2 || region.len() == 3)
+        && region.bytes().all(|value| value.is_ascii_alphanumeric())
+    {
+        &voice[..language.len() + 1 + region.len()]
+    } else {
+        "zh-CN"
+    }
+}
+
+fn azure_prosody_percentage(value: f32) -> String {
+    let percentage = ((value - 1.0) * 100.0).round() as i32;
+    if percentage >= 0 {
+        format!("+{percentage}%")
+    } else {
+        format!("{percentage}%")
+    }
+}
+
+fn escape_xml(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+fn is_valid_xml_char(value: char) -> bool {
+    matches!(value, '\u{9}' | '\u{A}' | '\u{D}')
+        || ('\u{20}'..='\u{D7FF}').contains(&value)
+        || ('\u{E000}'..='\u{FFFD}').contains(&value)
+        || ('\u{10000}'..='\u{10FFFF}').contains(&value)
+}
+
 async fn require_proxy_user(state: &AppState, auth: &AuthContext) -> Result<(), AppError> {
     state
         .user_service
@@ -596,6 +867,48 @@ async fn response_from_upstream(upstream: reqwest::Response) -> Result<Response,
         return Ok(build_upstream_error_response(status, &body));
     }
     Ok(build_response(status, content_type, body))
+}
+
+async fn response_from_upstream_limited(
+    mut upstream: reqwest::Response,
+    max_bytes: u64,
+    limit_message: &str,
+) -> Result<Response, AppError> {
+    if upstream
+        .content_length()
+        .is_some_and(|length| length > max_bytes)
+    {
+        return Err(AppError::BadRequest(limit_message.to_string()));
+    }
+
+    let status = upstream.status();
+    let content_type = upstream
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| HeaderValue::from_str(value).ok());
+    let mut body = Vec::new();
+    while let Some(chunk) = upstream.chunk().await? {
+        append_limited_response_chunk(&mut body, &chunk, max_bytes)
+            .map_err(|_| AppError::BadRequest(limit_message.to_string()))?;
+    }
+    let body = bytes::Bytes::from(body);
+    if !status.is_success() {
+        return Ok(build_upstream_error_response(status, &body));
+    }
+    Ok(build_response(status, content_type, body))
+}
+
+fn append_limited_response_chunk(
+    body: &mut Vec<u8>,
+    chunk: &[u8],
+    max_bytes: u64,
+) -> Result<(), ()> {
+    if (body.len() as u64).saturating_add(chunk.len() as u64) > max_bytes {
+        return Err(());
+    }
+    body.extend_from_slice(chunk);
+    Ok(())
 }
 
 fn build_response(
@@ -627,6 +940,113 @@ fn ai_proxy_client() -> Result<reqwest::Client, AppError> {
         .timeout(ai_proxy_timeout())
         .build()
         .map_err(AppError::Http)
+}
+
+async fn public_https_speech_proxy_client(target: &Url) -> Result<reqwest::Client, AppError> {
+    validate_public_https_speech_target(target).map_err(AppError::BadRequest)?;
+    let host = target
+        .host_str()
+        .ok_or_else(|| AppError::BadRequest("HTTPS TTS 地址缺少主机名".to_string()))?;
+    let port = target.port_or_known_default().unwrap_or(443);
+    let resolved_address = if let Ok(ip) = host.parse::<IpAddr>() {
+        SocketAddr::new(ip, port)
+    } else {
+        let addresses = tokio::time::timeout(Duration::from_secs(10), lookup_host((host, port)))
+            .await
+            .map_err(|_| AppError::BadRequest("HTTPS TTS 地址解析超时".to_string()))?
+            .map_err(|_| AppError::BadRequest("HTTPS TTS 地址无法解析".to_string()))?;
+        addresses
+            .filter(|address| is_public_proxy_ip(address.ip()))
+            .min_by_key(|address| if address.is_ipv4() { 0 } else { 1 })
+            .ok_or_else(|| {
+                AppError::BadRequest("HTTPS TTS 地址不能指向本机或私有网络".to_string())
+            })?
+    };
+
+    if !is_public_proxy_ip(resolved_address.ip()) {
+        return Err(AppError::BadRequest(
+            "HTTPS TTS 地址不能指向本机或私有网络".to_string(),
+        ));
+    }
+
+    let mut builder = reqwest::Client::builder()
+        .timeout(ai_proxy_timeout())
+        .redirect(reqwest::redirect::Policy::none());
+    if host.parse::<IpAddr>().is_err() {
+        // Pin the already-validated address to avoid DNS rebinding between
+        // validation and connection while preserving the hostname for TLS/SNI.
+        builder = builder.resolve(host, resolved_address);
+    }
+    builder.build().map_err(AppError::Http)
+}
+
+fn validate_public_https_speech_target(target: &Url) -> Result<(), String> {
+    if target.scheme() != "https" {
+        return Err("公共 TTS 代理仅支持 HTTPS 地址".to_string());
+    }
+    if !target.username().is_empty() || target.password().is_some() {
+        return Err("HTTPS TTS 地址不能包含用户名或密码".to_string());
+    }
+    if !target
+        .path()
+        .trim_end_matches('/')
+        .to_ascii_lowercase()
+        .ends_with("/audio/speech")
+    {
+        return Err("HTTPS TTS 地址必须以 /audio/speech 结尾".to_string());
+    }
+    let host = target
+        .host_str()
+        .ok_or_else(|| "HTTPS TTS 地址缺少主机名".to_string())?;
+    let normalized_host = host.trim_end_matches('.').to_ascii_lowercase();
+    if normalized_host == "localhost"
+        || normalized_host.ends_with(".localhost")
+        || normalized_host.ends_with(".local")
+        || normalized_host.ends_with(".internal")
+    {
+        return Err("HTTPS TTS 地址不能指向本机或私有网络".to_string());
+    }
+    if let Ok(ip) = normalized_host.parse::<IpAddr>() {
+        if !is_public_proxy_ip(ip) {
+            return Err("HTTPS TTS 地址不能指向本机或私有网络".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn is_public_proxy_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let [first, second, third, _] = ip.octets();
+            !ip.is_private()
+                && !ip.is_loopback()
+                && !ip.is_link_local()
+                && !ip.is_unspecified()
+                && !ip.is_multicast()
+                && !ip.is_broadcast()
+                && first != 0
+                && first < 224
+                && !(first == 100 && (64..=127).contains(&second))
+                && !(first == 192 && second == 0)
+                && !(first == 198 && (18..=19).contains(&second))
+                && !(first == 198 && second == 51 && third == 100)
+                && !(first == 203 && second == 0 && third == 113)
+        }
+        IpAddr::V6(ip) => {
+            if let Some(mapped) = ip.to_ipv4_mapped() {
+                return is_public_proxy_ip(IpAddr::V4(mapped));
+            }
+            let segments = ip.segments();
+            !ip.is_loopback()
+                && !ip.is_unspecified()
+                && !ip.is_multicast()
+                && !ip.is_unique_local()
+                && !ip.is_unicast_link_local()
+                && !segments[..6].iter().all(|segment| *segment == 0)
+                && (segments[0] & 0xffc0) != 0xfec0
+                && !(segments[0] == 0x2001 && segments[1] == 0x0db8)
+        }
+    }
 }
 
 fn map_ai_proxy_http_error(error: reqwest::Error) -> AppError {
@@ -851,5 +1271,187 @@ mod tests {
             Some(&Value::String("user".to_string()))
         );
         assert_eq!(body.get("max_tokens"), Some(&serde_json::json!(4096)));
+    }
+
+    fn azure_request() -> AzureTtsRequest {
+        AzureTtsRequest {
+            region: "japaneast".to_string(),
+            subscription_key: "secret-key".to_string(),
+            text: "你好，世界".to_string(),
+            voice: "zh-CN-XiaoxiaoNeural".to_string(),
+            output_format: "audio-24khz-48kbitrate-mono-mp3".to_string(),
+            rate: Some(1.0),
+            pitch: Some(1.0),
+        }
+    }
+
+    #[test]
+    fn azure_tts_endpoint_uses_validated_region_host() {
+        assert_eq!(
+            azure_tts_endpoint("japaneast").unwrap().as_str(),
+            "https://japaneast.tts.speech.microsoft.com/cognitiveservices/v1"
+        );
+        for region in [
+            "",
+            "-japaneast",
+            "japaneast-",
+            "japan.east",
+            "japaneast/path",
+            "japaneast?host=evil",
+            "日本东部",
+        ] {
+            assert!(azure_tts_endpoint(region).is_err(), "{region}");
+        }
+    }
+
+    #[test]
+    fn azure_tts_ssml_escapes_text_and_voice_attributes() {
+        let ssml = build_azure_tts_ssml(
+            "A&B <C> \"quoted\" 'apostrophe'",
+            "zh-CN-Xiao\"<&'Neural",
+            1.25,
+            0.8,
+        );
+
+        assert!(ssml.contains("xml:lang=\"zh-CN\""));
+        assert!(ssml.contains("name=\"zh-CN-Xiao&quot;&lt;&amp;&apos;Neural\""));
+        assert!(ssml.contains("rate=\"+25%\" pitch=\"-20%\""));
+        assert!(ssml.contains("A&amp;B &lt;C&gt; &quot;quoted&quot; &apos;apostrophe&apos;"));
+        assert!(!ssml.contains("<C>"));
+    }
+
+    #[test]
+    fn azure_tts_validation_requires_credentials_text_voice_and_safe_format() {
+        let mut req = azure_request();
+        assert!(validate_azure_tts_request(&req).is_ok());
+
+        req.subscription_key.clear();
+        assert!(validate_azure_tts_request(&req).is_err());
+        req = azure_request();
+        req.text = " \n ".to_string();
+        assert!(validate_azure_tts_request(&req).is_err());
+        req = azure_request();
+        req.voice.clear();
+        assert!(validate_azure_tts_request(&req).is_err());
+        req = azure_request();
+        req.output_format = "text/html\r\nX-Evil: true".to_string();
+        assert!(validate_azure_tts_request(&req).is_err());
+    }
+
+    #[test]
+    fn azure_tts_request_uses_camel_case_json_fields() {
+        let req: AzureTtsRequest = serde_json::from_value(serde_json::json!({
+            "region": "japaneast",
+            "subscriptionKey": "secret-key",
+            "text": "你好",
+            "voice": "zh-CN-XiaoxiaoNeural",
+            "outputFormat": "audio-24khz-48kbitrate-mono-mp3",
+            "rate": 1.2,
+            "pitch": 0.9
+        }))
+        .unwrap();
+
+        let req = validate_azure_tts_request(&req).unwrap();
+        assert_eq!(req.subscription_key, "secret-key");
+        assert_eq!(req.output_format, "audio-24khz-48kbitrate-mono-mp3");
+        assert_eq!(req.rate, 1.2);
+        assert_eq!(req.pitch, 0.9);
+    }
+
+    #[test]
+    fn azure_tts_request_includes_required_headers_and_ssml_body() {
+        let raw = azure_request();
+        let req = validate_azure_tts_request(&raw).unwrap();
+        let target = azure_tts_endpoint(req.region).unwrap();
+        let ssml = build_azure_tts_ssml(req.text, req.voice, req.rate, req.pitch);
+        let request = build_azure_tts_request(&reqwest::Client::new(), target, &req, ssml)
+            .build()
+            .unwrap();
+
+        assert_eq!(request.headers()["Ocp-Apim-Subscription-Key"], "secret-key");
+        assert_eq!(
+            request.headers()[reqwest::header::CONTENT_TYPE],
+            "application/ssml+xml"
+        );
+        assert_eq!(
+            request.headers()["X-Microsoft-OutputFormat"],
+            "audio-24khz-48kbitrate-mono-mp3"
+        );
+        assert_eq!(
+            request.headers()[reqwest::header::USER_AGENT],
+            AZURE_TTS_USER_AGENT
+        );
+        let body = request.body().and_then(reqwest::Body::as_bytes).unwrap();
+        assert!(std::str::from_utf8(body).unwrap().contains("<speak"));
+    }
+
+    #[test]
+    fn azure_tts_validation_limits_text_and_prosody_values() {
+        let mut req = azure_request();
+        req.text = "字".repeat(MAX_AZURE_TTS_TEXT_CHARS + 1);
+        assert!(validate_azure_tts_request(&req).is_err());
+
+        req = azure_request();
+        req.text = "有效\u{0}无效".to_string();
+        assert!(validate_azure_tts_request(&req).is_err());
+
+        req = azure_request();
+        req.rate = Some(2.1);
+        assert!(validate_azure_tts_request(&req).is_err());
+
+        req = azure_request();
+        req.pitch = Some(1.51);
+        assert!(validate_azure_tts_request(&req).is_err());
+    }
+
+    #[test]
+    fn custom_speech_proxy_rejects_non_https_private_and_non_speech_targets() {
+        assert!(validate_public_https_speech_target(
+            &Url::parse("https://tts.example.com/v1/audio/speech").unwrap()
+        )
+        .is_ok());
+        for target in [
+            "http://tts.example.com/v1/audio/speech",
+            "https://localhost/v1/audio/speech",
+            "https://127.0.0.1/v1/audio/speech",
+            "https://192.168.1.20/v1/audio/speech",
+            "https://tts.internal/v1/audio/speech",
+            "https://tts.example.com/v1/chat/completions",
+        ] {
+            assert!(
+                validate_public_https_speech_target(&Url::parse(target).unwrap()).is_err(),
+                "{target}"
+            );
+        }
+    }
+
+    #[test]
+    fn speech_proxy_ip_filter_blocks_private_and_metadata_networks() {
+        for address in [
+            "0.0.0.0",
+            "10.0.0.1",
+            "100.64.0.1",
+            "127.0.0.1",
+            "169.254.169.254",
+            "172.16.0.1",
+            "192.168.1.1",
+            "::1",
+            "fc00::1",
+            "fe80::1",
+            "::ffff:127.0.0.1",
+        ] {
+            assert!(!is_public_proxy_ip(address.parse().unwrap()), "{address}");
+        }
+        assert!(is_public_proxy_ip("8.8.8.8".parse().unwrap()));
+        assert!(is_public_proxy_ip("2606:4700:4700::1111".parse().unwrap()));
+    }
+
+    #[test]
+    fn limited_response_body_checks_accumulated_chunk_size() {
+        let mut body = Vec::new();
+        assert!(append_limited_response_chunk(&mut body, &[1, 2], 4).is_ok());
+        assert!(append_limited_response_chunk(&mut body, &[3, 4], 4).is_ok());
+        assert!(append_limited_response_chunk(&mut body, &[5], 4).is_err());
+        assert_eq!(body, vec![1, 2, 3, 4]);
     }
 }

@@ -25,6 +25,7 @@ const AI_CHAPTER_SUMMARY_GENERATE_ROUTE: &str = "/reader3/ai/chapter-summary/gen
 const AI_CHAPTER_SUMMARY_CONFIG_ROUTE: &str = "/reader3/ai/chapter-summary/config";
 const AI_PROXY_ROUTE: &str = "/reader3/ai/proxy";
 const AI_PROXY_IMAGE_ROUTE: &str = "/reader3/ai/proxy/image";
+const AZURE_TTS_ROUTE: &str = "/reader3/tts/azure";
 
 pub fn build_router(state: AppState) -> Router {
     let api = Router::new()
@@ -277,6 +278,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(AI_PROXY_ROUTE, post(handlers::ai_proxy))
         .route(AI_PROXY_IMAGE_ROUTE, post(handlers::ai_proxy_image))
+        .route(AZURE_TTS_ROUTE, post(handlers::azure_tts))
         .route("/reader3/getReplaceRules", get(handlers::get_replace_rules))
         .route(
             "/reader3/saveReplaceRule",
@@ -496,6 +498,7 @@ mod tests {
             (Method::POST, AI_BOOK_CATCHUP_START_ROUTE),
             (Method::GET, AI_BOOK_CATCHUP_STATUS_ROUTE),
             (Method::POST, AI_BOOK_CATCHUP_CANCEL_ROUTE),
+            (Method::POST, AZURE_TTS_ROUTE),
         ] {
             let response = client
                 .request(method.clone(), format!("{base_url}{path}"))

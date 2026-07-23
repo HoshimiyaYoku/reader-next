@@ -17,6 +17,7 @@ import {
 import type { Book, BookGroup, Bookmark, BookSource, ReplaceRule, RssSource } from '../types'
 
 const BACKUP_VERSION = 1
+const SPEECH_CONFIG_STORAGE_KEY = 'reader-speechConfig'
 const LOCAL_STORAGE_KEYS = [
   'theme',
   'themeMode',
@@ -26,7 +27,7 @@ const LOCAL_STORAGE_KEYS = [
   'reader-isNight',
   'reader-dayColorStyle',
   'reader-nightColorStyle',
-  'reader-speechConfig',
+  SPEECH_CONFIG_STORAGE_KEY,
   'reader-last-session',
   'reader-currentIndex',
   'reader-source-subscriptions',
@@ -51,7 +52,12 @@ function captureLocalState() {
   return LOCAL_STORAGE_KEYS.reduce<Record<string, string>>((acc, key) => {
     const value = localStorage.getItem(key)
     if (value != null) {
-      acc[key] = value
+      const captured = key === SPEECH_CONFIG_STORAGE_KEY
+        ? redactSpeechConfigSecrets(value)
+        : value
+      if (captured != null) {
+        acc[key] = captured
+      }
     }
     return acc
   }, {})
@@ -59,13 +65,59 @@ function captureLocalState() {
 
 function applyLocalState(localState: Record<string, string> = {}) {
   LOCAL_STORAGE_KEYS.forEach((key) => {
-    const value = localState[key]
+    const backupValue = localState[key]
+    if (key === SPEECH_CONFIG_STORAGE_KEY && backupValue == null) {
+      // Speech credentials are intentionally omitted from backups. Keep the
+      // current browser config when an older or redacted backup has no entry.
+      return
+    }
+    const value = key === SPEECH_CONFIG_STORAGE_KEY && backupValue != null
+      ? preserveLocalSpeechConfigSecrets(backupValue, localStorage.getItem(key))
+      : backupValue
     if (value == null) {
       localStorage.removeItem(key)
     } else {
       localStorage.setItem(key, value)
     }
   })
+}
+
+export function redactSpeechConfigSecrets(value: string) {
+  try {
+    const config = JSON.parse(value) as Record<string, unknown>
+    delete config.openaiApiKey
+    delete config.azureApiKey
+    return JSON.stringify(config)
+  } catch {
+    // Do not copy an unknown payload that may contain credentials into WebDAV.
+    return null
+  }
+}
+
+export function preserveLocalSpeechConfigSecrets(backupValue: string, localValue: string | null) {
+  try {
+    const backupConfig = JSON.parse(backupValue) as Record<string, unknown>
+    delete backupConfig.openaiApiKey
+    delete backupConfig.azureApiKey
+
+    let localConfig: Record<string, unknown> = {}
+    if (localValue) {
+      try {
+        localConfig = JSON.parse(localValue) as Record<string, unknown>
+      } catch {
+        // Ignore a broken local config, but never restore secrets from the backup.
+      }
+    }
+    if (typeof localConfig.openaiApiKey === 'string' && localConfig.openaiApiKey) {
+      backupConfig.openaiApiKey = localConfig.openaiApiKey
+    }
+    if (typeof localConfig.azureApiKey === 'string' && localConfig.azureApiKey) {
+      backupConfig.azureApiKey = localConfig.azureApiKey
+    }
+    return JSON.stringify(backupConfig)
+  } catch {
+    return backupValue
+  }
 }
 
 export async function createWebdavBackupPayload(): Promise<WebdavBackupPayload> {

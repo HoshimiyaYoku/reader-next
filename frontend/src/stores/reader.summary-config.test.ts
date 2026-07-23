@@ -65,4 +65,24 @@ describe('reader summary display config', () => {
     expect(store.speechConfig.speechPitch).toBe(1)
     expect(store.speechConfig.stopAfterMinutes).toBe(0)
   })
+
+  it('loads Azure Speech config and normalizes unsupported output formats', () => {
+    localStorage.setItem('reader-speechConfig', JSON.stringify({
+      provider: 'azure',
+      azureRegion: 'eastasia',
+      azureApiKey: 'azure-key',
+      azureVoice: 'zh-CN-XiaoxiaoNeural',
+      azureFormat: 'unsupported-format',
+      speechRate: 3,
+      speechPitch: 2,
+    }))
+
+    const store = useReaderStore()
+
+    expect(store.speechConfig.provider).toBe('azure')
+    expect(store.azureSpeechConfigured).toBe(true)
+    expect(store.speechConfig.azureFormat).toBe('audio-24khz-48kbitrate-mono-mp3')
+    expect(store.speechConfig.speechRate).toBe(2)
+    expect(store.speechConfig.speechPitch).toBe(1.5)
+  })
 })

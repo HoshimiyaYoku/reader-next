@@ -7,6 +7,7 @@
           <div class="tts-mode">
             当前模式: {{ providerLabel }}
             <span v-if="provider === 'openai'"> · {{ openaiSource === 'server' ? '后端配置' : `${openaiModel} / ${openaiVoice}` }}</span>
+            <span v-else-if="provider === 'azure'"> · {{ azureRegion || '未设置区域' }} / {{ azureVoice || '未设置音色' }}</span>
           </div>
         </div>
         <button class="tts-close" @click="$emit('close')" aria-label="close tts panel">
@@ -27,9 +28,17 @@
           {{ voice.name }} ({{ voice.lang }})
         </option>
       </select>
-      <div v-else-if="openaiSource === 'server'" class="tts-source-note">
+      <div v-else-if="provider === 'openai' && openaiSource === 'server'" class="tts-source-note">
         OpenAI Speech 使用后端配置
       </div>
+      <input
+        v-else-if="provider === 'azure'"
+        class="tts-voice-select"
+        type="text"
+        :value="azureVoice"
+        placeholder="zh-CN-XiaoxiaoNeural"
+        @input="$emit('azure-voice-change', ($event.target as HTMLInputElement).value)"
+      >
       <input
         v-else
         class="tts-voice-select"
@@ -73,7 +82,7 @@ defineProps<{
   show: boolean
   theme: ThemePreset | { popup: string; fontColor: string }
   chapterTitle?: string
-  provider: 'system' | 'openai'
+  provider: 'system' | 'openai' | 'azure'
   providerLabel: string
   isSpeaking: boolean
   isLoading: boolean
@@ -86,6 +95,8 @@ defineProps<{
   openaiModel: string
   openaiVoice: string
   openaiSource: 'browser' | 'server'
+  azureRegion: string
+  azureVoice: string
   stopAfterMinutes: number
   timerText: string
 }>()
@@ -98,6 +109,7 @@ defineEmits<{
   next: []
   'voice-change': [value: string]
   'openai-voice-change': [value: string]
+  'azure-voice-change': [value: string]
   'rate-change': [delta: number]
   'pitch-change': [delta: number]
   'timer-change': [minutes: number]

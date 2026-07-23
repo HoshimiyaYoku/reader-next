@@ -4,6 +4,7 @@ import { useAppStore } from './app'
 import { useReaderStore } from './reader'
 import { getBookContent, getBookInfo, getChapterList, getShelfBook, saveBookProgress } from '../api/bookshelf'
 import { getBrowserCachedChapter, setBrowserCachedChapter } from '../utils/browserCache'
+import { requestAzureSpeechAudio } from '../utils/azureSpeech'
 import type { Book } from '../types'
 
 vi.mock('../api/bookshelf', () => ({
@@ -38,6 +39,10 @@ vi.mock('../utils/recentBooks', () => ({
 vi.mock('../utils/openaiSpeech', () => ({
   DEFAULT_OPENAI_BASE_URL: 'https://api.openai.com/v1',
   requestOpenAISpeechAudio: vi.fn(),
+}))
+
+vi.mock('../utils/azureSpeech', () => ({
+  requestAzureSpeechAudio: vi.fn(),
 }))
 
 
@@ -75,6 +80,7 @@ describe('reader local txt chapters', () => {
     vi.mocked(saveBookProgress).mockResolvedValue('ok')
     vi.mocked(getBrowserCachedChapter).mockReset()
     vi.mocked(setBrowserCachedChapter).mockReset()
+    vi.mocked(requestAzureSpeechAudio).mockReset()
   })
 
   it('switches chinese mode back to simplified after traditional conversion is loaded', async () => {
@@ -106,6 +112,38 @@ describe('reader local txt chapters', () => {
     expect(readerStore.currentTheme.body).toBe('#101722')
     expect(readerStore.currentTheme.fontColor).toBe('#d7deea')
     expect(readerStore.config.fontSize).toBe(22)
+  })
+
+  it('preloads Azure Speech with the configured voice, rate, and pitch', async () => {
+    vi.mocked(requestAzureSpeechAudio).mockResolvedValue(new Blob(['audio'], { type: 'audio/mpeg' }))
+    const readerStore = useReaderStore()
+    readerStore.setSpeechProvider('azure')
+    readerStore.setAzureSpeechRegion('eastasia')
+    readerStore.setAzureSpeechApiKey('azure-key')
+    readerStore.setAzureSpeechVoice('zh-CN-XiaoxiaoNeural')
+    readerStore.setSpeechRate(1.2)
+    readerStore.setSpeechPitch(0.9)
+
+    await readerStore.preloadOpenAITTS('测试朗读')
+
+    expect(requestAzureSpeechAudio).toHaveBeenCalledWith(expect.objectContaining({
+      region: 'eastasia',
+      subscriptionKey: 'azure-key',
+      input: '测试朗读',
+      voice: 'zh-CN-XiaoxiaoNeural',
+      rate: 1.2,
+      pitch: 0.9,
+    }))
+  })
+
+  it('clamps Azure prosody to the official range', () => {
+    const readerStore = useReaderStore()
+    readerStore.setSpeechProvider('azure')
+    readerStore.setSpeechRate(3)
+    readerStore.setSpeechPitch(2)
+
+    expect(readerStore.speechConfig.speechRate).toBe(2)
+    expect(readerStore.speechConfig.speechPitch).toBe(1.5)
   })
 
   it('fetches uploaded local txt content from backend even when browser reports offline', async () => {

@@ -98,10 +98,12 @@
       :voice-name="store.speechConfig.voiceName"
       :rate="store.speechConfig.speechRate"
       :pitch="store.speechConfig.speechPitch"
-      :supports-pitch="store.speechConfig.provider === 'system'"
+      :supports-pitch="store.speechConfig.provider === 'system' || store.speechConfig.provider === 'azure'"
       :openai-model="store.speechConfig.openaiModel"
       :openai-voice="store.speechConfig.openaiVoice"
       :openai-source="store.speechConfig.openaiSource"
+      :azure-region="store.speechConfig.azureRegion"
+      :azure-voice="store.speechConfig.azureVoice"
       :stop-after-minutes="store.speechConfig.stopAfterMinutes"
       :timer-text="speechTimerText"
       @close="closeTTSPanel"
@@ -111,6 +113,7 @@
       @next="speechNext"
       @voice-change="changeVoice"
       @openai-voice-change="changeOpenAIVoice"
+      @azure-voice-change="changeAzureVoice"
       @rate-change="adjustSpeechRate"
       @pitch-change="adjustSpeechPitch"
       @timer-change="setSpeechTimer"
@@ -2811,6 +2814,15 @@ function changeVoice(name: string) {
 function changeOpenAIVoice(voiceId: string) {
   if (store.speechConfig.openaiSource === 'server') return
   store.setOpenAISpeechVoice(voiceId)
+  ttsPanelDismissed.value = false
+  showTTSPanel.value = true
+  if (store.isSpeaking && !store.isPaused) {
+    restartSpeechFromCurrentParagraph()
+  }
+}
+
+function changeAzureVoice(voiceId: string) {
+  store.setAzureSpeechVoice(voiceId)
   ttsPanelDismissed.value = false
   showTTSPanel.value = true
   if (store.isSpeaking && !store.isPaused) {
