@@ -39,10 +39,10 @@
             </div>
           </div>
 
-          <div v-if="isLocal" class="local-book-tools">
+          <div v-if="canEditCover" class="local-book-tools">
             <div class="local-tool-row">
-              <strong>本地书籍</strong>
-              <button type="button" class="tool-btn" @click="editingName = !editingName">
+              <strong>{{ isLocal ? '本地书籍' : '封面管理' }}</strong>
+              <button v-if="isLocal" type="button" class="tool-btn" @click="editingName = !editingName">
                 重命名
               </button>
               <button type="button" class="tool-btn" :disabled="coverSearching" @click="searchCovers">
@@ -59,7 +59,7 @@
                 @change="uploadCover"
               />
             </div>
-            <form v-if="editingName" class="rename-form" @submit.prevent="renameLocalBook">
+            <form v-if="isLocal && editingName" class="rename-form" @submit.prevent="renameLocalBook">
               <input v-model="nameDraft" maxlength="120" aria-label="书名" />
               <button type="submit" class="tool-btn primary" :disabled="savingLocalBook">保存</button>
               <button type="button" class="tool-btn" @click="editingName = false">取消</button>
@@ -70,10 +70,11 @@
                 :key="candidate.coverUrl"
                 type="button"
                 class="cover-candidate"
-                :title="`${candidate.name} · ${candidate.author || '未知作者'}`"
+                :title="`${candidate.name} · ${candidate.author || '未知作者'} · ${candidate.originName || candidate.origin}`"
                 @click="selectCover(candidate.coverUrl)"
               >
                 <img :src="getCoverUrl(candidate.coverUrl)" :alt="candidate.name" />
+                <span class="cover-source">{{ candidate.originName || candidate.origin }}</span>
               </button>
             </div>
           </div>
@@ -175,9 +176,18 @@ const savedCover = ref('')
 const savingLocalBook = ref(false)
 const coverSearching = ref(false)
 const coverFileInput = ref<HTMLInputElement | null>(null)
-const coverCandidates = ref<Array<Pick<SearchBook, 'name' | 'author' | 'coverUrl'> & { coverUrl: string }>>([])
+const coverCandidates = ref<Array<Pick<SearchBook, 'name' | 'author' | 'coverUrl' | 'origin' | 'originName'> & { coverUrl: string }>>([])
 
 const isLocal = computed(() => isLocalBook(props.book))
+const shelfBook = computed(() => {
+  if (!props.book) return null
+  return shelfStore.books.find((book) => (
+    book.bookUrl === props.book?.bookUrl
+    && (!props.book.origin || book.origin === props.book.origin)
+  )) || null
+})
+const editableBook = computed<Book | null>(() => shelfBook.value || (isLocal.value ? props.book as Book : null))
+const canEditCover = computed(() => !!editableBook.value)
 const displayName = computed(() => savedName.value || props.book?.name || '')
 
 const coverSrc = computed(() => {
@@ -194,9 +204,10 @@ const displayChapters = computed(() => {
 watch(() => props.modelValue, async (visible) => {
   if (visible && props.book) {
     coverFailed.value = false
-    savedName.value = props.book.name
-    savedCover.value = (props.book as Book).customCoverUrl || ''
-    nameDraft.value = props.book.name
+    const currentBook = editableBook.value || props.book as Book
+    savedName.value = currentBook.name
+    savedCover.value = currentBook.customCoverUrl || ''
+    nameDraft.value = currentBook.name
     editingName.value = false
     coverCandidates.value = []
     showAllChapters.value = false
@@ -221,14 +232,15 @@ function close() {
   emit('update:modelValue', false)
 }
 
-async function saveLocalBookChanges(changes: Partial<Book>) {
-  if (!props.book || !isLocal.value) return
+async function saveBookChanges(changes: Partial<Book>) {
+  const currentBook = editableBook.value
+  if (!currentBook) return
   savingLocalBook.value = true
   try {
     const saved = await saveBook({
-      ...(props.book as Book),
-      name: savedName.value || props.book.name,
-      customCoverUrl: savedCover.value || (props.book as Book).customCoverUrl,
+      ...currentBook,
+      name: savedName.value || currentBook.name,
+      customCoverUrl: savedCover.value || currentBook.customCoverUrl,
       ...changes,
     })
     savedName.value = saved.name
@@ -236,7 +248,7 @@ async function saveLocalBookChanges(changes: Partial<Book>) {
     nameDraft.value = saved.name
     coverFailed.value = false
     await shelfStore.fetchBooks().catch(() => undefined)
-    appStore.showToast('本地书籍信息已保存', 'success')
+    appStore.showToast(isLocal.value ? '本地书籍信息已保存' : '书籍封面已保存', 'success')
   } catch (error) {
     appStore.showToast((error as Error).message || '保存失败', 'error')
     throw error
@@ -251,7 +263,7 @@ async function renameLocalBook() {
     appStore.showToast('书名不能为空', 'warning')
     return
   }
-  await saveLocalBookChanges({ name }).catch(() => undefined)
+  await saveBookChanges({ name }).catch(() => undefined)
   editingName.value = false
 }
 
@@ -266,6 +278,7 @@ async function searchCovers() {
     coverCandidates.value = books
       .filter((book): book is SearchBook & { coverUrl: string } => {
         const coverUrl = book.coverUrl?.trim()
+        if (!isLocal.value && book.origin === editableBook.value?.origin) return false
         if (!coverUrl || seen.has(coverUrl)) return false
         seen.add(coverUrl)
         return true
@@ -282,7 +295,7 @@ async function searchCovers() {
 }
 
 async function selectCover(coverUrl: string) {
-  await saveLocalBookChanges({ customCoverUrl: coverUrl }).catch(() => undefined)
+  await saveBookChanges({ customCoverUrl: coverUrl }).catch(() => undefined)
   coverCandidates.value = []
 }
 
@@ -304,7 +317,7 @@ async function uploadCover(event: Event) {
     appStore.showToast('读取封面文件失败', 'error')
     return
   }
-  await saveLocalBookChanges({ customCoverUrl: dataUrl }).catch(() => undefined)
+  await saveBookChanges({ customCoverUrl: dataUrl }).catch(() => undefined)
 }
 
 function readFileAsDataUrl(file: File) {
@@ -562,6 +575,7 @@ function openAiBook() {
 }
 
 .cover-candidate {
+  position: relative;
   aspect-ratio: 3 / 4;
   overflow: hidden;
   border: 2px solid transparent;
@@ -577,6 +591,21 @@ function openAiBook() {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.cover-source {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  overflow: hidden;
+  padding: 4px 5px;
+  color: white;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.78));
+  font-size: 10px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .book-intro {

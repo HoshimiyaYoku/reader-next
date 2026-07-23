@@ -20,7 +20,7 @@
 
       <div v-if="store.book" class="book-brief">
         <div class="book-brief-cover">
-          <img v-if="store.book.coverUrl" :src="store.book.coverUrl" :alt="store.book.name">
+          <img v-if="getCoverUrl(store.book.customCoverUrl || store.book.coverUrl)" :src="getCoverUrl(store.book.customCoverUrl || store.book.coverUrl)" :alt="store.book.name">
           <div v-else class="book-brief-placeholder">{{ store.book.name.slice(0, 1) }}</div>
         </div>
         <div class="book-brief-main">
@@ -124,7 +124,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useReaderStore } from '../../stores/reader'
 import { useAppStore } from '../../stores/app'
 import { getAvailableBookSourceSSE } from '../../api/search'
-import { getBookInfo } from '../../api/bookshelf'
+import { getBookInfo, getCoverUrl } from '../../api/bookshelf'
 import type { Book, SearchBook } from '../../types'
 
 type CandidateItem = {

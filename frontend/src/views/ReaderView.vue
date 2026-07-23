@@ -7,6 +7,7 @@
       color: theme.fontColor,
       fontFamily: currentFontFamily,
       '--color-primary': '#c97f3a',
+      '--reader-status-shadow': store.isNight ? '#000' : '#fff',
       '--reader-summary-sider-width': showSideAiPanel ? `${aiPanelSiderWidth}px` : '0px'
     }"
     @click="handleBackgroundClick"
@@ -114,6 +115,18 @@
       @pitch-change="adjustSpeechPitch"
       @timer-change="setSpeechTimer"
     />
+
+    <div class="reader-page-status reader-ui-font">
+      <div class="reader-page-status-item status-chapter" :title="store.currentChapter?.title || ''">
+        <span v-if="store.chapters.length">第 {{ store.currentIndex + 1 }} 章 / 共 {{ store.chapters.length }} 章</span>
+        <span class="status-chapter-name">{{ store.currentChapter?.title || '正在加载章节' }}</span>
+      </div>
+      <div class="reader-page-status-item status-book" :title="store.book?.name || ''">
+        {{ store.book?.name || '阅读' }}
+      </div>
+      <div class="reader-page-status-item status-progress">全书 {{ store.readingProgress }}</div>
+      <time class="reader-page-status-item status-time">{{ currentTimeText }}</time>
+    </div>
 
     <!-- Main Content Area -->
     <div
@@ -1283,6 +1296,10 @@ let chapterSummaryTimer: number | null = null
 let chapterSummaryRequestId = 0
 let chapterSummaryRelationshipRequestId = 0
 const speechTimerNow = ref(Date.now())
+const currentTimeText = computed(() => {
+  const date = new Date(speechTimerNow.value)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+})
 const speechTimerText = computed(() => {
   if (!store.speechStopAt) return ''
   const remainMs = store.speechStopAt - speechTimerNow.value
@@ -3233,6 +3250,58 @@ watch(
   -webkit-touch-callout: none;
 }
 
+.reader-page-status {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  pointer-events: none;
+  font-size: 12px;
+  line-height: 1.35;
+  opacity: 0.58;
+}
+
+.reader-page-status-item {
+  position: absolute;
+  max-width: min(42vw, 520px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px color-mix(in srgb, var(--reader-status-shadow, #fff) 55%, transparent);
+}
+
+.status-chapter {
+  top: calc(var(--safe-area-top) + 14px);
+  left: 24px;
+  display: flex;
+  gap: 8px;
+}
+
+.status-chapter-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-chapter > :first-child {
+  flex: 0 0 auto;
+}
+
+.status-book {
+  top: calc(var(--safe-area-top) + 14px);
+  right: 24px;
+  text-align: right;
+}
+
+.status-progress {
+  bottom: calc(var(--safe-area-bottom) + 14px);
+  left: 24px;
+}
+
+.status-time {
+  right: 24px;
+  bottom: calc(var(--safe-area-bottom) + 14px);
+  font-variant-numeric: tabular-nums;
+}
+
 .reader-scroll-container {
   flex: 1;
   height: 100%;
@@ -4069,23 +4138,62 @@ watch(
 }
 
 @media (max-width: 768px) {
+  .reader-page-status {
+    font-size: 11px;
+  }
+
+  .reader-page-status-item {
+    max-width: 48vw;
+  }
+
+  .status-chapter,
+  .status-progress {
+    left: 16px;
+  }
+
+  .status-book,
+  .status-time {
+    right: 16px;
+  }
+
+  .status-chapter {
+    top: calc(var(--safe-area-top) + 10px);
+  }
+
+  .status-book {
+    top: calc(var(--safe-area-top) + 10px);
+  }
+
+  .status-progress {
+    bottom: calc(var(--safe-area-bottom) + 10px);
+  }
+
+  .status-time {
+    bottom: calc(var(--safe-area-bottom) + 10px);
+  }
+
   .reader-scroll-container.horizontal-page-mode {
     scroll-behavior: auto;
   }
 
   .chapter-content {
-    padding: 24px 20px 8px;
+    padding: 48px 20px 36px;
     min-height: auto;
     height: auto;
   }
 
   .continuous-reading {
-    padding: 16px 0 8px;
+    padding: 16px 0 36px;
   }
 
   .continuous-chapter {
     padding-top: 20px;
     padding-bottom: 8px;
+  }
+
+  .horizontal-page {
+    padding-top: 48px;
+    padding-bottom: 40px;
   }
 
   .chapter-title {

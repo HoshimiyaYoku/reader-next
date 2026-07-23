@@ -15,7 +15,7 @@
         :class="{ current: book.bookUrl === readerStore.book?.bookUrl }"
         @click="openBook(book)"
       >
-        <img v-if="getCoverUrl(book.coverUrl)" :src="getCoverUrl(book.coverUrl)" class="book-cover" />
+        <img v-if="getCoverUrl(book.customCoverUrl || book.coverUrl)" :src="getCoverUrl(book.customCoverUrl || book.coverUrl)" class="book-cover" />
         <div v-else class="book-cover placeholder">无封面</div>
         
         <div class="book-info">
