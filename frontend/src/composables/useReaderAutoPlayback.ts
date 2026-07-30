@@ -15,6 +15,12 @@ interface AutoPlaybackConfig {
   lineHeight: number
 }
 
+interface HorizontalPlayback {
+  isEnabled: ComputedRef<boolean>
+  getPageIndex: () => number
+  showPage: (pageIndex: number) => void
+}
+
 export function useReaderAutoPlayback(
   store: ReaderStore,
   config: ComputedRef<AutoPlaybackConfig>,
@@ -23,6 +29,7 @@ export function useReaderAutoPlayback(
   chapterTextRef: Ref<HTMLElement | undefined>,
   nextChapter: () => void | Promise<void>,
   prevChapter: () => void | Promise<void>,
+  horizontalPlayback?: HorizontalPlayback,
 ) {
   let autoScrollId: number | null = null
   let autoParagraphTimer: number | null = null
@@ -68,17 +75,24 @@ export function useReaderAutoPlayback(
   }
 
   function getCurrentParagraph() {
-    const reading = chapterTextRef.value?.querySelector('.reading') as HTMLElement | null
-    if (reading) return reading
+    const reading = scrollContainerRef.value?.querySelector('.reading') as HTMLElement | null
+    if (store.isSpeaking && reading) return reading
 
     const container = scrollContainerRef.value
     if (!container) return null
 
+    if (horizontalPlayback?.isEnabled.value && chapterTextRef.value) {
+      const pages = Array.from(chapterTextRef.value.querySelectorAll('.horizontal-page')) as HTMLElement[]
+      const pageIndex = Math.max(0, Math.min(pages.length - 1, horizontalPlayback.getPageIndex()))
+      const paragraphs = Array.from(pages[pageIndex]?.querySelectorAll('p') || []) as HTMLElement[]
+      return paragraphs.find((paragraph) => paragraph.innerText.trim()) || null
+    }
+
     const list = getFilteredParagraphs()
+    const containerRect = container.getBoundingClientRect()
+    const anchorTop = containerRect.top + 40
     for (const paragraph of list) {
-      const top = paragraph.offsetTop - container.scrollTop
-      const bottom = top + paragraph.offsetHeight
-      if (bottom > 40) {
+      if (paragraph.getBoundingClientRect().bottom > anchorTop) {
         return paragraph
       }
     }
@@ -189,8 +203,14 @@ export function useReaderAutoPlayback(
     const mergedTexts: string[] = [currentText]
     let mergedLength = currentText.length
     let cursorIndex = startIndex + 1
+    const currentPage = horizontalPlayback?.isEnabled.value
+      ? paragraph?.closest('.horizontal-page')
+      : null
 
     while (cursorIndex < list.length && mergedLength < OPENAI_MERGED_SEGMENT_CHAR_LIMIT) {
+      if (currentPage && list[cursorIndex]?.closest('.horizontal-page') !== currentPage) {
+        break
+      }
       const nextText = list[cursorIndex]?.innerText.trim() || ''
       if (!nextText) {
         cursorIndex += 1
@@ -292,6 +312,16 @@ export function useReaderAutoPlayback(
   function showParagraph(paragraph: HTMLElement | null, smooth = true) {
     const container = scrollContainerRef.value
     if (!container || !paragraph) return
+
+    if (horizontalPlayback?.isEnabled.value && chapterTextRef.value) {
+      const page = paragraph.closest('.horizontal-page')
+      const pages = Array.from(chapterTextRef.value.querySelectorAll('.horizontal-page'))
+      const pageIndex = page ? pages.indexOf(page) : -1
+      if (pageIndex >= 0 && pageIndex !== horizontalPlayback.getPageIndex()) {
+        horizontalPlayback.showPage(pageIndex)
+      }
+      return
+    }
 
     const targetTop = Math.max(0, paragraph.offsetTop - 24)
     container.scrollTo({

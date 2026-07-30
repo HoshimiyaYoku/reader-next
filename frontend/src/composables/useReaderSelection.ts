@@ -7,6 +7,17 @@ import { saveReplaceRule } from '../api/replaceRule'
 type ReaderStore = ReturnType<typeof useReaderStore>
 type AppStore = ReturnType<typeof useAppStore>
 
+export function findSelectionStartParagraph(container: HTMLElement, range: Range) {
+  const paragraphs = Array.from(container.querySelectorAll('p')) as HTMLElement[]
+  return paragraphs.find((paragraph) => {
+    try {
+      return range.intersectsNode(paragraph)
+    } catch {
+      return false
+    }
+  }) || null
+}
+
 export function useReaderSelection(
   store: ReaderStore,
   appStore: AppStore,
@@ -25,6 +36,7 @@ export function useReaderSelection(
   const activeSelectionText = ref('')
   const suppressSelectionCloseUntil = ref(0)
   let selectionMenuUpdateTimer: number | null = null
+  let activeSelectionRange: Range | null = null
 
   function hideSelectionMenu() {
     selectionMenu.value.visible = false
@@ -84,12 +96,19 @@ export function useReaderSelection(
     }
     suppressSelectionCloseUntil.value = Date.now() + 250
     activeSelectionText.value = text
+    activeSelectionRange = range.cloneRange()
+    const safeTop = 16 + Math.max(0, parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-area-top')) || 0)
+    const safeBottom = 16 + Math.max(0, parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-area-bottom')) || 0)
+    const estimatedMenuHeight = 168
+    const maxMenuTop = Math.max(safeTop, window.innerHeight - safeBottom - estimatedMenuHeight)
+    const belowSelectionTop = Math.min(maxMenuTop, Math.max(safeTop, rect.bottom + 12))
+    const aboveSelectionTop = rect.top - estimatedMenuHeight - 8
     selectionMenu.value = {
       visible: true,
       text: text.length > 48 ? `${text.slice(0, 48)}...` : text,
       top: isTouchDevice
-        ? Math.min(window.innerHeight - 76, Math.max(16 + Math.max(0, parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-area-top')) || 0), rect.bottom + 12))
-        : Math.max(16 + Math.max(0, parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-area-top')) || 0), rect.top - 56),
+        ? belowSelectionTop
+        : (aboveSelectionTop >= safeTop ? aboveSelectionTop : belowSelectionTop),
       left: Math.min(window.innerWidth - 240, Math.max(16, rect.left + rect.width / 2 - 110)),
     }
   }
@@ -103,6 +122,7 @@ export function useReaderSelection(
       await store.addBookmark(pos, text)
       selection?.removeAllRanges()
       activeSelectionText.value = ''
+      activeSelectionRange = null
       hideSelectionMenu()
       appStore.showToast('已加入书签', 'success')
     } catch {
@@ -132,6 +152,7 @@ export function useReaderSelection(
       await store.fetchReplaceRules()
       selection?.removeAllRanges()
       activeSelectionText.value = ''
+      activeSelectionRange = null
       hideSelectionMenu()
       appStore.showToast(mode === 'source' ? '已加入书源替换规则' : '已加入本书替换规则', 'success')
     } catch {
@@ -139,8 +160,18 @@ export function useReaderSelection(
     }
   }
 
+  function getSelectionStartParagraph() {
+    const container = scrollContainerRef.value
+    if (!container) return null
+    const selection = window.getSelection?.()
+    const range = activeSelectionRange
+      || (selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null)
+    return range ? findSelectionStartParagraph(container, range) : null
+  }
+
   function clearSelectionState() {
     activeSelectionText.value = ''
+    activeSelectionRange = null
     hideSelectionMenu()
     window.getSelection?.()?.removeAllRanges()
   }
@@ -163,6 +194,7 @@ export function useReaderSelection(
     updateSelectionMenu,
     addSelectionBookmark,
     addSelectionReplaceRule,
+    getSelectionStartParagraph,
     clearSelectionState,
     disposeSelection,
   }

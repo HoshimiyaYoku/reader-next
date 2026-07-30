@@ -577,8 +577,8 @@ export const useReaderStore = defineStore('reader', () => {
   async function resolveLatestShelfBook(localBook: Book) {
     if (!localBook.bookUrl) return localBook
     const latest = await getShelfBook(localBook.bookUrl).catch(() => null)
-    if (!latest) return localBook
-    const shelfBook = shelfStore.books.find((item) => item.bookUrl === localBook.bookUrl || item.bookUrl === latest.bookUrl)
+    if (!latest || latest.bookUrl !== localBook.bookUrl) return localBook
+    const shelfBook = shelfStore.books.find((item) => item.bookUrl === localBook.bookUrl)
     if (shelfBook) {
       Object.assign(shelfBook, latest)
     }

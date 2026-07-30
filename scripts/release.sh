@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-DOCKER_REPO="${DOCKER_REPO:-ghcr.io/maple0517/reader-next}"
+DOCKER_REPO="${DOCKER_REPO:-ghcr.io/hoshimiyayoku/reader-next}"
 BUMP_MODE="patch"
 INPUT_VERSION=""
 
@@ -174,7 +174,7 @@ gh release create "$TAG" \
   --generate-notes
 
 echo "Release completed: $TAG"
-echo "GitHub release: https://github.com/Maple0517/reader-next/releases/tag/${TAG}"
+echo "GitHub release: https://github.com/HoshimiyaYoku/reader-next/releases/tag/${TAG}"
 echo "Docker publish workflow should create:"
 echo "  ${DOCKER_REPO}:${TAG}"
 echo "  ${DOCKER_REPO}:${SEMVER}"

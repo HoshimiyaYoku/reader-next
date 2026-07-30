@@ -279,6 +279,59 @@ describe('reader local txt chapters', () => {
     expect(readerStore.book?.durChapterPos).toBe(6400)
   })
 
+  it('does not replace the persisted reader session with another server book', async () => {
+    const localBook: Book = {
+      name: '本地正在阅读',
+      author: '作者甲',
+      origin: 'source-1',
+      bookUrl: 'book-local',
+      durChapterIndex: 1,
+      durChapterPos: 2500,
+      durChapterTitle: '本地第二章',
+    }
+    const otherServerBook: Book = {
+      name: '其他设备最近阅读',
+      author: '作者乙',
+      origin: 'source-2',
+      bookUrl: 'book-other',
+      durChapterIndex: 8,
+      durChapterPos: 8000,
+      durChapterTime: 1_765_000_000,
+      durChapterTitle: '其他书第九章',
+    }
+    const chapters = [
+      { title: '本地第一章', url: 'local-chapter-1', index: 0 },
+      { title: '本地第二章', url: 'local-chapter-2', index: 1 },
+    ]
+    localStorage.setItem('reader-last-session', JSON.stringify({
+      book: localBook,
+      chapters,
+      currentIndex: 1,
+      chapterScrollProgress: 0.25,
+      updatedAt: 1_000,
+    }))
+    vi.mocked(getShelfBook).mockResolvedValue(otherServerBook)
+    vi.mocked(getBookContent).mockResolvedValue('本地第二章正文')
+    vi.mocked(getBrowserCachedChapter).mockResolvedValue(null)
+    vi.mocked(setBrowserCachedChapter).mockResolvedValue(undefined)
+    useAppStore().setOnlineStatus(true)
+    const readerStore = useReaderStore()
+
+    const restored = await readerStore.restorePersistedSession()
+
+    expect(restored).toBe(true)
+    expect(readerStore.book?.bookUrl).toBe('book-local')
+    expect(readerStore.currentIndex).toBe(1)
+    expect(readerStore.chapterScrollProgress).toBe(0.25)
+    expect(getChapterList).not.toHaveBeenCalled()
+    expect(getBookContent).toHaveBeenCalledWith(expect.objectContaining({
+      chapterUrl: 'local-chapter-2',
+      bookUrl: 'book-local',
+      bookSourceUrl: 'source-1',
+      book: expect.objectContaining({ bookUrl: 'book-local' }),
+    }))
+  })
+
   it('keeps newer local session even when server has a deeper older chapter', async () => {
     const localBook: Book = {
       name: '恢复书',

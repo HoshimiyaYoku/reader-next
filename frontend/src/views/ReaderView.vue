@@ -1102,9 +1102,10 @@
       >
         <div class="selection-menu-text">{{ selectionMenu.text }}</div>
         <div class="selection-menu-actions">
+          <button @click="startSpeechFromSelection">从本段听</button>
           <button @click="addSelectionBookmark">加入书签</button>
-          <button @click="addSelectionReplaceRule('book')">按本书替换</button>
-          <button @click="addSelectionReplaceRule('source')">按书源替换</button>
+          <button @click="addSelectionReplaceRule('book')">本书净化</button>
+          <button @click="addSelectionReplaceRule('source')">书源净化</button>
         </div>
       </div>
     </Transition>
@@ -1342,6 +1343,7 @@ const {
   handleSelectionChange,
   addSelectionBookmark,
   addSelectionReplaceRule,
+  getSelectionStartParagraph,
   clearSelectionState,
   disposeSelection,
 } = useReaderSelection(
@@ -2393,7 +2395,22 @@ const {
   chapterTextRef,
   nextChapter,
   prevChapter,
+  {
+    isEnabled: isHorizontalPageMode,
+    getPageIndex: () => horizontalPageIndex.value,
+    showPage: seekHorizontalPage,
+  },
 )
+
+function startSpeechFromSelection() {
+  const paragraph = getSelectionStartParagraph()
+  if (!paragraph) return
+  cancelSpeechTransition()
+  clearSelectionState()
+  ttsPanelDismissed.value = false
+  showTTSPanel.value = true
+  startSpeech(paragraph)
+}
 
 // Click behavior
 function handleBackgroundClick(e: Event) {
@@ -4133,10 +4150,6 @@ watch(
   color: #fff;
   font-size: 13px;
   cursor: pointer;
-}
-
-.selection-menu-actions button:first-child {
-  grid-column: 1 / -1;
 }
 
 :deep(.search-highlight) {
