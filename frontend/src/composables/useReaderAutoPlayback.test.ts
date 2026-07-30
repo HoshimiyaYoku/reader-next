@@ -143,6 +143,46 @@ describe('useReaderAutoPlayback reading position', () => {
     expect(spoken[1]?.text).toBe('下一页第一段')
   })
 
+  it('continues from an explicitly started paragraph instead of the old viewport paragraph', () => {
+    vi.useFakeTimers()
+    const container = document.createElement('div')
+    const chapterText = document.createElement('div')
+    chapterText.innerHTML = '<p>屏幕旧段</p><p>指定起点</p><p>正确下一段</p>'
+    container.appendChild(chapterText)
+    const paragraphs = chapterText.querySelectorAll('p')
+    vi.spyOn(container, 'getBoundingClientRect').mockReturnValue({ top: 0 } as DOMRect)
+    vi.spyOn(paragraphs[0]!, 'getBoundingClientRect').mockReturnValue({ bottom: 80 } as DOMRect)
+    const { store, spoken } = createStore()
+    store.speechConfig.provider = 'openai'
+    const playback = createPlayback(store, container, chapterText)
+
+    playback.startSpeech(paragraphs[1] as HTMLElement)
+    expect(spoken[0]?.text).toBe('指定起点')
+    spoken[0]?.options.onEnd()
+    vi.runAllTimers()
+
+    expect(spoken[1]?.text).toBe('正确下一段')
+  })
+
+  it('lets manual next override a pending automatic transition', () => {
+    vi.useFakeTimers()
+    const container = document.createElement('div')
+    const chapterText = document.createElement('div')
+    chapterText.innerHTML = '<p>第一段</p><p>第二段</p><p>第三段</p>'
+    container.appendChild(chapterText)
+    const paragraphs = chapterText.querySelectorAll('p')
+    const { store, spoken } = createStore()
+    store.speechConfig.provider = 'openai'
+    const playback = createPlayback(store, container, chapterText)
+
+    playback.startSpeech(paragraphs[0] as HTMLElement)
+    spoken[0]?.options.onEnd()
+    playback.speechNext()
+    vi.runAllTimers()
+
+    expect(spoken.map((item) => item.text)).toEqual(['第一段', '第二段'])
+  })
+
   it('ignores an old reading marker when starting from a new vertical position', () => {
     const container = document.createElement('div')
     const chapterText = document.createElement('div')

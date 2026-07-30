@@ -37,6 +37,7 @@ export function useReaderAutoPlayback(
   let autoReadingProcessing = false
   let speechRestartTimer: number | null = null
   let isSpeechTransitioning = false
+  let activeSpeechParagraph: HTMLElement | null = null
   let currentSpeechParagraph: HTMLElement | null = null
   let currentSpeechSegments: { text: string; nextParagraph: HTMLElement | null }[] = []
   let currentSpeechSegmentIndex = 0
@@ -75,6 +76,9 @@ export function useReaderAutoPlayback(
   }
 
   function getCurrentParagraph() {
+    if ((store.isSpeaking || isSpeechTransitioning) && activeSpeechParagraph) {
+      return activeSpeechParagraph
+    }
     const reading = scrollContainerRef.value?.querySelector('.reading') as HTMLElement | null
     if (store.isSpeaking && reading) return reading
 
@@ -187,7 +191,7 @@ export function useReaderAutoPlayback(
     if (!currentText) {
       return {
         text: '',
-        nextParagraph: getNextParagraph(),
+        nextParagraph: getNextParagraphFrom(paragraph),
       }
     }
 
@@ -196,7 +200,7 @@ export function useReaderAutoPlayback(
     if (startIndex < 0) {
       return {
         text: currentText,
-        nextParagraph: getNextParagraph(),
+        nextParagraph: getNextParagraphFrom(paragraph),
       }
     }
 
@@ -243,7 +247,7 @@ export function useReaderAutoPlayback(
     }
 
     const paragraphChunks = buildParagraphSpeechChunks(paragraph)
-    const nextParagraph = getNextParagraph()
+    const nextParagraph = getNextParagraphFrom(paragraph)
     return paragraphChunks.map((text, index) => ({
       text,
       nextParagraph: index < paragraphChunks.length - 1 ? paragraph : nextParagraph,
@@ -439,7 +443,7 @@ export function useReaderAutoPlayback(
       resetSpeechChunkState()
       return
     }
-    if (isSpeechTransitioning) return
+    if (isSpeechTransitioning && !interruptCurrent) return
     isSpeechTransitioning = true
     resetSpeechChunkState()
     if (interruptCurrent) {
@@ -533,6 +537,7 @@ export function useReaderAutoPlayback(
       return
     }
 
+    activeSpeechParagraph = current
     markReadingParagraph(current)
     showParagraph(current)
     const chunk = ensureSpeechChunkState(current)
@@ -689,6 +694,7 @@ export function useReaderAutoPlayback(
 
   function disposeAutoPlayback() {
     cancelSpeechTransition()
+    activeSpeechParagraph = null
     stopAutoScroll()
   }
 

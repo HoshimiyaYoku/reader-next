@@ -114,6 +114,19 @@ describe('reader local txt chapters', () => {
     expect(readerStore.config.fontSize).toBe(22)
   })
 
+  it('enables the selection action menu once without overriding a later user choice', () => {
+    localStorage.setItem('readConfig', JSON.stringify({ selectAction: 'ignore' }))
+    const migratedStore = useReaderStore()
+
+    expect(migratedStore.config.selectAction).toBe('popup')
+    expect(localStorage.getItem('reader-selection-menu-default-v1')).toBe('1')
+
+    migratedStore.updateConfig('selectAction', 'ignore')
+    setActivePinia(createPinia())
+    const reloadedStore = useReaderStore()
+    expect(reloadedStore.config.selectAction).toBe('ignore')
+  })
+
   it('preloads Azure Speech with the configured voice, rate, and pitch', async () => {
     vi.mocked(requestAzureSpeechAudio).mockResolvedValue(new Blob(['audio'], { type: 'audio/mpeg' }))
     const readerStore = useReaderStore()

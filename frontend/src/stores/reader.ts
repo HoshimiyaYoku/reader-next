@@ -30,6 +30,7 @@ import { requestAzureSpeechAudio } from '../utils/azureSpeech'
 
 const READER_SESSION_KEY = 'reader-last-session'
 const READER_READ_HISTORY_PREFIX = 'reader-read-history:'
+const SELECTION_MENU_DEFAULT_MIGRATION_KEY = 'reader-selection-menu-default-v1'
 const SERVER_PROGRESS_SCALE = 10000
 
 interface PersistedReaderSession {
@@ -86,7 +87,7 @@ const defaultConfig: ReadConfig = {
   scrollPixel: 1,
   pageSpeed: 1000,
   clickAction: 'auto',
-  selectAction: 'ignore',
+  selectAction: 'popup',
   chineseMode: 'simplified',
   specialMode: 'normal',
   enablePreload: false,
@@ -102,7 +103,15 @@ const defaultConfig: ReadConfig = {
 function loadConfig(): ReadConfig {
   try {
     const saved = localStorage.getItem('readConfig')
-    if (saved) return migrateLegacyReadConfig(JSON.parse(saved))
+    if (saved) {
+      const migrated = migrateLegacyReadConfig(JSON.parse(saved))
+      if (!localStorage.getItem(SELECTION_MENU_DEFAULT_MIGRATION_KEY)) {
+        migrated.selectAction = 'popup'
+        localStorage.setItem(SELECTION_MENU_DEFAULT_MIGRATION_KEY, '1')
+      }
+      return migrated
+    }
+    localStorage.setItem(SELECTION_MENU_DEFAULT_MIGRATION_KEY, '1')
   } catch { /* ignore */ }
   return { ...defaultConfig }
 }
