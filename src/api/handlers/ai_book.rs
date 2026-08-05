@@ -856,6 +856,11 @@ mod tests {
         ));
         let chapter_summary_service =
             Arc::new(ChapterSummaryService::new(json_document_service.clone()));
+        let reader_background_service = Arc::new(
+            crate::service::reader_background_service::ReaderBackgroundService::new(
+                &cfg.storage_dir,
+            ),
+        );
         let update_service = Arc::new(
             UpdateService::new(
                 json_document_service.clone(),
@@ -880,6 +885,7 @@ mod tests {
             ai_book_catchup_service,
             ai_model_service,
             chapter_summary_service,
+            reader_background_service,
             update_service,
         };
         (state, dir)

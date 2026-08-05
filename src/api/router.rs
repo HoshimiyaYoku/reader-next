@@ -1,4 +1,5 @@
 use crate::api::{handlers, AppState};
+use crate::service::reader_background_service::MAX_READER_BACKGROUND_BYTES;
 use axum::{
     extract::DefaultBodyLimit,
     routing::{any, get, post},
@@ -26,6 +27,9 @@ const AI_CHAPTER_SUMMARY_CONFIG_ROUTE: &str = "/reader3/ai/chapter-summary/confi
 const AI_PROXY_ROUTE: &str = "/reader3/ai/proxy";
 const AI_PROXY_IMAGE_ROUTE: &str = "/reader3/ai/proxy/image";
 const AZURE_TTS_ROUTE: &str = "/reader3/tts/azure";
+const READER_BACKGROUND_ROUTE: &str = "/reader3/reader-background";
+const READER_BACKGROUND_IMAGE_ROUTE: &str = "/reader3/reader-background/image";
+const READER_BACKGROUND_SETTINGS_ROUTE: &str = "/reader3/reader-background/settings";
 
 pub fn build_router(state: AppState) -> Router {
     let api = Router::new()
@@ -279,6 +283,23 @@ pub fn build_router(state: AppState) -> Router {
         .route(AI_PROXY_ROUTE, post(handlers::ai_proxy))
         .route(AI_PROXY_IMAGE_ROUTE, post(handlers::ai_proxy_image))
         .route(AZURE_TTS_ROUTE, post(handlers::azure_tts))
+        .route(
+            READER_BACKGROUND_ROUTE,
+            get(handlers::get_reader_background)
+                .post(handlers::upload_reader_background)
+                .delete(handlers::delete_reader_background)
+                .layer(DefaultBodyLimit::max(
+                    MAX_READER_BACKGROUND_BYTES + 1024 * 1024,
+                )),
+        )
+        .route(
+            READER_BACKGROUND_IMAGE_ROUTE,
+            get(handlers::get_reader_background_image),
+        )
+        .route(
+            READER_BACKGROUND_SETTINGS_ROUTE,
+            post(handlers::update_reader_background_settings),
+        )
         .route("/reader3/getReplaceRules", get(handlers::get_replace_rules))
         .route(
             "/reader3/saveReplaceRule",
@@ -432,6 +453,11 @@ mod tests {
         let ai_book_catchup_service = Arc::new(AiBookCatchupService::new());
         let chapter_summary_service =
             Arc::new(ChapterSummaryService::new(json_document_service.clone()));
+        let reader_background_service = Arc::new(
+            crate::service::reader_background_service::ReaderBackgroundService::new(
+                &cfg.storage_dir,
+            ),
+        );
         let update_service = Arc::new(
             UpdateService::new(
                 json_document_service.clone(),
@@ -456,6 +482,7 @@ mod tests {
             ai_book_catchup_service,
             ai_model_service,
             chapter_summary_service,
+            reader_background_service,
             update_service,
         };
         (state, dir)
@@ -529,6 +556,95 @@ mod tests {
             wrong_method_enabled.status(),
             StatusCode::METHOD_NOT_ALLOWED
         );
+
+        server.abort();
+        let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+
+    #[tokio::test]
+    async fn reader_background_routes_round_trip_image_and_settings() {
+        let (state, dir) = create_test_state().await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, build_router(state)).await.unwrap();
+        });
+        let client = Client::new();
+        let base_url = format!("http://{}", addr);
+
+        let empty = client
+            .get(format!("{base_url}{READER_BACKGROUND_ROUTE}"))
+            .send()
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap();
+        assert!(empty["isSuccess"].as_bool().unwrap());
+        assert!(empty["data"].is_null());
+
+        let image = b"\x89PNG\r\n\x1a\nbackground";
+        let boundary = "reader-background-test-boundary";
+        let mut multipart = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"background.png\"\r\nContent-Type: image/png\r\n\r\n"
+        )
+        .into_bytes();
+        multipart.extend_from_slice(image);
+        multipart.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        let uploaded = client
+            .post(format!("{base_url}{READER_BACKGROUND_ROUTE}"))
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(multipart)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(uploaded.status(), StatusCode::OK);
+        let uploaded = uploaded.json::<serde_json::Value>().await.unwrap();
+        assert_eq!(uploaded["data"]["contentType"], "image/png");
+        assert_eq!(uploaded["data"]["fit"], "cover");
+
+        let downloaded = client
+            .get(format!("{base_url}{READER_BACKGROUND_IMAGE_ROUTE}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(downloaded.status(), StatusCode::OK);
+        assert_eq!(
+            downloaded.headers()[reqwest::header::CONTENT_TYPE],
+            "image/png"
+        );
+        assert_eq!(downloaded.bytes().await.unwrap().as_ref(), image);
+
+        let updated = client
+            .post(format!("{base_url}{READER_BACKGROUND_SETTINGS_ROUTE}"))
+            .json(&serde_json::json!({
+                "enabled": false,
+                "fit": "contain",
+                "position": "bottom",
+                "overlay": 0.7,
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap();
+        assert_eq!(updated["data"]["enabled"], false);
+        assert_eq!(updated["data"]["fit"], "contain");
+        assert_eq!(updated["data"]["position"], "bottom");
+
+        let deleted = client
+            .delete(format!("{base_url}{READER_BACKGROUND_ROUTE}"))
+            .send()
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap();
+        assert_eq!(deleted["data"]["deleted"], true);
 
         server.abort();
         let _ = tokio::fs::remove_dir_all(dir).await;

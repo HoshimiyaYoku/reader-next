@@ -3,7 +3,7 @@
     class="reader-view"
     :class="{ 'disable-system-callout': disableSystemCallout }"
     :style="{
-      background: theme.body,
+      ...readerBackgroundStyle,
       color: theme.fontColor,
       fontFamily: currentFontFamily,
       '--color-primary': '#c97f3a',
@@ -98,6 +98,7 @@
       :voice-name="store.speechConfig.voiceName"
       :rate="store.speechConfig.speechRate"
       :pitch="store.speechConfig.speechPitch"
+      :volume="store.speechConfig.speechVolume"
       :supports-pitch="store.speechConfig.provider === 'system' || store.speechConfig.provider === 'azure'"
       :openai-model="store.speechConfig.openaiModel"
       :openai-voice="store.speechConfig.openaiVoice"
@@ -116,6 +117,7 @@
       @azure-voice-change="changeAzureVoice"
       @rate-change="adjustSpeechRate"
       @pitch-change="adjustSpeechPitch"
+      @volume-change="changeSpeechVolume"
       @timer-change="setSpeechTimer"
     />
 
@@ -1196,6 +1198,35 @@ function debugPositionLog(message: string, payload?: unknown) {
 
 const config = computed(() => store.config)
 const theme = computed(() => store.currentTheme)
+function colorWithAlpha(color: string, alpha: number) {
+  const normalized = color.trim().replace(/^#/, '')
+  const hex = normalized.length === 3
+    ? normalized.split('').map((item) => `${item}${item}`).join('')
+    : normalized
+  if (!/^[0-9a-f]{6}$/i.test(hex)) {
+    return `rgba(0, 0, 0, ${alpha})`
+  }
+  return `rgba(${parseInt(hex.slice(0, 2), 16)}, ${parseInt(hex.slice(2, 4), 16)}, ${parseInt(hex.slice(4, 6), 16)}, ${alpha})`
+}
+
+const readerBackgroundStyle = computed(() => {
+  const background = store.readerBackgroundConfig
+  const imageUrl = background.enabled ? store.readerBackgroundUrl : ''
+  if (!imageUrl) {
+    return {
+      backgroundColor: theme.value.body,
+      backgroundImage: 'none',
+    }
+  }
+  const overlayColor = colorWithAlpha(theme.value.body, background.overlay)
+  return {
+    backgroundColor: theme.value.body,
+    backgroundImage: `linear-gradient(${overlayColor}, ${overlayColor}), url("${imageUrl}")`,
+    backgroundPosition: `center ${background.position}`,
+    backgroundSize: background.fit,
+    backgroundRepeat: 'no-repeat',
+  }
+})
 const chromeTheme = computed(() => {
   if (store.isNight || appStore.theme === 'dark') {
     return {
@@ -2865,6 +2896,12 @@ function adjustSpeechPitch(delta: number) {
   if (store.isSpeaking && !store.isPaused) {
     restartSpeechFromCurrentParagraph()
   }
+}
+
+function changeSpeechVolume(volume: number) {
+  store.setSpeechVolume(volume)
+  ttsPanelDismissed.value = false
+  showTTSPanel.value = true
 }
 
 function setSpeechTimer(minutes: number) {

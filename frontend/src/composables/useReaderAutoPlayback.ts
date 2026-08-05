@@ -112,7 +112,19 @@ export function useReaderAutoPlayback(
   function getPrevParagraphFrom(current: HTMLElement | null) {
     const list = getFilteredParagraphs()
     const index = current ? list.indexOf(current) : -1
-    if (index > 0) return list[index - 1]
+    if (index > 0) {
+      const paragraphId = current?.dataset.readerParagraph
+      for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+        if (!paragraphId || list[cursor]?.dataset.readerParagraph !== paragraphId) {
+          const previousId = list[cursor]?.dataset.readerParagraph
+          if (!previousId) return list[cursor] || null
+          while (cursor > 0 && list[cursor - 1]?.dataset.readerParagraph === previousId) {
+            cursor -= 1
+          }
+          return list[cursor] || null
+        }
+      }
+    }
     return null
   }
 
@@ -124,8 +136,27 @@ export function useReaderAutoPlayback(
   function getNextParagraphFrom(current: HTMLElement | null) {
     const list = getFilteredParagraphs()
     const index = current ? list.indexOf(current) : -1
-    if (index >= 0 && index < list.length - 1) return list[index + 1]
+    if (index >= 0 && index < list.length - 1) {
+      const paragraphId = current?.dataset.readerParagraph
+      for (let cursor = index + 1; cursor < list.length; cursor += 1) {
+        if (!paragraphId || list[cursor]?.dataset.readerParagraph !== paragraphId) {
+          return list[cursor] || null
+        }
+      }
+    }
     return null
+  }
+
+  function getLogicalParagraphText(paragraph: HTMLElement | null) {
+    const currentText = paragraph?.innerText.trim() || ''
+    const paragraphId = paragraph?.dataset.readerParagraph
+    if (!paragraphId) return currentText
+
+    return getFilteredParagraphs()
+      .filter((item) => item.dataset.readerParagraph === paragraphId)
+      .map((item) => item.innerText.trim())
+      .filter(Boolean)
+      .join('')
   }
 
   function splitLongSentence(sentence: string) {
@@ -149,7 +180,7 @@ export function useReaderAutoPlayback(
   }
 
   function buildParagraphSpeechChunks(paragraph: HTMLElement | null) {
-    const rawText = paragraph?.innerText.trim() || ''
+    const rawText = getLogicalParagraphText(paragraph)
     if (!rawText) return [] as string[]
 
     const sentences = rawText
@@ -187,7 +218,7 @@ export function useReaderAutoPlayback(
   }
 
   function buildMergedSpeechSegment(paragraph: HTMLElement | null) {
-    const currentText = paragraph?.innerText.trim() || ''
+    const currentText = getLogicalParagraphText(paragraph)
     if (!currentText) {
       return {
         text: '',
@@ -206,7 +237,15 @@ export function useReaderAutoPlayback(
 
     const mergedTexts: string[] = [currentText]
     let mergedLength = currentText.length
-    let cursorIndex = startIndex + 1
+    const indexAfterLogicalParagraph = (index: number) => {
+      const paragraphId = list[index]?.dataset.readerParagraph
+      let nextIndex = index + 1
+      while (paragraphId && list[nextIndex]?.dataset.readerParagraph === paragraphId) {
+        nextIndex += 1
+      }
+      return nextIndex
+    }
+    let cursorIndex = indexAfterLogicalParagraph(startIndex)
     const currentPage = horizontalPlayback?.isEnabled.value
       ? paragraph?.closest('.horizontal-page')
       : null
@@ -215,9 +254,9 @@ export function useReaderAutoPlayback(
       if (currentPage && list[cursorIndex]?.closest('.horizontal-page') !== currentPage) {
         break
       }
-      const nextText = list[cursorIndex]?.innerText.trim() || ''
+      const nextText = getLogicalParagraphText(list[cursorIndex] || null)
       if (!nextText) {
-        cursorIndex += 1
+        cursorIndex = indexAfterLogicalParagraph(cursorIndex)
         continue
       }
       if (mergedLength + nextText.length > OPENAI_MERGED_SEGMENT_CHAR_LIMIT) {
@@ -225,7 +264,7 @@ export function useReaderAutoPlayback(
       }
       mergedTexts.push(nextText)
       mergedLength += nextText.length
-      cursorIndex += 1
+      cursorIndex = indexAfterLogicalParagraph(cursorIndex)
     }
 
     return {
@@ -257,7 +296,7 @@ export function useReaderAutoPlayback(
   function ensureSpeechChunkState(paragraph: HTMLElement) {
     if (store.speechConfig.provider === 'system') {
       return {
-        text: paragraph.innerText.trim(),
+        text: getLogicalParagraphText(paragraph),
         nextParagraph: getNextParagraphFrom(paragraph),
       }
     }
@@ -301,9 +340,7 @@ export function useReaderAutoPlayback(
         if (chunks.length >= OPENAI_PRELOAD_CHUNK_LIMIT) break
         chunks.push(chunk)
       }
-      const list = getFilteredParagraphs()
-      const index = list.indexOf(cursor)
-      cursor = index >= 0 ? (list[index + 1] || null) : null
+      cursor = getNextParagraphFrom(cursor)
     }
 
     return chunks
@@ -477,7 +514,8 @@ export function useReaderAutoPlayback(
 
     const continueDelay = store.speechConfig.provider === 'system'
       ? ((isSafariSpeechDelayBrowser() && !store.systemTtsNativeEventsReliable) ? 160 : 40)
-      : 120
+      : 0
+    const chapterContinueDelay = store.speechConfig.provider === 'system' ? continueDelay : 40
 
     if (paragraph) {
       isSpeechTransitioning = true
@@ -514,7 +552,7 @@ export function useReaderAutoPlayback(
           }
           isSpeechTransitioning = false
           startSpeech(getFilteredParagraphs()[0] || null, false)
-        }, continueDelay)
+        }, chapterContinueDelay)
       })
       .catch(() => {
         isSpeechTransitioning = false

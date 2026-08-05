@@ -21,6 +21,7 @@ export interface Book {
   durChapterPos?: number
   durChapterTime?: number
   durChapterTitle?: string
+  progressRevision?: number
   intro?: string
   latestChapterTitle?: string
   lastCheckTime?: number

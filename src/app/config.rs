@@ -10,6 +10,8 @@ pub struct AppConfig {
     pub assets_dir: String,
     pub log_level: String,
     pub request_timeout_secs: u64,
+    pub cache_max_bytes: u64,
+    pub cache_max_age_days: u64,
     pub secure: bool,
     pub secure_key: String,
     pub invite_code: String,
@@ -28,6 +30,8 @@ impl Default for AppConfig {
             assets_dir: "storage/assets".to_string(),
             log_level: "info".to_string(),
             request_timeout_secs: 15,
+            cache_max_bytes: crate::storage::cache::file_cache::DEFAULT_CACHE_MAX_BYTES,
+            cache_max_age_days: 30,
             secure: false,
             secure_key: "".to_string(),
             invite_code: "".to_string(),
@@ -49,6 +53,8 @@ pub fn load() -> anyhow::Result<AppConfig> {
         .set_default("assets_dir", defaults.assets_dir)?
         .set_default("log_level", defaults.log_level)?
         .set_default("request_timeout_secs", defaults.request_timeout_secs as i64)?
+        .set_default("cache_max_bytes", defaults.cache_max_bytes as i64)?
+        .set_default("cache_max_age_days", defaults.cache_max_age_days as i64)?
         .set_default("secure", defaults.secure)?
         .set_default("secure_key", defaults.secure_key)?
         .set_default("invite_code", defaults.invite_code)?

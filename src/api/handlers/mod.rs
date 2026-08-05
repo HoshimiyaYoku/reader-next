@@ -6,6 +6,7 @@ mod book_group;
 mod book_source;
 mod bookmark;
 mod chapter_summary;
+mod reader_background;
 mod replace_rule;
 mod rss;
 mod update;
@@ -23,6 +24,7 @@ pub use bookmark::{
     delete_bookmark, delete_bookmarks, get_bookmarks, save_bookmark, save_bookmarks,
 };
 pub use chapter_summary::*;
+pub use reader_background::*;
 pub use replace_rule::{
     delete_replace_rule, delete_replace_rules, get_replace_rules, save_replace_rule,
     save_replace_rules,

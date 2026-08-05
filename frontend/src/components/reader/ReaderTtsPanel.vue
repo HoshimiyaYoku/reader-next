@@ -61,13 +61,40 @@
           <button @click="$emit('pitch-change', 0.1)">+</button>
         </div>
       </div>
+      <label class="tts-volume-row">
+        <span class="tts-label">音量</span>
+        <input
+          type="range"
+          min="0"
+          max="1"
+          step="0.05"
+          :value="volume"
+          @input="$emit('volume-change', Number(($event.target as HTMLInputElement).value))"
+        >
+        <span class="tts-volume-value">{{ Math.round(volume * 100) }}%</span>
+      </label>
       <div class="tts-timer-row">
         <span class="tts-label">定时停止</span>
         <div class="tts-timer-actions">
-          <button :class="{ active: stopAfterMinutes === 0 }" @click="$emit('timer-change', 0)">关闭</button>
-          <button :class="{ active: stopAfterMinutes === 15 }" @click="$emit('timer-change', 15)">15分钟</button>
-          <button :class="{ active: stopAfterMinutes === 30 }" @click="$emit('timer-change', 30)">30分钟</button>
-          <button :class="{ active: stopAfterMinutes === 60 }" @click="$emit('timer-change', 60)">60分钟</button>
+          <button :class="{ active: stopAfterMinutes === 0 }" @click="selectTimer(0)">关闭</button>
+          <button :class="{ active: stopAfterMinutes === 15 }" @click="selectTimer(15)">15分钟</button>
+          <button :class="{ active: stopAfterMinutes === 30 }" @click="selectTimer(30)">30分钟</button>
+          <button :class="{ active: stopAfterMinutes === 60 }" @click="selectTimer(60)">60分钟</button>
+        </div>
+        <form class="tts-custom-timer" @submit.prevent="submitCustomTimer">
+          <input
+            v-model="customMinutes"
+            type="text"
+            inputmode="numeric"
+            autocomplete="off"
+            aria-label="自定义停止分钟数"
+            placeholder="自定义分钟（1–1440）"
+            @input="clearCustomTimerError"
+          >
+          <button type="submit">设置</button>
+        </form>
+        <div v-if="customTimerError" class="tts-timer-error">
+          {{ customTimerError }}
         </div>
         <div v-if="timerText" class="tts-timer-text">{{ timerText }}</div>
       </div>
@@ -76,6 +103,7 @@
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
 import type { ThemePreset } from '../../stores/reader'
 
 defineProps<{
@@ -91,6 +119,7 @@ defineProps<{
   voiceName: string
   rate: number
   pitch: number
+  volume: number
   supportsPitch: boolean
   openaiModel: string
   openaiVoice: string
@@ -101,7 +130,7 @@ defineProps<{
   timerText: string
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   close: []
   prev: []
   'toggle-play': []
@@ -112,8 +141,40 @@ defineEmits<{
   'azure-voice-change': [value: string]
   'rate-change': [delta: number]
   'pitch-change': [delta: number]
+  'volume-change': [value: number]
   'timer-change': [minutes: number]
 }>()
+
+const customMinutes = ref('')
+const customTimerError = ref('')
+
+function clearCustomTimerError() {
+  if (!customMinutes.value.trim()) {
+    customTimerError.value = ''
+  }
+}
+
+function selectTimer(minutes: number) {
+  customMinutes.value = ''
+  customTimerError.value = ''
+  emit('timer-change', minutes)
+}
+
+function submitCustomTimer() {
+  const value = customMinutes.value.trim()
+  if (!/^\d+$/.test(value)) {
+    customTimerError.value = '请输入 1–1440 的整数分钟；清空输入可取消提示'
+    return
+  }
+  const minutes = Number(value)
+  if (!Number.isSafeInteger(minutes) || minutes < 1 || minutes > 1440) {
+    customTimerError.value = '分钟数需在 1–1440（24小时）之间；清空输入可取消提示'
+    return
+  }
+  customMinutes.value = ''
+  customTimerError.value = ''
+  emit('timer-change', minutes)
+}
 </script>
 
 <style scoped>
@@ -250,6 +311,30 @@ defineEmits<{
   opacity: 0.7;
 }
 
+.tts-volume-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.04);
+  box-sizing: border-box;
+}
+
+.tts-volume-row input {
+  width: 100%;
+  accent-color: var(--color-primary);
+}
+
+.tts-volume-value {
+  text-align: right;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
 .tts-timer-row {
   width: 100%;
   display: flex;
@@ -277,6 +362,37 @@ defineEmits<{
   background: var(--color-primary);
   border-color: var(--color-primary);
   color: #fff;
+}
+
+.tts-custom-timer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.tts-custom-timer input {
+  min-width: 0;
+  padding: 9px 12px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.65);
+  color: inherit;
+  font-size: 13px;
+}
+
+.tts-custom-timer button {
+  border: none;
+  border-radius: 10px;
+  padding: 9px 16px;
+  background: var(--color-primary);
+  color: #fff;
+  cursor: pointer;
+}
+
+.tts-timer-error {
+  color: #d14343;
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .tts-timer-text {

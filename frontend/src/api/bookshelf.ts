@@ -88,12 +88,29 @@ export function getBookContent(params: {
   return http.post<string>('/getBookContent', params).then((r) => r.data)
 }
 
+export interface ReadingProgressSnapshot {
+  bookUrl: string
+  index?: number
+  position?: number
+  updatedAt?: number
+  chapterTitle?: string
+}
+
+export interface SaveBookProgressResponse {
+  accepted: boolean
+  currentRevision: number
+  currentProgress: ReadingProgressSnapshot
+}
+
 export function saveBookProgress(params: {
   bookUrl: string
   index: number
   position?: number
+  revision?: number
 }) {
-  return http.post<string>('/saveBookProgress', params).then((r) => r.data)
+  // Keep the legacy string in the type so a newer frontend can still talk to
+  // servers that have not yet adopted revision-aware progress responses.
+  return http.post<SaveBookProgressResponse | string>('/saveBookProgress', params).then((r) => r.data)
 }
 
 export function deleteBookCache(bookUrl: string) {

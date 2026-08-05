@@ -1,6 +1,7 @@
 use axum::Router;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 
 use crate::api::{self, AppState};
@@ -15,7 +16,8 @@ use crate::service::{
     chapter_summary_service::ChapterSummaryService, json_document_service::JsonDocumentService,
     local_epub_book::LocalEpubBookService, local_mobi_book::LocalMobiBookService,
     local_pdf_book::LocalPdfBookService, local_txt_book::LocalTxtBookService,
-    update_service::UpdateService, user_service::UserService,
+    reader_background_service::ReaderBackgroundService, update_service::UpdateService,
+    user_service::UserService,
 };
 use crate::storage::{cache::file_cache::FileCache, db, fs::storage_fs::StorageFs};
 
@@ -42,7 +44,11 @@ pub async fn run() -> anyhow::Result<()> {
     println!("DEBUG: http client created");
     let parser = RuleEngine::new()?;
     println!("DEBUG: rule engine created");
-    let cache = FileCache::new(format!("{}/cache", cfg.storage_dir));
+    let cache = FileCache::with_limits(
+        format!("{}/cache", cfg.storage_dir),
+        cfg.cache_max_bytes,
+        Duration::from_secs(cfg.cache_max_age_days.saturating_mul(24 * 60 * 60)),
+    );
 
     let book_service = Arc::new(BookService::new(http, parser, cache, &cfg.storage_dir));
     let book_source_service = Arc::new(BookSourceService::new(repo, &cfg.storage_dir));
@@ -69,6 +75,7 @@ pub async fn run() -> anyhow::Result<()> {
     let ai_book_catchup_service = Arc::new(AiBookCatchupService::new());
     let chapter_summary_service =
         Arc::new(ChapterSummaryService::new(json_document_service.clone()));
+    let reader_background_service = Arc::new(ReaderBackgroundService::new(&cfg.storage_dir));
     let update_service = Arc::new(UpdateService::new(
         json_document_service.clone(),
         cfg.request_timeout_secs,
@@ -91,6 +98,7 @@ pub async fn run() -> anyhow::Result<()> {
         ai_book_catchup_service,
         ai_model_service,
         chapter_summary_service,
+        reader_background_service,
         update_service,
     };
 

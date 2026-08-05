@@ -7,6 +7,7 @@ use crate::model::{
     book_source::{BookSource, ExploreKind},
     search::SearchBook,
 };
+use crate::service::book_service::ReadingProgressUpdate;
 use crate::service::local_epub_book::{is_local_epub_origin, is_local_epub_url};
 use crate::service::local_mobi_book::{is_local_mobi_origin, is_local_mobi_url};
 use crate::service::local_pdf_book::{is_local_pdf_origin, is_local_pdf_url};
@@ -152,8 +153,28 @@ pub struct SaveBookProgressRequest {
     book_url: Option<String>,
     index: Option<i32>,
     position: Option<i32>,
+    #[serde(alias = "expectedRevision", alias = "progressRevision")]
+    revision: Option<i64>,
     #[serde(rename = "searchBook")]
     search_book: Option<SearchBookRef>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReadingProgressSnapshot {
+    book_url: String,
+    index: Option<i32>,
+    position: Option<i32>,
+    updated_at: Option<i64>,
+    chapter_title: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveBookProgressResponse {
+    accepted: bool,
+    current_revision: i64,
+    current_progress: ReadingProgressSnapshot,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2030,17 +2051,43 @@ pub async fn save_book_progress(
             }
         }
     }
-    updated.dur_chapter_index = Some(index);
-    updated.dur_chapter_time = Some(crate::util::time::now_ts());
-    if let Some(title) = chapter_title {
-        updated.dur_chapter_title = Some(title);
+    let result = state
+        .book_service
+        .save_reading_progress(
+            &user_ns,
+            &book_url,
+            req.revision,
+            ReadingProgressUpdate {
+                index,
+                position: req.position,
+                updated_at: crate::util::time::now_ts(),
+                chapter_title,
+                total_chapter_num: updated.total_chapter_num,
+                latest_chapter_title: updated.latest_chapter_title,
+            },
+        )
+        .await?;
+    // Preserve the exact legacy response for clients that do not participate
+    // in optimistic concurrency. Sending any revision (including 0) opts into
+    // the structured conflict response below.
+    if req.revision.is_none() {
+        return Ok(Json(ApiResponse::ok(serde_json::json!(""))));
     }
-    if let Some(pos) = req.position {
-        updated.dur_chapter_pos = Some(pos);
-    }
-
-    let _ = state.book_service.save_book(&user_ns, updated).await?;
-    Ok(Json(ApiResponse::ok(serde_json::json!(""))))
+    let current = result.book;
+    Ok(Json(ApiResponse::ok(
+        serde_json::to_value(SaveBookProgressResponse {
+            accepted: result.accepted,
+            current_revision: current.progress_revision.unwrap_or(0).max(0),
+            current_progress: ReadingProgressSnapshot {
+                book_url: current.book_url,
+                index: current.dur_chapter_index,
+                position: current.dur_chapter_pos,
+                updated_at: current.dur_chapter_time,
+                chapter_title: current.dur_chapter_title,
+            },
+        })
+        .unwrap_or_default(),
+    )))
 }
 
 pub async fn get_shelf_book(
@@ -3605,10 +3652,44 @@ mod tests {
         merge_global_explore_books, merge_search_results, select_global_explore_kind,
         should_use_available_source_cache, take_available_source_cached_matches,
         take_available_source_sse_matches, take_search_book_multi_sse_batch,
-        GetAvailableBookSourceRequest, GlobalExploreBookHit,
+        GetAvailableBookSourceRequest, GlobalExploreBookHit, ReadingProgressSnapshot,
+        SaveBookProgressRequest, SaveBookProgressResponse,
     };
     use crate::model::{book::Book, book_source::ExploreKind, search::SearchBook};
     use std::collections::HashSet;
+
+    #[test]
+    fn progress_request_accepts_expected_revision_alias() {
+        let request: SaveBookProgressRequest = serde_json::from_value(serde_json::json!({
+            "bookUrl": "https://book.example/1",
+            "index": 3,
+            "expectedRevision": 7
+        }))
+        .unwrap();
+
+        assert_eq!(request.revision, Some(7));
+    }
+
+    #[test]
+    fn progress_response_exposes_conflict_snapshot() {
+        let response = serde_json::to_value(SaveBookProgressResponse {
+            accepted: false,
+            current_revision: 8,
+            current_progress: ReadingProgressSnapshot {
+                book_url: "https://book.example/1".to_string(),
+                index: Some(6),
+                position: Some(5200),
+                updated_at: Some(1234),
+                chapter_title: Some("第7章".to_string()),
+            },
+        })
+        .unwrap();
+
+        assert_eq!(response["accepted"], false);
+        assert_eq!(response["currentRevision"], 8);
+        assert_eq!(response["currentProgress"]["index"], 6);
+        assert_eq!(response["currentProgress"]["position"], 5200);
+    }
 
     #[test]
     fn search_end_reports_cursor_depth_and_remaining_sources() {

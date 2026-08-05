@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tokio::time::{sleep, Duration, Instant};
 
 #[derive(Clone)]
@@ -32,6 +32,7 @@ pub struct BookService {
     storage_dir: PathBuf,
     source_cookies: Arc<RwLock<HashMap<String, String>>>,
     rate_states: Arc<RwLock<HashMap<String, RateState>>>,
+    bookshelf_write_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
 }
 
 #[derive(Clone, Default)]
@@ -55,6 +56,22 @@ pub struct BookSourceAvailability {
     pub explore_error: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ReadingProgressUpdate {
+    pub index: i32,
+    pub position: Option<i32>,
+    pub updated_at: i64,
+    pub chapter_title: Option<String>,
+    pub total_chapter_num: Option<i32>,
+    pub latest_chapter_title: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReadingProgressSaveResult {
+    pub accepted: bool,
+    pub book: Book,
+}
+
 impl BookService {
     pub fn new(http: HttpClient, parser: RuleEngine, cache: FileCache, storage_dir: &str) -> Self {
         let storage_dir = PathBuf::from(storage_dir);
@@ -65,7 +82,16 @@ impl BookService {
             storage_dir,
             source_cookies: Arc::new(RwLock::new(HashMap::new())),
             rate_states: Arc::new(RwLock::new(HashMap::new())),
+            bookshelf_write_locks: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    async fn bookshelf_write_lock(&self, user_ns: &str) -> Arc<Mutex<()>> {
+        let mut locks = self.bookshelf_write_locks.lock().await;
+        locks
+            .entry(user_ns.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
     }
 
     pub fn http_client(&self) -> &reqwest::Client {
@@ -919,6 +945,64 @@ impl BookService {
             .max_by_key(progress_rank))
     }
 
+    /// Conditionally update reading progress and advance its server revision.
+    ///
+    /// `expected_revision = None` keeps older clients working with last-write-wins
+    /// semantics. Revision-aware clients send the revision returned by the most
+    /// recent read/write; a stale request is rejected without changing the file.
+    pub async fn save_reading_progress(
+        &self,
+        user_ns: &str,
+        book_url: &str,
+        expected_revision: Option<i64>,
+        update: ReadingProgressUpdate,
+    ) -> Result<ReadingProgressSaveResult, AppError> {
+        let write_lock = self.bookshelf_write_lock(user_ns).await;
+        let _write_guard = write_lock.lock().await;
+        let mut list = self.read_bookshelf(user_ns).await?;
+        let Some(index) = list
+            .iter()
+            .enumerate()
+            .filter(|(_, book)| book.book_url == book_url)
+            .max_by_key(|(_, book)| progress_rank(book))
+            .map(|(index, _)| index)
+        else {
+            return Err(AppError::BadRequest("书籍未加入书架".to_string()));
+        };
+
+        let current_revision = list[index].progress_revision.unwrap_or(0).max(0);
+        if expected_revision.is_some_and(|revision| revision != current_revision) {
+            return Ok(ReadingProgressSaveResult {
+                accepted: false,
+                book: list[index].clone(),
+            });
+        }
+
+        let book = &mut list[index];
+        book.dur_chapter_index = Some(update.index);
+        book.dur_chapter_time = Some(update.updated_at);
+        if let Some(position) = update.position {
+            book.dur_chapter_pos = Some(position);
+        }
+        if let Some(chapter_title) = update.chapter_title {
+            book.dur_chapter_title = Some(chapter_title);
+        }
+        if let Some(total_chapter_num) = update.total_chapter_num {
+            book.total_chapter_num = Some(total_chapter_num);
+        }
+        if let Some(latest_chapter_title) = update.latest_chapter_title {
+            book.latest_chapter_title = Some(latest_chapter_title);
+        }
+        book.progress_revision = Some(current_revision.saturating_add(1));
+        let updated = book.clone();
+
+        self.write_bookshelf(user_ns, &list).await?;
+        Ok(ReadingProgressSaveResult {
+            accepted: true,
+            book: updated,
+        })
+    }
+
     /// Find book by chapter URL (chapter URL typically shares domain with book URL)
     pub async fn get_shelf_book_by_chapter(
         &self,
@@ -981,6 +1065,8 @@ impl BookService {
     }
 
     pub async fn save_book(&self, user_ns: &str, mut book: Book) -> Result<Book, AppError> {
+        let write_lock = self.bookshelf_write_lock(user_ns).await;
+        let _write_guard = write_lock.lock().await;
         sanitize_book_urls(&mut book);
         if book.origin.trim().is_empty() {
             return Err(AppError::BadRequest("missing origin".to_string()));
@@ -1012,6 +1098,24 @@ impl BookService {
             if book.dur_chapter_pos.is_none() {
                 book.dur_chapter_pos = exist.dur_chapter_pos;
             }
+            let progress_changed = book.dur_chapter_index != exist.dur_chapter_index
+                || book.dur_chapter_pos != exist.dur_chapter_pos
+                || book.dur_chapter_time != exist.dur_chapter_time
+                || book.dur_chapter_title != exist.dur_chapter_title;
+            // Legacy saveBook clients may still carry progress. Advance the
+            // server token for a real change, but never trust/roll back a token
+            // supplied as part of a general Book payload.
+            book.progress_revision = if progress_changed {
+                Some(
+                    exist
+                        .progress_revision
+                        .unwrap_or(0)
+                        .max(0)
+                        .saturating_add(1),
+                )
+            } else {
+                exist.progress_revision
+            };
             if book.total_chapter_num.is_none() {
                 book.total_chapter_num = exist.total_chapter_num;
             }
@@ -1031,6 +1135,8 @@ impl BookService {
     }
 
     pub async fn save_books(&self, user_ns: &str, books: Vec<Book>) -> Result<Vec<Book>, AppError> {
+        let write_lock = self.bookshelf_write_lock(user_ns).await;
+        let _write_guard = write_lock.lock().await;
         let existing = self.read_bookshelf(user_ns).await?;
         let mut normalized: Vec<Book> = Vec::with_capacity(books.len());
         for mut book in books {
@@ -1065,6 +1171,8 @@ impl BookService {
     }
 
     pub async fn delete_book(&self, user_ns: &str, book: &Book) -> Result<bool, AppError> {
+        let write_lock = self.bookshelf_write_lock(user_ns).await;
+        let _write_guard = write_lock.lock().await;
         let mut list = self.read_bookshelf(user_ns).await?;
         let orig_len = list.len();
         let removed: Vec<Book> = list
@@ -1084,6 +1192,8 @@ impl BookService {
     }
 
     pub async fn delete_books(&self, user_ns: &str, books: Vec<Book>) -> Result<usize, AppError> {
+        let write_lock = self.bookshelf_write_lock(user_ns).await;
+        let _write_guard = write_lock.lock().await;
         let mut list = self.read_bookshelf(user_ns).await?;
         let mut deleted = 0usize;
         let mut removed_books: Vec<Book> = Vec::new();
@@ -1454,6 +1564,7 @@ fn preserve_book_context(parsed: &mut Book, input: &Book, source_url: &str) {
     preserve_optional!(dur_chapter_pos);
     preserve_optional!(dur_chapter_time);
     preserve_optional!(dur_chapter_title);
+    preserve_optional!(progress_revision);
     preserve_optional!(intro);
     preserve_optional!(latest_chapter_title);
     preserve_optional!(last_check_time);
@@ -2498,8 +2609,11 @@ fn progress_updated_at(book: &Book) -> i64 {
     book.dur_chapter_time.unwrap_or(0)
 }
 
-fn progress_rank(book: &Book) -> i64 {
-    progress_updated_at(book)
+fn progress_rank(book: &Book) -> (i64, i64) {
+    (
+        book.progress_revision.unwrap_or(0).max(0),
+        progress_updated_at(book),
+    )
 }
 
 fn preserve_newer_reading_progress(existing: &Book, incoming: &mut Book) {
@@ -2510,6 +2624,7 @@ fn preserve_newer_reading_progress(existing: &Book, incoming: &mut Book) {
     incoming.dur_chapter_pos = existing.dur_chapter_pos;
     incoming.dur_chapter_time = existing.dur_chapter_time;
     incoming.dur_chapter_title = existing.dur_chapter_title.clone();
+    incoming.progress_revision = existing.progress_revision;
 }
 
 fn recover_bookshelf_entries(data: &str) -> Option<Vec<Book>> {
@@ -2613,6 +2728,146 @@ mod tests {
             dur_chapter_title: Some(format!("第{}章", chapter_index + 1)),
             ..Default::default()
         }
+    }
+
+    fn progress_update(index: i32, position: i32, updated_at: i64) -> ReadingProgressUpdate {
+        ReadingProgressUpdate {
+            index,
+            position: Some(position),
+            updated_at,
+            chapter_title: Some(format!("第{}章", index + 1)),
+            total_chapter_num: Some(100),
+            latest_chapter_title: Some("第100章".to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn save_reading_progress_rejects_stale_revision() {
+        let (service, storage_dir) = test_book_service("progress-revision");
+        let user_ns = "progress-revision-user";
+        let book_url = "https://book.example/1";
+        service
+            .save_book(user_ns, test_book(0, 0, 1000))
+            .await
+            .unwrap();
+
+        let accepted = service
+            .save_reading_progress(user_ns, book_url, Some(0), progress_update(3, 4200, 2000))
+            .await
+            .unwrap();
+        let stale = service
+            .save_reading_progress(user_ns, book_url, Some(0), progress_update(1, 1000, 3000))
+            .await
+            .unwrap();
+
+        let _ = tokio::fs::remove_dir_all(&storage_dir).await;
+        assert!(accepted.accepted);
+        assert_eq!(accepted.book.progress_revision, Some(1));
+        assert!(!stale.accepted);
+        assert_eq!(stale.book.progress_revision, Some(1));
+        assert_eq!(stale.book.dur_chapter_index, Some(3));
+        assert_eq!(stale.book.dur_chapter_pos, Some(4200));
+    }
+
+    #[tokio::test]
+    async fn concurrent_progress_updates_accept_only_one_matching_revision() {
+        let (service, storage_dir) = test_book_service("concurrent-progress-revision");
+        let user_ns = "concurrent-progress-revision-user";
+        let book_url = "https://book.example/1";
+        service
+            .save_book(user_ns, test_book(0, 0, 1000))
+            .await
+            .unwrap();
+
+        let first = service.save_reading_progress(
+            user_ns,
+            book_url,
+            Some(0),
+            progress_update(4, 4000, 2000),
+        );
+        let second = service.save_reading_progress(
+            user_ns,
+            book_url,
+            Some(0),
+            progress_update(7, 7000, 2001),
+        );
+        let (first, second) = tokio::join!(first, second);
+        let first = first.unwrap();
+        let second = second.unwrap();
+        let accepted_count = usize::from(first.accepted) + usize::from(second.accepted);
+        let saved = service
+            .get_shelf_book(user_ns, book_url)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let _ = tokio::fs::remove_dir_all(&storage_dir).await;
+        assert_eq!(accepted_count, 1);
+        assert_eq!(saved.progress_revision, Some(1));
+        assert!(matches!(saved.dur_chapter_index, Some(4 | 7)));
+    }
+
+    #[tokio::test]
+    async fn legacy_progress_update_without_revision_remains_supported() {
+        let (service, storage_dir) = test_book_service("legacy-progress-revision");
+        let user_ns = "legacy-progress-revision-user";
+        let book_url = "https://book.example/1";
+        service
+            .save_book(user_ns, test_book(0, 0, 1000))
+            .await
+            .unwrap();
+
+        let first = service
+            .save_reading_progress(user_ns, book_url, None, progress_update(2, 2000, 2000))
+            .await
+            .unwrap();
+        let second = service
+            .save_reading_progress(user_ns, book_url, None, progress_update(5, 5000, 3000))
+            .await
+            .unwrap();
+
+        let _ = tokio::fs::remove_dir_all(&storage_dir).await;
+        assert!(first.accepted);
+        assert_eq!(first.book.progress_revision, Some(1));
+        assert!(second.accepted);
+        assert_eq!(second.book.progress_revision, Some(2));
+        assert_eq!(second.book.dur_chapter_index, Some(5));
+    }
+
+    #[tokio::test]
+    async fn general_book_save_cannot_roll_back_progress_revision() {
+        let (service, storage_dir) = test_book_service("book-save-progress-revision");
+        let user_ns = "book-save-progress-revision-user";
+        let book_url = "https://book.example/1";
+        service
+            .save_book(user_ns, test_book(0, 0, 1000))
+            .await
+            .unwrap();
+        let progress = service
+            .save_reading_progress(user_ns, book_url, Some(0), progress_update(2, 2000, 2000))
+            .await
+            .unwrap()
+            .book;
+
+        let mut metadata_edit = progress.clone();
+        metadata_edit.name = "同步书（改名）".to_string();
+        metadata_edit.progress_revision = Some(0);
+        let metadata_saved = service.save_book(user_ns, metadata_edit).await.unwrap();
+        assert_eq!(metadata_saved.progress_revision, Some(1));
+
+        let mut legacy_progress_edit = metadata_saved;
+        legacy_progress_edit.dur_chapter_index = Some(4);
+        legacy_progress_edit.dur_chapter_pos = Some(4000);
+        legacy_progress_edit.dur_chapter_time = Some(3000);
+        legacy_progress_edit.progress_revision = Some(0);
+        let progress_saved = service
+            .save_book(user_ns, legacy_progress_edit)
+            .await
+            .unwrap();
+
+        let _ = tokio::fs::remove_dir_all(&storage_dir).await;
+        assert_eq!(progress_saved.progress_revision, Some(2));
+        assert_eq!(progress_saved.dur_chapter_index, Some(4));
     }
 
     #[tokio::test]

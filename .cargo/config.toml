@@ -3,3 +3,11 @@ linker = "x86_64-linux-musl-gcc"
 
 [target.aarch64-unknown-linux-musl]
 linker = "aarch64-linux-musl-gcc"
+
+# Full debug symbols made local test artifacts exceed 20 GiB on macOS.
+# Line-level symbols keep normal backtraces useful while substantially reducing target/ growth.
+[profile.dev]
+debug = 1
+
+[profile.test]
+debug = 1

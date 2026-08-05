@@ -56,6 +56,7 @@ describe('reader summary display config', () => {
     localStorage.setItem('reader-speechConfig', JSON.stringify({
       speechRate: null,
       speechPitch: 'bad',
+      speechVolume: 2,
       stopAfterMinutes: -1,
     }))
 
@@ -63,7 +64,19 @@ describe('reader summary display config', () => {
 
     expect(store.speechConfig.speechRate).toBe(1)
     expect(store.speechConfig.speechPitch).toBe(1)
+    expect(store.speechConfig.speechVolume).toBe(1)
     expect(store.speechConfig.stopAfterMinutes).toBe(0)
+  })
+
+  it('persists and clamps speech volume', () => {
+    const store = useReaderStore()
+
+    store.setSpeechVolume(0.35)
+    expect(store.speechConfig.speechVolume).toBe(0.35)
+    expect(JSON.parse(localStorage.getItem('reader-speechConfig') || '{}').speechVolume).toBe(0.35)
+
+    store.setSpeechVolume(-1)
+    expect(store.speechConfig.speechVolume).toBe(0)
   })
 
   it('loads Azure Speech config and normalizes unsupported output formats', () => {

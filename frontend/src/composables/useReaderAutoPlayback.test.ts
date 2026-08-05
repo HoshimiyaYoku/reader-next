@@ -116,6 +116,33 @@ describe('useReaderAutoPlayback reading position', () => {
     expect(spoken[1]?.text).toBe('下一页')
   })
 
+  it('speaks one logical paragraph as a single unit when pagination splits it across pages', () => {
+    vi.useFakeTimers()
+    const container = document.createElement('div')
+    const chapterText = document.createElement('div')
+    chapterText.innerHTML = `
+      <section class="horizontal-page"><p data-reader-paragraph="0">跨页自然段前半句，</p></section>
+      <section class="horizontal-page">
+        <p data-reader-paragraph="0">后半句。</p>
+        <p data-reader-paragraph="1">下一自然段。</p>
+      </section>
+    `
+    container.appendChild(chapterText)
+    const { store, spoken } = createStore()
+    const pageIndex = ref(0)
+    const showPage = vi.fn((next: number) => {
+      pageIndex.value = next
+    })
+    const playback = createPlayback(store, container, chapterText, { pageIndex, showPage })
+
+    playback.startSpeech()
+
+    expect(spoken[0]?.text).toBe('跨页自然段前半句，后半句。')
+    spoken[0]?.options.onEnd()
+    vi.runAllTimers()
+    expect(spoken[1]?.text).toBe('下一自然段。')
+  })
+
   it('keeps merged speech within one horizontal page before turning', () => {
     vi.useFakeTimers()
     const container = document.createElement('div')
@@ -162,6 +189,23 @@ describe('useReaderAutoPlayback reading position', () => {
     vi.runAllTimers()
 
     expect(spoken[1]?.text).toBe('正确下一段')
+  })
+
+  it('hands a preloaded remote segment to the next audio buffer without a fixed gap', () => {
+    vi.useFakeTimers()
+    const container = document.createElement('div')
+    const chapterText = document.createElement('div')
+    chapterText.innerHTML = '<p>第一段。</p><p>第二段。</p>'
+    container.appendChild(chapterText)
+    const { store, spoken } = createStore()
+    store.speechConfig.provider = 'openai'
+    const playback = createPlayback(store, container, chapterText)
+
+    playback.startSpeech(chapterText.querySelector('p') as HTMLElement)
+    spoken[0]?.options.onEnd()
+    vi.advanceTimersByTime(0)
+
+    expect(spoken[1]?.text).toBe('第二段。')
   })
 
   it('lets manual next override a pending automatic transition', () => {

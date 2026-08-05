@@ -17,6 +17,11 @@ pub struct Book {
     pub dur_chapter_pos: Option<i32>,
     pub dur_chapter_time: Option<i64>,
     pub dur_chapter_title: Option<String>,
+    /// Server-managed optimistic concurrency token for reading progress.
+    ///
+    /// Bookshelf files written before this field was introduced deserialize it
+    /// as `None`, which is treated as revision 0 by the progress API.
+    pub progress_revision: Option<i64>,
     pub intro: Option<String>,
     pub latest_chapter_title: Option<String>,
     pub last_check_time: Option<i64>,

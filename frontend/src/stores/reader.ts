@@ -11,6 +11,7 @@ import {
   saveBookProgress,
   setBookSource as apiSetBookSource,
 } from '../api/bookshelf'
+import type { SaveBookProgressResponse } from '../api/bookshelf'
 import {
   getBookmarks,
   saveBookmark,
@@ -27,11 +28,44 @@ import {
   requestOpenAISpeechAudio,
 } from '../utils/openaiSpeech'
 import { requestAzureSpeechAudio } from '../utils/azureSpeech'
+import {
+  deleteReaderBackground,
+  getReaderBackground,
+  saveReaderBackground,
+} from '../utils/readerBackground'
+import {
+  fetchReaderBackgroundImage,
+  fetchReaderBackgroundMetadata,
+  removeReaderBackground as removeServerReaderBackground,
+  updateReaderBackgroundSettings,
+  uploadReaderBackground,
+} from '../api/readerBackground'
+import type { ReaderBackgroundMetadata } from '../api/readerBackground'
 
 const READER_SESSION_KEY = 'reader-last-session'
 const READER_READ_HISTORY_PREFIX = 'reader-read-history:'
 const SELECTION_MENU_DEFAULT_MIGRATION_KEY = 'reader-selection-menu-default-v1'
 const SERVER_PROGRESS_SCALE = 10000
+const READER_BACKGROUND_CONFIG_KEY = 'reader-backgroundConfig'
+const READER_BACKGROUND_ETAG_KEY = 'reader-backgroundServerEtag'
+const READER_BACKGROUND_PENDING_KEY = 'reader-backgroundPendingSync'
+const READER_BACKGROUND_SERVER_STATE_KEY = 'reader-backgroundServerState'
+const READER_BACKGROUND_LEGACY_CLAIMED_KEY = 'reader-backgroundLegacyClaimed'
+const READER_BACKGROUND_LEGACY_ASSET_KEY = 'reader-background'
+const READER_BACKGROUND_SETTINGS_SYNC_DELAY_MS = 500
+
+type ReaderBackgroundSyncOperation = 'upload' | 'settings' | 'delete'
+interface PendingReaderBackgroundSync {
+  operation: ReaderBackgroundSyncOperation
+  nonce: number
+}
+
+interface ServerProgressPayload {
+  bookUrl: string
+  index: number
+  position: number
+  revision: number
+}
 
 interface PersistedReaderSession {
   book: Book
@@ -193,6 +227,38 @@ export interface ReaderColorStyle {
   textColor: string
 }
 
+export type ReaderBackgroundFit = 'cover' | 'contain'
+export type ReaderBackgroundPosition = 'top' | 'center' | 'bottom'
+export interface ReaderBackgroundConfig {
+  enabled: boolean
+  fit: ReaderBackgroundFit
+  position: ReaderBackgroundPosition
+  overlay: number
+}
+
+const defaultReaderBackgroundConfig: ReaderBackgroundConfig = {
+  enabled: true,
+  fit: 'cover',
+  position: 'center',
+  overlay: 0.45,
+}
+
+function loadReaderBackgroundConfig(): ReaderBackgroundConfig {
+  try {
+    const saved = JSON.parse(localStorage.getItem(READER_BACKGROUND_CONFIG_KEY) || '{}') as Partial<ReaderBackgroundConfig>
+    return {
+      enabled: typeof saved.enabled === 'boolean' ? saved.enabled : defaultReaderBackgroundConfig.enabled,
+      fit: saved.fit === 'contain' ? 'contain' : 'cover',
+      position: ['top', 'center', 'bottom'].includes(String(saved.position))
+        ? saved.position as ReaderBackgroundPosition
+        : defaultReaderBackgroundConfig.position,
+      overlay: normalizeNumber(saved.overlay, defaultReaderBackgroundConfig.overlay, 0, 0.9),
+    }
+  } catch {
+    return { ...defaultReaderBackgroundConfig }
+  }
+}
+
 function loadReaderColorStyle(key: string, fallback: ReaderColorStyle): ReaderColorStyle {
   try {
     const saved = JSON.parse(localStorage.getItem(key) || '{}') as Partial<ReaderColorStyle>
@@ -227,9 +293,12 @@ interface TTSOptions {
 interface PreloadedOpenAIAudio {
   key: string
   blob: Blob
+  audio?: HTMLAudioElement
+  url?: string
 }
 
 const OPENAI_AUDIO_PRELOAD_LIMIT = 8
+const REMOTE_SPEECH_AUDIO_BUFFER_COUNT = 2
 
 export type SpeechProvider = 'system' | 'openai' | 'azure'
 export type OpenAISpeechSource = 'browser' | 'server'
@@ -246,6 +315,7 @@ interface SpeechConfig {
   voiceName: string
   speechRate: number
   speechPitch: number
+  speechVolume: number
   stopAfterMinutes: number
   openaiSource: OpenAISpeechSource
   openaiBaseUrl: string
@@ -265,6 +335,7 @@ const defaultSpeechConfig: SpeechConfig = {
   voiceName: '',
   speechRate: 1,
   speechPitch: 1,
+  speechVolume: 1,
   stopAfterMinutes: 0,
   openaiSource: 'browser',
   openaiBaseUrl: DEFAULT_OPENAI_BASE_URL,
@@ -321,6 +392,12 @@ function migrateSpeechConfig(saved: Partial<SpeechConfig>): SpeechConfig {
     0.5,
     merged.provider === 'azure' ? 1.5 : 2,
   )
+  merged.speechVolume = normalizeNumber(
+    merged.speechVolume,
+    defaultSpeechConfig.speechVolume,
+    0,
+    1,
+  )
   merged.stopAfterMinutes = normalizeNumber(merged.stopAfterMinutes, defaultSpeechConfig.stopAfterMinutes, 0)
   return merged
 }
@@ -352,6 +429,10 @@ export const useReaderStore = defineStore('reader', () => {
   const readChapterKeys = ref<Set<string>>(new Set())
   const progressDirty = ref(false)
   const lastServerProgressKey = ref('')
+  const knownProgressRevisions = new Map<string, number>()
+  let progressChangeVersion = 0
+  let progressSaveQueue: Promise<void> = Promise.resolve()
+  let lastProgressConflictKey = ''
 
   const currentChapter = computed(() => chapters.value[currentIndex.value] || null)
   const hasNext = computed(() => currentIndex.value < chapters.value.length - 1)
@@ -435,6 +516,376 @@ export const useReaderStore = defineStore('reader', () => {
       popup: colors.backgroundColor,
       fontColor: colors.textColor,
     }
+  })
+
+  const readerBackgroundConfig = reactive(loadReaderBackgroundConfig())
+  const readerBackgroundUrl = ref('')
+  const readerBackgroundLoaded = ref(false)
+  const readerBackgroundSyncState = ref<'loading' | 'synced' | 'pending' | 'local'>('loading')
+  const readerBackgroundNamespace = ref(resolveReaderBackgroundNamespace())
+  let readerBackgroundObjectUrl = ''
+  let readerBackgroundSyncQueue: Promise<void> = Promise.resolve()
+  let readerBackgroundPendingNonce = Date.now()
+  let readerBackgroundSettingsTimer: ReturnType<typeof setTimeout> | null = null
+  let readerBackgroundSyncGeneration = 0
+  const pendingReaderBackgroundBlobs = new Map<string, { nonce: number; blob: Blob }>()
+
+  function hashReaderBackgroundIdentity(value: string) {
+    let hash = 2166136261
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index)
+      hash = Math.imul(hash, 16777619)
+    }
+    return (hash >>> 0).toString(16).padStart(8, '0')
+  }
+
+  function resolveReaderBackgroundNamespace() {
+    const username = appStore.userInfo?.username?.trim()
+    const accessToken = localStorage.getItem('accessToken')?.trim()
+    const secureKey = localStorage.getItem('secureKey')?.trim()
+    const identity = username
+      ? `user:${username}`
+      : accessToken
+        ? `token:${accessToken}`
+        : secureKey
+          ? `secure:${secureKey}`
+          : 'anonymous'
+    return hashReaderBackgroundIdentity(identity)
+  }
+
+  function readerBackgroundStorageKey(base: string, namespace: string) {
+    return `${base}:${namespace}`
+  }
+
+  function readerBackgroundAssetKey(namespace: string) {
+    return readerBackgroundStorageKey(READER_BACKGROUND_LEGACY_ASSET_KEY, namespace)
+  }
+
+  function isActiveReaderBackgroundSync(namespace: string, generation: number) {
+    return readerBackgroundNamespace.value === namespace
+      && readerBackgroundSyncGeneration === generation
+  }
+
+  function persistReaderBackgroundConfig() {
+    localStorage.setItem(READER_BACKGROUND_CONFIG_KEY, JSON.stringify(readerBackgroundConfig))
+  }
+
+  function readerBackgroundSettings() {
+    return {
+      enabled: readerBackgroundConfig.enabled,
+      fit: readerBackgroundConfig.fit,
+      position: readerBackgroundConfig.position,
+      overlay: readerBackgroundConfig.overlay,
+    }
+  }
+
+  function readPendingReaderBackgroundSync(namespace: string): PendingReaderBackgroundSync | null {
+    try {
+      const key = readerBackgroundStorageKey(READER_BACKGROUND_PENDING_KEY, namespace)
+      const saved = JSON.parse(localStorage.getItem(key) || 'null') as Partial<PendingReaderBackgroundSync> | null
+      if (
+        !saved
+        || !['upload', 'settings', 'delete'].includes(String(saved.operation))
+        || typeof saved.nonce !== 'number'
+        || !Number.isFinite(saved.nonce)
+      ) return null
+      return saved as PendingReaderBackgroundSync
+    } catch {
+      return null
+    }
+  }
+
+  function markReaderBackgroundPending(
+    namespace: string,
+    operation: ReaderBackgroundSyncOperation,
+  ) {
+    const current = readPendingReaderBackgroundSync(namespace)
+    const nextOperation = operation === 'settings' && current?.operation === 'upload'
+      ? 'upload'
+      : operation
+    readerBackgroundPendingNonce = Math.max(Date.now(), readerBackgroundPendingNonce + 1)
+    const pending: PendingReaderBackgroundSync = {
+      operation: nextOperation,
+      nonce: readerBackgroundPendingNonce,
+    }
+    localStorage.setItem(
+      readerBackgroundStorageKey(READER_BACKGROUND_PENDING_KEY, namespace),
+      JSON.stringify(pending),
+    )
+    if (readerBackgroundNamespace.value === namespace) {
+      readerBackgroundSyncState.value = 'pending'
+    }
+    return pending
+  }
+
+  function clearReaderBackgroundPending(namespace: string, nonce: number) {
+    if (readPendingReaderBackgroundSync(namespace)?.nonce === nonce) {
+      localStorage.removeItem(readerBackgroundStorageKey(READER_BACKGROUND_PENDING_KEY, namespace))
+    }
+    const pendingBlob = pendingReaderBackgroundBlobs.get(namespace)
+    if (pendingBlob?.nonce === nonce) pendingReaderBackgroundBlobs.delete(namespace)
+  }
+
+  function applyServerReaderBackgroundMetadata(
+    metadata: ReaderBackgroundMetadata,
+    namespace: string,
+    generation: number,
+    applySettings = true,
+  ) {
+    if (applySettings && isActiveReaderBackgroundSync(namespace, generation)) {
+      readerBackgroundConfig.enabled = metadata.enabled
+      readerBackgroundConfig.fit = metadata.fit
+      readerBackgroundConfig.position = metadata.position
+      readerBackgroundConfig.overlay = normalizeNumber(
+        metadata.overlay,
+        defaultReaderBackgroundConfig.overlay,
+        0,
+        0.9,
+      )
+      persistReaderBackgroundConfig()
+    }
+    localStorage.setItem(readerBackgroundStorageKey(READER_BACKGROUND_ETAG_KEY, namespace), metadata.etag)
+    localStorage.setItem(readerBackgroundStorageKey(READER_BACKGROUND_SERVER_STATE_KEY, namespace), 'present')
+  }
+
+  function replaceReaderBackgroundUrl(blob: Blob | null) {
+    if (readerBackgroundObjectUrl) {
+      URL.revokeObjectURL(readerBackgroundObjectUrl)
+      readerBackgroundObjectUrl = ''
+    }
+    readerBackgroundObjectUrl = blob ? URL.createObjectURL(blob) : ''
+    readerBackgroundUrl.value = readerBackgroundObjectUrl
+  }
+
+  async function claimLegacyReaderBackground(namespace: string) {
+    let localBlob = await getReaderBackground(readerBackgroundAssetKey(namespace)).catch(() => null)
+    if (localBlob) return localBlob
+    const canClaimLegacy = Boolean(localStorage.getItem('accessToken')?.trim() || appStore.isLoggedIn)
+    if (localStorage.getItem(READER_BACKGROUND_LEGACY_CLAIMED_KEY) || !canClaimLegacy) return null
+    localBlob = await getReaderBackground(READER_BACKGROUND_LEGACY_ASSET_KEY).catch(() => null)
+    if (!localBlob) return null
+    localStorage.setItem(READER_BACKGROUND_LEGACY_CLAIMED_KEY, namespace)
+    await saveReaderBackground(localBlob, readerBackgroundAssetKey(namespace)).catch(() => undefined)
+    await deleteReaderBackground(READER_BACKGROUND_LEGACY_ASSET_KEY).catch(() => undefined)
+    return localBlob
+  }
+
+  async function performPendingReaderBackgroundSync(
+    namespace: string,
+    generation: number,
+    pending: PendingReaderBackgroundSync,
+  ) {
+    if (pending.operation === 'delete') {
+      await removeServerReaderBackground()
+      await deleteReaderBackground(readerBackgroundAssetKey(namespace)).catch(() => undefined)
+      localStorage.removeItem(readerBackgroundStorageKey(READER_BACKGROUND_ETAG_KEY, namespace))
+      localStorage.setItem(readerBackgroundStorageKey(READER_BACKGROUND_SERVER_STATE_KEY, namespace), 'absent')
+    } else if (pending.operation === 'upload') {
+      const pendingBlob = pendingReaderBackgroundBlobs.get(namespace)
+      const image = pendingBlob?.nonce === pending.nonce
+        ? pendingBlob.blob
+        : await getReaderBackground(readerBackgroundAssetKey(namespace)).catch(() => null)
+      if (!image) throw new Error('等待同步的背景图片已不存在')
+      const metadata = await uploadReaderBackground(image, readerBackgroundSettings())
+      applyServerReaderBackgroundMetadata(
+        metadata,
+        namespace,
+        generation,
+        readPendingReaderBackgroundSync(namespace)?.nonce === pending.nonce,
+      )
+    } else {
+      try {
+        const metadata = await updateReaderBackgroundSettings(readerBackgroundSettings())
+        applyServerReaderBackgroundMetadata(
+          metadata,
+          namespace,
+          generation,
+          readPendingReaderBackgroundSync(namespace)?.nonce === pending.nonce,
+        )
+      } catch (error) {
+        const image = await getReaderBackground(readerBackgroundAssetKey(namespace)).catch(() => null)
+        if (!image) throw error
+        const metadata = await uploadReaderBackground(image, readerBackgroundSettings())
+        applyServerReaderBackgroundMetadata(
+          metadata,
+          namespace,
+          generation,
+          readPendingReaderBackgroundSync(namespace)?.nonce === pending.nonce,
+        )
+      }
+    }
+    clearReaderBackgroundPending(namespace, pending.nonce)
+  }
+
+  async function synchronizeReaderBackground(namespace: string, generation: number) {
+    let localBlob = await getReaderBackground(readerBackgroundAssetKey(namespace)).catch(() => null)
+    const pending = readPendingReaderBackgroundSync(namespace)
+    if (pending) {
+      await performPendingReaderBackgroundSync(namespace, generation, pending)
+      localBlob = await getReaderBackground(readerBackgroundAssetKey(namespace)).catch(() => localBlob)
+      if (readPendingReaderBackgroundSync(namespace)) {
+        if (isActiveReaderBackgroundSync(namespace, generation)) readerBackgroundSyncState.value = 'pending'
+        return
+      }
+    }
+
+    let metadata = await fetchReaderBackgroundMetadata()
+    if (!isActiveReaderBackgroundSync(namespace, generation)) return
+    if (readPendingReaderBackgroundSync(namespace)) {
+      readerBackgroundSyncState.value = 'pending'
+      return
+    }
+    if (!metadata) {
+      const etagKey = readerBackgroundStorageKey(READER_BACKGROUND_ETAG_KEY, namespace)
+      const stateKey = readerBackgroundStorageKey(READER_BACKGROUND_SERVER_STATE_KEY, namespace)
+      const wasPreviouslySynchronized = localStorage.getItem(stateKey) === 'present'
+        || Boolean(localStorage.getItem(etagKey))
+      if (localBlob && !wasPreviouslySynchronized) {
+        const migration = markReaderBackgroundPending(namespace, 'upload')
+        pendingReaderBackgroundBlobs.set(namespace, { nonce: migration.nonce, blob: localBlob })
+        await performPendingReaderBackgroundSync(namespace, generation, migration)
+      } else {
+        await deleteReaderBackground(readerBackgroundAssetKey(namespace)).catch(() => undefined)
+        localStorage.removeItem(etagKey)
+        localStorage.setItem(stateKey, 'absent')
+        if (isActiveReaderBackgroundSync(namespace, generation)) {
+          replaceReaderBackgroundUrl(null)
+          readerBackgroundConfig.enabled = false
+          persistReaderBackgroundConfig()
+        }
+      }
+      readerBackgroundSyncState.value = readPendingReaderBackgroundSync(namespace) ? 'pending' : 'synced'
+      return
+    }
+
+    const etagKey = readerBackgroundStorageKey(READER_BACKGROUND_ETAG_KEY, namespace)
+    const cachedEtag = localStorage.getItem(etagKey)
+    applyServerReaderBackgroundMetadata(metadata, namespace, generation)
+    if (!localBlob || cachedEtag !== metadata.etag) {
+      let downloaded: Blob | null = null
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const image = await fetchReaderBackgroundImage()
+        if (!image.etag || image.etag === metadata.etag) {
+          downloaded = image.blob
+          break
+        }
+        const latestMetadata = await fetchReaderBackgroundMetadata()
+        if (!latestMetadata) break
+        metadata = latestMetadata
+        applyServerReaderBackgroundMetadata(metadata, namespace, generation)
+      }
+      if (!downloaded) throw new Error('背景图片同步期间发生变化，请稍后重试')
+      if (!isActiveReaderBackgroundSync(namespace, generation)) return
+      if (readPendingReaderBackgroundSync(namespace)) {
+        readerBackgroundSyncState.value = 'pending'
+        return
+      }
+      localBlob = downloaded
+      await saveReaderBackground(localBlob, readerBackgroundAssetKey(namespace)).catch(() => undefined)
+      replaceReaderBackgroundUrl(localBlob)
+    } else if (!readerBackgroundUrl.value) {
+      replaceReaderBackgroundUrl(localBlob)
+    }
+    readerBackgroundSyncState.value = readPendingReaderBackgroundSync(namespace) ? 'pending' : 'synced'
+  }
+
+  function queueReaderBackgroundSync() {
+    const run = async () => {
+      const namespace = readerBackgroundNamespace.value
+      const generation = readerBackgroundSyncGeneration
+      try {
+        await synchronizeReaderBackground(namespace, generation)
+      } catch {
+        if (isActiveReaderBackgroundSync(namespace, generation)) {
+          readerBackgroundSyncState.value = readPendingReaderBackgroundSync(namespace) ? 'pending' : 'local'
+        }
+      }
+    }
+    const pending = readerBackgroundSyncQueue.then(run, run)
+    readerBackgroundSyncQueue = pending.catch(() => undefined)
+    return pending
+  }
+
+  async function loadReaderBackground(namespace: string, generation: number) {
+    const localBlob = await claimLegacyReaderBackground(namespace)
+    if (!isActiveReaderBackgroundSync(namespace, generation)) return
+    replaceReaderBackgroundUrl(localBlob)
+    if (localBlob) readerBackgroundSyncState.value = 'local'
+    await queueReaderBackgroundSync()
+    if (isActiveReaderBackgroundSync(namespace, generation)) readerBackgroundLoaded.value = true
+  }
+
+  async function setReaderBackgroundImage(blob: Blob) {
+    if (!(blob instanceof Blob) || !blob.size) {
+      throw new Error('背景图片数据无效')
+    }
+    const namespace = readerBackgroundNamespace.value
+    const pending = markReaderBackgroundPending(namespace, 'upload')
+    pendingReaderBackgroundBlobs.set(namespace, { nonce: pending.nonce, blob })
+    await saveReaderBackground(blob, readerBackgroundAssetKey(namespace)).catch(() => undefined)
+    replaceReaderBackgroundUrl(blob)
+    readerBackgroundConfig.enabled = true
+    persistReaderBackgroundConfig()
+    await queueReaderBackgroundSync()
+    return readerBackgroundSyncState.value
+  }
+
+  async function clearReaderBackgroundImage() {
+    const namespace = readerBackgroundNamespace.value
+    markReaderBackgroundPending(namespace, 'delete')
+    pendingReaderBackgroundBlobs.delete(namespace)
+    await deleteReaderBackground(readerBackgroundAssetKey(namespace)).catch(() => undefined)
+    replaceReaderBackgroundUrl(null)
+    readerBackgroundConfig.enabled = false
+    persistReaderBackgroundConfig()
+    await queueReaderBackgroundSync()
+    return readerBackgroundSyncState.value
+  }
+
+  function updateReaderBackgroundConfig<K extends keyof ReaderBackgroundConfig>(
+    key: K,
+    value: ReaderBackgroundConfig[K],
+  ) {
+    if (key === 'overlay') {
+      readerBackgroundConfig.overlay = normalizeNumber(value, readerBackgroundConfig.overlay, 0, 0.9)
+    } else if (key === 'fit' && (value === 'cover' || value === 'contain')) {
+      readerBackgroundConfig.fit = value
+    } else if (key === 'position' && (value === 'top' || value === 'center' || value === 'bottom')) {
+      readerBackgroundConfig.position = value
+    } else if (key === 'enabled' && typeof value === 'boolean') {
+      readerBackgroundConfig.enabled = value
+    }
+    persistReaderBackgroundConfig()
+    if (readerBackgroundUrl.value) {
+      markReaderBackgroundPending(readerBackgroundNamespace.value, 'settings')
+      if (readerBackgroundSettingsTimer) clearTimeout(readerBackgroundSettingsTimer)
+      readerBackgroundSettingsTimer = setTimeout(() => {
+        readerBackgroundSettingsTimer = null
+        void queueReaderBackgroundSync()
+      }, READER_BACKGROUND_SETTINGS_SYNC_DELAY_MS)
+    }
+  }
+
+  void loadReaderBackground(readerBackgroundNamespace.value, readerBackgroundSyncGeneration)
+  watch(() => appStore.isOnline, (online) => {
+    if (online) void queueReaderBackgroundSync()
+  })
+  watch(() => [appStore.userInfo?.username || '', appStore.isLoggedIn] as const, () => {
+    const nextNamespace = resolveReaderBackgroundNamespace()
+    if (nextNamespace === readerBackgroundNamespace.value) {
+      void queueReaderBackgroundSync()
+      return
+    }
+    readerBackgroundNamespace.value = nextNamespace
+    readerBackgroundSyncGeneration += 1
+    readerBackgroundLoaded.value = false
+    readerBackgroundSyncState.value = 'loading'
+    replaceReaderBackgroundUrl(null)
+    if (readerBackgroundSettingsTimer) {
+      clearTimeout(readerBackgroundSettingsTimer)
+      readerBackgroundSettingsTimer = null
+    }
+    void loadReaderBackground(nextNamespace, readerBackgroundSyncGeneration)
   })
 
   function setThemeIndex(idx: number) {
@@ -600,11 +1051,105 @@ export const useReaderStore = defineStore('reader', () => {
       bookUrl: book.value.bookUrl,
       index,
       position: encodeServerProgress(progress),
+      revision: knownProgressRevisions.get(book.value.bookUrl)
+        ?? normalizeProgressRevision(book.value.progressRevision),
     }
   }
 
   function markProgressDirty() {
     progressDirty.value = true
+    progressChangeVersion += 1
+  }
+
+  function normalizeProgressRevision(value: unknown) {
+    return typeof value === 'number' && Number.isFinite(value)
+      ? Math.max(0, Math.trunc(value))
+      : 0
+  }
+
+  function rememberProgressRevision(bookUrl: string, revision: unknown) {
+    const candidate = normalizeProgressRevision(revision)
+    const known = knownProgressRevisions.get(bookUrl)
+    // A delayed keepalive response can arrive after a newer regular save. A
+    // revision learned from either response must therefore never move back.
+    const normalized = known == null ? candidate : Math.max(known, candidate)
+    knownProgressRevisions.set(bookUrl, normalized)
+    if (book.value?.bookUrl === bookUrl) {
+      book.value.progressRevision = normalized
+    }
+    const shelfBook = shelfStore.books.find((item) => item.bookUrl === bookUrl)
+    if (shelfBook) {
+      shelfBook.progressRevision = normalized
+    }
+  }
+
+  function progressPayloadKey(payload: Pick<ServerProgressPayload, 'bookUrl' | 'index' | 'position'>) {
+    return `${payload.bookUrl}::${payload.index}::${payload.position}`
+  }
+
+  function serverProgressMatchesPayload(result: SaveBookProgressResponse, payload: ServerProgressPayload) {
+    return result.currentProgress?.index === payload.index
+      && result.currentProgress.position === payload.position
+  }
+
+  function parseKeepaliveProgressResult(raw: unknown): SaveBookProgressResponse | string | null {
+    let value: unknown = raw
+    if (value && typeof value === 'object' && 'isSuccess' in value) {
+      const envelope = value as { isSuccess?: boolean; data?: unknown }
+      if (!envelope.isSuccess) return null
+      value = envelope.data
+    }
+    if (typeof value === 'string') return value
+    if (!value || typeof value !== 'object') return null
+    const result = value as Partial<SaveBookProgressResponse>
+    if (typeof result.accepted !== 'boolean'
+      || typeof result.currentRevision !== 'number'
+      || !Number.isFinite(result.currentRevision)
+      || !result.currentProgress
+      || typeof result.currentProgress !== 'object') {
+      return null
+    }
+    return result as SaveBookProgressResponse
+  }
+
+  function applyProgressSaveResult(
+    payload: ServerProgressPayload,
+    submittedChangeVersion: number,
+    result: SaveBookProgressResponse | string,
+    notifyConflict = true,
+  ) {
+    if (typeof result === 'string') {
+      if (book.value?.bookUrl !== payload.bookUrl) return
+      if (progressChangeVersion === submittedChangeVersion) {
+        progressDirty.value = false
+        lastServerProgressKey.value = progressPayloadKey(payload)
+      }
+      return
+    }
+
+    rememberProgressRevision(payload.bookUrl, result.currentRevision)
+    if (book.value?.bookUrl !== payload.bookUrl) return
+
+    // A keepalive and a normal save can race with the same revision. If one
+    // wins and the other is rejected, matching server progress means the
+    // intended position is already durable and is not a cross-device conflict.
+    if (result.accepted || serverProgressMatchesPayload(result, payload)) {
+      if (progressChangeVersion === submittedChangeVersion) {
+        progressDirty.value = false
+        lastServerProgressKey.value = progressPayloadKey(payload)
+      }
+      return
+    }
+
+    if (progressChangeVersion === submittedChangeVersion) {
+      progressDirty.value = false
+      lastServerProgressKey.value = progressPayloadKey(payload)
+    }
+    const conflictKey = `${payload.bookUrl}::${result.currentRevision}`
+    if (notifyConflict && lastProgressConflictKey !== conflictKey) {
+      lastProgressConflictKey = conflictKey
+      appStore.showToast('其他设备已保存更新进度，本次旧进度未覆盖', 'warning')
+    }
   }
 
   function syncLocalBookProgress(progress = chapterScrollProgress.value) {
@@ -653,6 +1198,7 @@ export const useReaderStore = defineStore('reader', () => {
     }
 
     book.value = restoredBook
+    rememberProgressRevision(restoredBook.bookUrl, restoredBook.progressRevision)
     currentIndex.value = nextIndex
     chapters.value = restoredChapters
     loadReadChapterHistory(restoredBook)
@@ -769,13 +1315,15 @@ export const useReaderStore = defineStore('reader', () => {
   let synth: SpeechSynthesis | null = typeof window !== 'undefined' ? window.speechSynthesis : null
   let currentUtterance: SpeechSynthesisUtterance | null = null
   let currentOpenAIAudio: HTMLAudioElement | null = null
+  const remoteSpeechAudioElements: HTMLAudioElement[] = []
   let currentOpenAIAudioUrl = ''
   let currentOpenAIAbortController: AbortController | null = null
-  const preloadedOpenAIAudio = ref<PreloadedOpenAIAudio[]>([])
+  let preloadedOpenAIAudio: PreloadedOpenAIAudio[] = []
   let preloadGeneration = 0
   const inFlightPreloadKeys = new Set<string>()
   const inFlightOpenAIAudioRequests = new Map<string, Promise<Blob>>()
   let currentTTSSessionId = 0
+  let mediaSessionConfigured = false
 
   function logTTS(message: string, payload?: unknown) {
     void message
@@ -807,6 +1355,56 @@ export const useReaderStore = defineStore('reader', () => {
 
   function saveSpeechConfig() {
     localStorage.setItem('reader-speechConfig', JSON.stringify(speechConfig))
+  }
+
+  function setMediaSessionPlaybackState(state: MediaSessionPlaybackState) {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return
+    try {
+      navigator.mediaSession.playbackState = state
+    } catch {
+      // Media Session is best-effort across mobile browsers.
+    }
+  }
+
+  function configureMediaSession(rawText = '') {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return
+    try {
+      if (!mediaSessionConfigured) {
+        navigator.mediaSession.setActionHandler('play', () => {
+          if (currentOpenAIAudio?.paused) {
+            void currentOpenAIAudio.play()
+          } else if (synth?.paused) {
+            synth.resume()
+            isPaused.value = false
+            isSpeaking.value = true
+            setMediaSessionPlaybackState('playing')
+          }
+        })
+        navigator.mediaSession.setActionHandler('pause', () => {
+          if (currentOpenAIAudio && !currentOpenAIAudio.paused) {
+            currentOpenAIAudio.pause()
+          } else if (synth?.speaking && !synth.paused) {
+            synth.pause()
+            isPaused.value = true
+            setMediaSessionPlaybackState('paused')
+          }
+        })
+        navigator.mediaSession.setActionHandler('stop', () => stopTTS())
+        mediaSessionConfigured = true
+      }
+      if (typeof MediaMetadata !== 'undefined') {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: currentChapter.value?.title || book.value?.name || '听书',
+          artist: book.value?.author || 'Reader Next',
+          album: book.value?.name || 'Reader Next',
+        })
+      }
+      if (rawText) {
+        logTTS('media session updated', { text: rawText.slice(0, 40) })
+      }
+    } catch {
+      // Unsupported actions must not block speech playback.
+    }
   }
 
   function fetchVoices() {
@@ -922,6 +1520,17 @@ export const useReaderStore = defineStore('reader', () => {
     saveSpeechConfig()
   }
 
+  function setSpeechVolume(volume: number) {
+    speechConfig.speechVolume = Math.max(0, Math.min(1, volume))
+    if (currentUtterance) {
+      currentUtterance.volume = speechConfig.speechVolume
+    }
+    remoteSpeechAudioElements.forEach((audio) => {
+      audio.volume = speechConfig.speechVolume
+    })
+    saveSpeechConfig()
+  }
+
   function buildOpenAIAudioCacheKey(rawText: string) {
     return [
       speechConfig.provider,
@@ -983,21 +1592,76 @@ export const useReaderStore = defineStore('reader', () => {
     return { key, promise }
   }
 
+  function resetRemoteSpeechAudio(audio: HTMLAudioElement) {
+    audio.onplay = null
+    audio.onpause = null
+    audio.onended = null
+    audio.onerror = null
+    audio.pause()
+    audio.removeAttribute('src')
+    try {
+      audio.load()
+    } catch {
+      // Some test and embedded browsers do not implement load().
+    }
+  }
+
+  function acquireRemoteSpeechAudioBuffer() {
+    const reserved = new Set(preloadedOpenAIAudio.map((entry) => entry.audio).filter(Boolean))
+    const available = remoteSpeechAudioElements.find((audio) => audio !== currentOpenAIAudio && !reserved.has(audio))
+    if (available) return available
+    if (remoteSpeechAudioElements.length >= REMOTE_SPEECH_AUDIO_BUFFER_COUNT) return null
+    const audio = new Audio()
+    audio.preload = 'auto'
+    audio.volume = speechConfig.speechVolume
+    remoteSpeechAudioElements.push(audio)
+    return audio
+  }
+
+  function prepareRemoteSpeechAudioBuffer() {
+    const entry = preloadedOpenAIAudio.find((item) => !item.audio)
+    if (!entry) return
+    const audio = acquireRemoteSpeechAudioBuffer()
+    if (!audio) return
+    const url = URL.createObjectURL(entry.blob)
+    resetRemoteSpeechAudio(audio)
+    audio.preload = 'auto'
+    audio.volume = speechConfig.speechVolume
+    audio.src = url
+    entry.audio = audio
+    entry.url = url
+    try {
+      audio.load()
+    } catch {
+      // Assigning a Blob URL is enough when explicit preload is unavailable.
+    }
+  }
+
+  function releasePreloadedOpenAIAudio(entries: PreloadedOpenAIAudio[]) {
+    entries.forEach((entry) => {
+      if (entry.url) URL.revokeObjectURL(entry.url)
+      if (entry.audio && entry.audio !== currentOpenAIAudio) {
+        resetRemoteSpeechAudio(entry.audio)
+      }
+    })
+  }
+
   function clearPreloadedOpenAIAudio() {
     preloadGeneration += 1
     inFlightPreloadKeys.clear()
     inFlightOpenAIAudioRequests.clear()
-    preloadedOpenAIAudio.value = []
+    releasePreloadedOpenAIAudio(preloadedOpenAIAudio)
+    preloadedOpenAIAudio = []
   }
 
   async function preloadOpenAITTS(rawText?: string | string[] | null) {
     if (speechConfig.provider === 'system' || !remoteSpeechConfigured.value) return
     const texts = Array.isArray(rawText) ? rawText : [rawText || '']
-    const normalizedTexts = texts.map((item) => item.trim()).filter(Boolean)
+    const normalizedTexts = Array.from(new Set(texts.map((item) => item.trim()).filter(Boolean)))
     if (!normalizedTexts.length) return
     const pendingTexts = normalizedTexts.filter((item) => {
       const key = buildOpenAIAudioCacheKey(item)
-      return !preloadedOpenAIAudio.value.some((entry) => entry.key === key) && !inFlightPreloadKeys.has(key)
+      return !preloadedOpenAIAudio.some((entry) => entry.key === key) && !inFlightPreloadKeys.has(key)
     })
     if (!pendingTexts.length) return
 
@@ -1009,13 +1673,21 @@ export const useReaderStore = defineStore('reader', () => {
       void promise
         .then((blob) => {
           if (generation !== preloadGeneration) return
-          const nextQueue = preloadedOpenAIAudio.value.filter((entry) => entry.key !== key)
+          const replaced = preloadedOpenAIAudio.filter((entry) => entry.key === key)
+          releasePreloadedOpenAIAudio(replaced)
+          const nextQueue = preloadedOpenAIAudio.filter((entry) => entry.key !== key)
           nextQueue.push({ key, blob })
-          preloadedOpenAIAudio.value = nextQueue
+          if (nextQueue.length > OPENAI_AUDIO_PRELOAD_LIMIT) {
+            releasePreloadedOpenAIAudio(nextQueue.splice(0, nextQueue.length - OPENAI_AUDIO_PRELOAD_LIMIT))
+          }
+          preloadedOpenAIAudio = nextQueue
+          prepareRemoteSpeechAudioBuffer()
         })
         .catch(() => undefined)
         .finally(() => {
-          inFlightPreloadKeys.delete(key)
+          if (generation === preloadGeneration) {
+            inFlightPreloadKeys.delete(key)
+          }
         })
     }
   }
@@ -1025,19 +1697,18 @@ export const useReaderStore = defineStore('reader', () => {
       currentOpenAIAbortController.abort()
       currentOpenAIAbortController = null
     }
-    if (currentOpenAIAudio) {
-      currentOpenAIAudio.onplay = null
-      currentOpenAIAudio.onpause = null
-      currentOpenAIAudio.onended = null
-      currentOpenAIAudio.onerror = null
-      currentOpenAIAudio.pause()
-      currentOpenAIAudio.src = ''
-      currentOpenAIAudio = null
-    }
+    remoteSpeechAudioElements.forEach(resetRemoteSpeechAudio)
+    currentOpenAIAudio = null
     if (currentOpenAIAudioUrl) {
       URL.revokeObjectURL(currentOpenAIAudioUrl)
       currentOpenAIAudioUrl = ''
     }
+    releasePreloadedOpenAIAudio(preloadedOpenAIAudio)
+    preloadedOpenAIAudio.forEach((entry) => {
+      entry.audio = undefined
+      entry.url = undefined
+    })
+    prepareRemoteSpeechAudioBuffer()
   }
 
   function clearSpeechStopTimer(resetConfig = true) {
@@ -1054,7 +1725,9 @@ export const useReaderStore = defineStore('reader', () => {
 
   function setSpeechStopTimer(minutes: number) {
     clearSpeechStopTimer(false)
-    const normalized = Math.max(0, Math.min(180, Math.round(minutes)))
+    const normalized = Number.isFinite(minutes)
+      ? Math.max(0, Math.min(1440, Math.round(minutes)))
+      : 0
     speechConfig.stopAfterMinutes = normalized
     saveSpeechConfig()
     if (!normalized) {
@@ -1087,6 +1760,7 @@ export const useReaderStore = defineStore('reader', () => {
     utterance.voice = selectedVoice || null
     utterance.rate = speechConfig.speechRate
     utterance.pitch = speechConfig.speechPitch
+    utterance.volume = speechConfig.speechVolume
     logTTS('system speak queued', {
       sessionId,
       voice: utterance.voice?.name || utterance.lang,
@@ -1139,6 +1813,7 @@ export const useReaderStore = defineStore('reader', () => {
         return
       }
       if (kind === 'error') {
+        setMediaSessionPlaybackState('none')
         options.onError?.(event)
       }
     }
@@ -1224,6 +1899,7 @@ export const useReaderStore = defineStore('reader', () => {
       if (!isCurrentTTSSession(sessionId) || currentUtterance !== utterance) return
       isSpeaking.value = true
       isPaused.value = false
+      setMediaSessionPlaybackState('playing')
       sawStart = true
       systemTtsNativeEventsReliable.value = true
       lastProgressAt = Date.now()
@@ -1289,19 +1965,69 @@ export const useReaderStore = defineStore('reader', () => {
       voice: speechConfig.provider === 'azure' ? speechConfig.azureVoice : speechConfig.openaiVoice,
       text: rawText.slice(0, 80),
     })
-    const playBlob = (blob: Blob, controller: AbortController) => {
-      if (controller.signal.aborted) return
-      if (!isCurrentTTSSession(sessionId)) return
+    const playBlob = (
+      blob: Blob,
+      controller: AbortController,
+      bufferedEntry?: PreloadedOpenAIAudio,
+    ) => {
+      const releaseUnusedBufferedEntry = () => {
+        if (!bufferedEntry) return
+        releasePreloadedOpenAIAudio([bufferedEntry])
+        bufferedEntry.audio = undefined
+        bufferedEntry.url = undefined
+      }
+      if (controller.signal.aborted || !isCurrentTTSSession(sessionId)) {
+        releaseUnusedBufferedEntry()
+        return
+      }
       isSpeechLoading.value = false
-      currentOpenAIAudioUrl = URL.createObjectURL(blob)
-      const audio = new Audio(currentOpenAIAudioUrl)
+      let audio = bufferedEntry?.audio || acquireRemoteSpeechAudioBuffer()
+      if (!audio) {
+        const releasable = preloadedOpenAIAudio.find((entry) => entry.audio && entry.audio !== currentOpenAIAudio)
+        if (releasable) {
+          releasePreloadedOpenAIAudio([releasable])
+          releasable.audio = undefined
+          releasable.url = undefined
+          audio = acquireRemoteSpeechAudioBuffer()
+        }
+      }
+      if (!audio) {
+        currentOpenAIAbortController = null
+        isSpeaking.value = false
+        isPaused.value = false
+        options.onError?.(new Error(`${speechProviderLabel.value} 音频缓冲区不可用`))
+        return
+      }
+      const audioUrl = bufferedEntry?.url || URL.createObjectURL(blob)
+      if (!bufferedEntry?.audio) {
+        resetRemoteSpeechAudio(audio)
+        audio.src = audioUrl
+      }
+      if (bufferedEntry) {
+        bufferedEntry.audio = undefined
+        bufferedEntry.url = undefined
+      }
+      currentOpenAIAudioUrl = audioUrl
+      audio.volume = speechConfig.speechVolume
       currentOpenAIAudio = audio
       currentOpenAIAbortController = null
+
+      let audioReleased = false
+      const releaseAudio = () => {
+        if (audioReleased) return
+        audioReleased = true
+        if (currentOpenAIAudio === audio) currentOpenAIAudio = null
+        if (currentOpenAIAudioUrl === audioUrl) currentOpenAIAudioUrl = ''
+        URL.revokeObjectURL(audioUrl)
+        resetRemoteSpeechAudio(audio)
+        prepareRemoteSpeechAudioBuffer()
+      }
 
       audio.onplay = () => {
         if (!isCurrentTTSSession(sessionId) || currentOpenAIAudio !== audio) return
         isSpeaking.value = true
         isPaused.value = false
+        setMediaSessionPlaybackState('playing')
         logTTS('openai onplay', { sessionId, text: rawText.slice(0, 40) })
         options.onStart?.()
       }
@@ -1311,32 +2037,26 @@ export const useReaderStore = defineStore('reader', () => {
         if (!audio.ended) {
           isPaused.value = true
           isSpeaking.value = false
+          setMediaSessionPlaybackState('paused')
         }
       }
 
       audio.onended = () => {
-        if (currentOpenAIAudio === audio) {
-          currentOpenAIAudio = null
-        }
+        releaseAudio()
         if (!isCurrentTTSSession(sessionId)) return
         isSpeaking.value = false
         isPaused.value = false
         logTTS('openai onended', { sessionId, text: rawText.slice(0, 40) })
-        if (currentOpenAIAudioUrl) {
-          URL.revokeObjectURL(currentOpenAIAudioUrl)
-          currentOpenAIAudioUrl = ''
-        }
         options.onEnd?.()
       }
 
       audio.onerror = () => {
-        if (currentOpenAIAudio === audio) {
-          currentOpenAIAudio = null
-        }
+        releaseAudio()
         if (!isCurrentTTSSession(sessionId)) return
         isSpeaking.value = false
         isPaused.value = false
         const error = new Error(`${speechProviderLabel.value} 音频播放失败`)
+        setMediaSessionPlaybackState('none')
         logTTS('openai onerror', { sessionId, text: rawText.slice(0, 40) })
         options.onError?.(error)
       }
@@ -1346,7 +2066,7 @@ export const useReaderStore = defineStore('reader', () => {
         isSpeechLoading.value = false
         isSpeaking.value = false
         isPaused.value = false
-        currentOpenAIAudio = null
+        releaseAudio()
         logTTS('openai play catch', { sessionId, message: error.message, text: rawText.slice(0, 40) })
         options.onError?.(error)
       })
@@ -1356,16 +2076,24 @@ export const useReaderStore = defineStore('reader', () => {
     currentOpenAIAbortController = controller
 
     const key = buildOpenAIAudioCacheKey(rawText)
-    const cached = preloadedOpenAIAudio.value.find((entry) => entry.key === key)
+    const takeBufferedAudio = () => {
+      const bufferedIndex = preloadedOpenAIAudio.findIndex((entry) => entry.key === key)
+      return bufferedIndex >= 0 ? preloadedOpenAIAudio.splice(bufferedIndex, 1)[0] : undefined
+    }
+    const cached = takeBufferedAudio()
     if (cached) {
-      void Promise.resolve(playBlob(cached.blob, controller))
+      void Promise.resolve(playBlob(cached.blob, controller, cached))
+      prepareRemoteSpeechAudioBuffer()
       return
     }
 
     const inFlight = inFlightOpenAIAudioRequests.get(key)
     if (inFlight) {
       void inFlight.then((blob) => {
-        return playBlob(blob, controller)
+        const buffered = takeBufferedAudio()
+        const playback = playBlob(blob, controller, buffered)
+        prepareRemoteSpeechAudioBuffer()
+        return playback
       }).catch((error: Error) => {
         if (controller.signal.aborted || !isCurrentTTSSession(sessionId)) return
         isSpeechLoading.value = false
@@ -1406,6 +2134,7 @@ export const useReaderStore = defineStore('reader', () => {
     const rawText = (text || content.value.replace(/<[^>]+>/g, '')).trim()
     if (!rawText) return
 
+    configureMediaSession(rawText)
     const sessionId = beginTTSSession()
     logTTS('startTTS', {
       sessionId,
@@ -1445,10 +2174,12 @@ export const useReaderStore = defineStore('reader', () => {
         void currentOpenAIAudio.play()
         isPaused.value = false
         isSpeaking.value = true
+        setMediaSessionPlaybackState('playing')
       } else {
         currentOpenAIAudio.pause()
         isPaused.value = true
         isSpeaking.value = false
+        setMediaSessionPlaybackState('paused')
       }
       return
     }
@@ -1457,9 +2188,11 @@ export const useReaderStore = defineStore('reader', () => {
     if (synth.speaking && !synth.paused) {
       synth.pause()
       isPaused.value = true
+      setMediaSessionPlaybackState('paused')
     } else if (synth.paused) {
       synth.resume()
       isPaused.value = false
+      setMediaSessionPlaybackState('playing')
     }
   }
 
@@ -1479,6 +2212,7 @@ export const useReaderStore = defineStore('reader', () => {
     isSpeechLoading.value = false
     isSpeaking.value = false
     isPaused.value = false
+    setMediaSessionPlaybackState('none')
     if (resetCallbacks) {
       clearSpeechStopTimer()
     }
@@ -1499,6 +2233,7 @@ export const useReaderStore = defineStore('reader', () => {
       }
     }
     book.value = latestBook
+    rememberProgressRevision(latestBook.bookUrl, latestBook.progressRevision)
     chapters.value = []
     content.value = ''
     appStore.markBookOpened(latestBook.bookUrl)
@@ -1553,18 +2288,27 @@ export const useReaderStore = defineStore('reader', () => {
   }
 
   async function persistProgress(index = currentIndex.value, progress = chapterScrollProgress.value) {
-    const payload = currentServerProgressPayload(index, progress)
-    if (!payload) return
-    await saveBookProgress(payload).then(() => {
-      progressDirty.value = false
-      lastServerProgressKey.value = `${payload.bookUrl}::${payload.index}::${payload.position}`
-    }).catch(() => undefined)
+    const snapshot = currentServerProgressPayload(index, progress)
+    if (!snapshot) return
+    const submittedChangeVersion = progressChangeVersion
+    const save = async () => {
+      const payload: ServerProgressPayload = {
+        ...snapshot,
+        revision: knownProgressRevisions.get(snapshot.bookUrl) ?? snapshot.revision,
+      }
+      const result = await saveBookProgress(payload).catch(() => null)
+      if (result == null) return
+      applyProgressSaveResult(payload, submittedChangeVersion, result)
+    }
+    const pending = progressSaveQueue.then(save, save)
+    progressSaveQueue = pending.catch(() => undefined)
+    await pending
   }
 
   async function flushProgressToServer(force = false) {
     const payload = currentServerProgressPayload()
     if (!payload) return
-    const nextKey = `${payload.bookUrl}::${payload.index}::${payload.position}`
+    const nextKey = progressPayloadKey(payload)
     if (!force && !progressDirty.value && lastServerProgressKey.value === nextKey) return
     await persistProgress(payload.index, chapterScrollProgress.value)
   }
@@ -1572,25 +2316,34 @@ export const useReaderStore = defineStore('reader', () => {
   function flushProgressToServerKeepalive(force = false) {
     const payload = currentServerProgressPayload()
     if (!payload || typeof fetch === 'undefined') return
-    const nextKey = `${payload.bookUrl}::${payload.index}::${payload.position}`
+    const nextKey = progressPayloadKey(payload)
     if (!force && !progressDirty.value && lastServerProgressKey.value === nextKey) return
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     }
-    const token = localStorage.getItem('accessToken')
+    const token = localStorage.getItem('accessToken')?.trim()
     if (token) {
       headers.Authorization = token
     }
+    const secureKey = localStorage.getItem('secureKey')?.trim()
+    if (secureKey) {
+      headers['X-Secure-Key'] = secureKey
+    }
 
+    const submittedChangeVersion = progressChangeVersion
     void fetch('/reader3/saveBookProgress', {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
       keepalive: true,
+    }).then(async (response) => {
+      if (!response.ok) return
+      const raw = await response.json().catch(() => null)
+      const result = parseKeepaliveProgressResult(raw)
+      if (result == null) return
+      applyProgressSaveResult(payload, submittedChangeVersion, result, false)
     }).catch(() => undefined)
-    progressDirty.value = false
-    lastServerProgressKey.value = nextKey
   }
 
   async function fetchChapterContent(index: number, forceRefresh = false) {
@@ -1925,6 +2678,8 @@ export const useReaderStore = defineStore('reader', () => {
       config, updateConfig, resetConfig, saveConfig,
     themeIndex, themeMode, isNight, currentTheme, dayColorStyle, nightColorStyle,
     setThemeIndex, setThemeMode, updateReaderColor, applyThemePreset, toggleNight,
+    readerBackgroundConfig, readerBackgroundUrl, readerBackgroundLoaded, readerBackgroundSyncState,
+    setReaderBackgroundImage, clearReaderBackgroundImage, updateReaderBackgroundConfig,
     autoReading, autoReadingTimer, toggleAutoReading, stopAutoReading,
     activePanel, openPanel, togglePanel, backPanel, closePanel,
     bookmarks, fetchBookmarks, addBookmark, removeBookmark, removeBookmarks,
@@ -1935,7 +2690,7 @@ export const useReaderStore = defineStore('reader', () => {
     isSpeaking, isSpeechLoading, isPaused, startTTS, pauseTTS, stopTTS,
     voiceList, speechConfig, speechStopAt, speechProviderLabel, openAISpeechConfigured, azureSpeechConfigured,
     systemTtsNativeEventsReliable,
-    fetchVoices, setVoiceName, setSpeechProvider, setSpeechRate, setSpeechPitch, setSpeechStopTimer, clearSpeechStopTimer,
+    fetchVoices, setVoiceName, setSpeechProvider, setSpeechRate, setSpeechPitch, setSpeechVolume, setSpeechStopTimer, clearSpeechStopTimer,
     setOpenAISpeechSource, setOpenAISpeechBaseUrl, setOpenAISpeechApiKey, setOpenAISpeechModel, setOpenAISpeechVoice, setOpenAISpeechFormat, setOpenAISpeechRequestMode, preloadOpenAITTS,
     setAzureSpeechRegion, setAzureSpeechApiKey, setAzureSpeechVoice, setAzureSpeechFormat,
     displayContent, processContentForDisplay,

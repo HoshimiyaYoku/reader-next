@@ -85,11 +85,12 @@ export function useHorizontalPaging(
       .join(' ')
   }
 
-  function normalizeParagraphHtml(paragraphHtml: string) {
+  function normalizeParagraphHtml(paragraphHtml: string, paragraphIndex: number) {
     const wrapper = document.createElement('div')
     wrapper.innerHTML = paragraphHtml
     const paragraph = wrapper.querySelector('p')
     if (!paragraph) return paragraphHtml
+    paragraph.dataset.readerParagraph = String(paragraphIndex)
     const style = paragraph.getAttribute('style') || ''
     const styleObj = parseInlineStyle(style)
     if (paragraph.classList.contains('reader-indent') && !styleObj['text-indent']) {
@@ -108,14 +109,16 @@ export function useHorizontalPaging(
     return {
       style: paragraph.getAttribute('style') || '',
       className: paragraph.getAttribute('class') || '',
+      paragraphId: paragraph.dataset.readerParagraph || '',
       text: (paragraph.textContent || '').trimEnd(),
     }
   }
 
-  function buildParagraphHtml(style: string, text: string, className = '') {
+  function buildParagraphHtml(style: string, text: string, className = '', paragraphId = '') {
     const stylePart = style ? ` style="${style}"` : ''
     const classPart = className ? ` class="${className}"` : ''
-    return `<p${classPart}${stylePart}>${escapeHtml(text)}</p>`
+    const paragraphPart = paragraphId ? ` data-reader-paragraph="${paragraphId}"` : ''
+    return `<p${classPart}${stylePart}${paragraphPart}>${escapeHtml(text)}</p>`
   }
 
   function firstVisibleChar(text: string) {
@@ -190,7 +193,7 @@ export function useHorizontalPaging(
   function buildHorizontalParagraphs() {
     const root = document.createElement('div')
     root.innerHTML = formattedContent.value
-    return Array.from(root.querySelectorAll('p')).map((node) => normalizeParagraphHtml(node.outerHTML))
+    return Array.from(root.querySelectorAll('p')).map((node, index) => normalizeParagraphHtml(node.outerHTML, index))
   }
 
   function updateHorizontalMetrics() {
@@ -300,7 +303,7 @@ export function useHorizontalPaging(
       const parsed = parseParagraphHtml(blockHtml)
       if (!parsed || parsed.text.length <= 1) return null
 
-      const { style, text, className } = parsed
+      const { style, text, className, paragraphId } = parsed
       const currentHeight = measureContentHeight(currentParts)
       const remainingHeight = measurer.clientHeight - currentHeight
       const minRemainingHeight = (options.minRemainingLines || 0) * config.value.fontSize * config.value.lineHeight
@@ -313,7 +316,7 @@ export function useHorizontalPaging(
       while (left <= right) {
         const mid = Math.floor((left + right) / 2)
         const tryStyle = buildSegmentStyle(style, options.isContinuation, mid < text.length)
-        const tryHtml = buildParagraphHtml(tryStyle, text.slice(0, mid), segmentClassName)
+        const tryHtml = buildParagraphHtml(tryStyle, text.slice(0, mid), segmentClassName, paragraphId)
         if (!overflows([...currentParts, tryHtml])) {
           fitCount = mid
           left = mid + 1
@@ -330,9 +333,9 @@ export function useHorizontalPaging(
       const hasMoreText = fitCount < text.length
       const fitStyle = buildSegmentStyle(style, options.isContinuation, hasMoreText)
       return {
-        html: buildParagraphHtml(fitStyle, text.slice(0, fitCount), segmentClassName),
+        html: buildParagraphHtml(fitStyle, text.slice(0, fitCount), segmentClassName, paragraphId),
         remainingHtml: hasMoreText
-          ? buildParagraphHtml(style, text.slice(fitCount), removeIndentClass(className))
+          ? buildParagraphHtml(style, text.slice(fitCount), removeIndentClass(className), paragraphId)
           : '',
       }
     }

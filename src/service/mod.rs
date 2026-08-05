@@ -13,6 +13,7 @@ pub mod local_epub_book;
 pub mod local_mobi_book;
 pub mod local_pdf_book;
 pub mod local_txt_book;
+pub mod reader_background_service;
 pub mod search_relevance;
 pub mod update_service;
 pub mod user_service;
