@@ -5,6 +5,7 @@ export type ReaderBackgroundPosition = 'top' | 'center' | 'bottom'
 
 export interface ReaderBackgroundSettings {
   enabled: boolean
+  readerEnabled?: boolean
   fit: ReaderBackgroundFit
   position: ReaderBackgroundPosition
   overlay: number
@@ -41,6 +42,7 @@ export function uploadReaderBackground(image: Blob, settings: ReaderBackgroundSe
   const form = new FormData()
   form.append('file', image, backgroundFileName(image.type))
   form.append('enabled', String(settings.enabled))
+  form.append('readerEnabled', String(settings.readerEnabled ?? false))
   form.append('fit', settings.fit)
   form.append('position', settings.position)
   form.append('overlay', String(settings.overlay))

@@ -307,6 +307,7 @@
                 &#26263;&#33394;
               </button>
             </div>
+            <ThemeBackgroundSettings class="theme-background-settings" />
           </section>
         </div>
       </aside>
@@ -319,6 +320,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useAppStore } from '../stores/app'
 import { useBookshelfStore } from '../stores/bookshelf'
 import { changePassword, logout as apiLogout } from '../api/user'
+import ThemeBackgroundSettings from './ThemeBackgroundSettings.vue'
 
 const props = defineProps<{
   modelValue: boolean
@@ -521,6 +523,10 @@ async function handleCheckVersionUpdate() {
 </script>
 
 <style scoped>
+.theme-background-settings {
+  margin-top: var(--space-4);
+}
+
 .drawer-overlay {
   position: fixed;
   inset: 0;

@@ -84,6 +84,7 @@ describe('SettingsDrawer update copy', () => {
         stubs: {
           Teleport: true,
           Transition: false,
+          ThemeBackgroundSettings: true,
         },
       },
     })

@@ -1,5 +1,15 @@
 <template>
-  <div class="home-view">
+  <div
+    class="home-view"
+    :class="{ 'has-custom-background': homeBackgroundEnabled }"
+    :style="homeBackgroundStyle"
+  >
+    <div
+      v-if="homeBackgroundEnabled"
+      class="home-background-overlay"
+      :style="{ opacity: readerStore.readerBackgroundConfig.overlay }"
+      aria-hidden="true"
+    ></div>
     <!-- Search Mode -->
     <SearchResults
       v-if="shelfStore.isSearchMode"
@@ -166,7 +176,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useBookshelfStore } from '../stores/bookshelf'
 import { useReaderStore } from '../stores/reader'
@@ -193,6 +203,19 @@ const selectedBook = ref<Book | SearchBook | null>(null)
 const openingBookUrl = ref('')
 const txtFileInputRef = ref<HTMLInputElement | null>(null)
 const txtUploading = ref(false)
+const homeBackgroundEnabled = computed(() => Boolean(
+  readerStore.readerBackgroundConfig.enabled && readerStore.readerBackgroundUrl,
+))
+const homeBackgroundStyle = computed(() => {
+  if (!homeBackgroundEnabled.value) return {}
+  const background = readerStore.readerBackgroundConfig
+  return {
+    backgroundImage: `url("${readerStore.readerBackgroundUrl}")`,
+    backgroundPosition: `center ${background.position}`,
+    backgroundSize: background.fit,
+    backgroundRepeat: 'no-repeat',
+  }
+})
 
 onMounted(async () => {
   await appStore.fetchUserInfo()
@@ -344,11 +367,29 @@ async function handleRefreshBooks() {
 
 <style scoped>
 .home-view {
+  position: relative;
   height: 100%;
   min-height: 0;
   overflow: hidden;
   scrollbar-width: none;
   -ms-overflow-style: none;
+}
+
+.home-view.has-custom-background {
+  background-color: var(--color-bg);
+}
+
+.home-background-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: var(--color-bg);
+}
+
+.home-view > :not(.home-background-overlay) {
+  position: relative;
+  z-index: 1;
 }
 
 .home-view::-webkit-scrollbar {

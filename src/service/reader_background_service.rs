@@ -310,6 +310,7 @@ mod tests {
         let bob_bytes = [b"\xff\xd8\xff".as_slice(), b"bob"].concat();
         let settings = ReaderBackgroundSettings {
             enabled: true,
+            reader_enabled: false,
             fit: ReaderBackgroundFit::Contain,
             position: ReaderBackgroundPosition::Top,
             overlay: 0.3,
@@ -346,6 +347,7 @@ mod tests {
             .unwrap();
         let settings = ReaderBackgroundSettings {
             enabled: false,
+            reader_enabled: true,
             fit: ReaderBackgroundFit::Contain,
             position: ReaderBackgroundPosition::Bottom,
             overlay: 0.7,
@@ -397,6 +399,7 @@ mod tests {
         upload_entered_rx.await.unwrap();
         let final_settings = ReaderBackgroundSettings {
             enabled: false,
+            reader_enabled: false,
             fit: ReaderBackgroundFit::Cover,
             position: ReaderBackgroundPosition::Bottom,
             overlay: 0.7,

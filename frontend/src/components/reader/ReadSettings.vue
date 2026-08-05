@@ -65,75 +65,7 @@
           </div>
         </section>
       </div>
-      <section class="background-style-card">
-        <div class="background-style-head">
-          <div>
-            <div class="theme-style-title">自定义主题背景</div>
-            <div class="background-subtitle">
-              同一账号多端同步，本机保留离线缓存
-              <span class="background-sync-status" :data-state="store.readerBackgroundSyncState">{{ backgroundSyncLabel }}</span>
-            </div>
-          </div>
-          <div class="background-actions">
-            <label class="opt-btn background-upload" :class="{ disabled: backgroundUploading }">
-              {{ backgroundUploading ? '处理中…' : (store.readerBackgroundUrl ? '更换图片' : '上传图片') }}
-              <input
-                type="file"
-                accept="image/jpeg,image/png,image/webp,image/avif"
-                :disabled="backgroundUploading"
-                @change="uploadReaderBackground"
-              >
-            </label>
-            <button
-              v-if="store.readerBackgroundUrl"
-              class="opt-btn"
-              :disabled="backgroundUploading"
-              @click="store.updateReaderBackgroundConfig('enabled', !store.readerBackgroundConfig.enabled)"
-            >{{ store.readerBackgroundConfig.enabled ? '暂时关闭' : '启用背景' }}</button>
-            <button v-if="store.readerBackgroundUrl" class="opt-btn danger-btn" :disabled="backgroundUploading" @click="clearReaderBackground">清除</button>
-          </div>
-        </div>
-
-        <div
-          v-if="store.readerBackgroundUrl"
-          class="background-preview"
-          :style="backgroundPreviewStyle"
-          aria-label="自定义背景预览"
-        ><span>正文预览</span></div>
-        <div v-else class="background-empty">支持 JPG、PNG、WebP、AVIF，原图不超过 15MB</div>
-
-        <template v-if="store.readerBackgroundUrl">
-          <div class="background-setting-row">
-            <span>适配方式</span>
-            <div class="btn-group">
-              <button class="opt-btn" :disabled="backgroundUploading" :class="{ active: store.readerBackgroundConfig.fit === 'cover' }" @click="store.updateReaderBackgroundConfig('fit', 'cover')">铺满屏幕</button>
-              <button class="opt-btn" :disabled="backgroundUploading" :class="{ active: store.readerBackgroundConfig.fit === 'contain' }" @click="store.updateReaderBackgroundConfig('fit', 'contain')">完整显示</button>
-            </div>
-          </div>
-          <div class="background-setting-row">
-            <span>焦点位置</span>
-            <div class="btn-group">
-              <button class="opt-btn" :disabled="backgroundUploading" :class="{ active: store.readerBackgroundConfig.position === 'top' }" @click="store.updateReaderBackgroundConfig('position', 'top')">顶部</button>
-              <button class="opt-btn" :disabled="backgroundUploading" :class="{ active: store.readerBackgroundConfig.position === 'center' }" @click="store.updateReaderBackgroundConfig('position', 'center')">中央</button>
-              <button class="opt-btn" :disabled="backgroundUploading" :class="{ active: store.readerBackgroundConfig.position === 'bottom' }" @click="store.updateReaderBackgroundConfig('position', 'bottom')">底部</button>
-            </div>
-          </div>
-          <label class="background-overlay-row">
-            <span>阅读遮罩</span>
-            <input
-              type="range"
-              min="0"
-              max="0.9"
-              step="0.05"
-              :disabled="backgroundUploading"
-              :value="store.readerBackgroundConfig.overlay"
-              @input="store.updateReaderBackgroundConfig('overlay', Number(($event.target as HTMLInputElement).value))"
-            >
-            <code>{{ Math.round(store.readerBackgroundConfig.overlay * 100) }}%</code>
-          </label>
-        </template>
-      </section>
-      <div class="setting-hint theme-hint">背景图片由浏览器等比缩放；可用适配方式与焦点位置调整手机、电脑上的裁切效果。字体、字号、行距等排版设置始终共用。</div>
+      <ThemeBackgroundSettings />
 
       <!-- 正文字体 -->
       <div class="setting-row">
@@ -588,7 +520,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useReaderStore, themePresets, fontPresets } from '../../stores/reader'
 import { useAiBookStore } from '../../stores/aiBook'
 import { useAppStore } from '../../stores/app'
-import { prepareReaderBackground } from '../../utils/readerBackground'
+import ThemeBackgroundSettings from '../ThemeBackgroundSettings.vue'
 
 const store = useReaderStore()
 const aiBookStore = useAiBookStore()
@@ -601,70 +533,10 @@ const nightThemePresets = themePresets.slice(-2).map((preset, offset) => ({
   index: themePresets.length - 2 + offset,
 }))
 const serverModelLoaded = ref(false)
-const backgroundUploading = ref(false)
-const backgroundSyncLabel = computed(() => ({
-  loading: '检查同步中',
-  synced: '已同步',
-  pending: '等待联网同步',
-  local: '同步暂不可用',
-}[store.readerBackgroundSyncState]))
 const canUseServerModel = computed(() => Boolean(aiBookStore.serverModelConfig?.canUseServerModel))
-function previewColorWithAlpha(color: string, alpha: number) {
-  const normalized = color.trim().replace(/^#/, '')
-  const hex = normalized.length === 3
-    ? normalized.split('').map((item) => `${item}${item}`).join('')
-    : normalized
-  if (!/^[0-9a-f]{6}$/i.test(hex)) return `rgba(0, 0, 0, ${alpha})`
-  return `rgba(${parseInt(hex.slice(0, 2), 16)}, ${parseInt(hex.slice(2, 4), 16)}, ${parseInt(hex.slice(4, 6), 16)}, ${alpha})`
-}
-const backgroundPreviewStyle = computed(() => ({
-  backgroundColor: theme.value.body,
-  backgroundImage: `linear-gradient(${previewColorWithAlpha(theme.value.body, store.readerBackgroundConfig.overlay)}, ${previewColorWithAlpha(theme.value.body, store.readerBackgroundConfig.overlay)}), url("${store.readerBackgroundUrl}")`,
-  backgroundPosition: `center ${store.readerBackgroundConfig.position}`,
-  backgroundSize: store.readerBackgroundConfig.fit,
-  backgroundRepeat: 'no-repeat',
-  color: theme.value.fontColor,
-}))
 
 function updateColor(mode: 'light' | 'dark', key: 'backgroundColor' | 'textColor', event: Event) {
   store.updateReaderColor(mode, key, (event.target as HTMLInputElement).value)
-}
-
-async function uploadReaderBackground(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  input.value = ''
-  if (!file || backgroundUploading.value) return
-  backgroundUploading.value = true
-  try {
-    const image = await prepareReaderBackground(file)
-    await store.setReaderBackgroundImage(image)
-    appStore.showToast(
-      store.readerBackgroundSyncState === 'synced'
-        ? '自定义背景已保存并同步'
-        : '背景已保存在本机，联网后会自动同步',
-      store.readerBackgroundSyncState === 'synced' ? 'success' : 'warning',
-    )
-  } catch (error) {
-    appStore.showToast((error as Error).message || '背景图片处理失败', 'warning')
-  } finally {
-    backgroundUploading.value = false
-  }
-}
-
-async function clearReaderBackground() {
-  if (!window.confirm('清除自定义背景？此操作会同步到其他设备。')) return
-  try {
-    await store.clearReaderBackgroundImage()
-    appStore.showToast(
-      store.readerBackgroundSyncState === 'synced'
-        ? '自定义背景已清除并同步'
-        : '背景已在本机清除，联网后会同步',
-      store.readerBackgroundSyncState === 'synced' ? 'success' : 'warning',
-    )
-  } catch (error) {
-    appStore.showToast((error as Error).message || '背景图片清除失败', 'error')
-  }
 }
 
 function step(key: 'fontSize' | 'fontWeight' | 'pageWidth' | 'animateDuration' | 'scrollPixel' | 'pageSpeed', delta: number, min: number, max: number) {

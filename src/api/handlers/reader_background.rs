@@ -85,7 +85,10 @@ pub async fn upload_reader_background(
             continue;
         }
 
-        if matches!(name.as_str(), "enabled" | "fit" | "position" | "overlay") {
+        if matches!(
+            name.as_str(),
+            "enabled" | "readerEnabled" | "fit" | "position" | "overlay"
+        ) {
             let bytes = field
                 .bytes()
                 .await
@@ -158,6 +161,17 @@ fn apply_setting(
                 }
             }
         }
+        "readerEnabled" => {
+            settings.reader_enabled = match value.trim() {
+                "true" => true,
+                "false" => false,
+                _ => {
+                    return Err(AppError::BadRequest(
+                        "正文背景启用状态必须是 true 或 false".to_string(),
+                    ))
+                }
+            }
+        }
         "fit" => {
             settings.fit = match value.trim() {
                 "cover" => ReaderBackgroundFit::Cover,
@@ -195,10 +209,12 @@ mod tests {
         apply_setting(&mut settings, "position", "bottom").unwrap();
         apply_setting(&mut settings, "overlay", "0.8").unwrap();
         apply_setting(&mut settings, "enabled", "false").unwrap();
+        apply_setting(&mut settings, "readerEnabled", "true").unwrap();
         assert_eq!(settings.fit, ReaderBackgroundFit::Contain);
         assert_eq!(settings.position, ReaderBackgroundPosition::Bottom);
         assert_eq!(settings.overlay, 0.8);
         assert!(!settings.enabled);
+        assert!(settings.reader_enabled);
 
         assert!(apply_setting(&mut settings, "overlay", "NaN").is_err());
         assert!(apply_setting(&mut settings, "position", "left").is_err());

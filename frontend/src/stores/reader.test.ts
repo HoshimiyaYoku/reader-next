@@ -181,6 +181,7 @@ describe('reader local txt chapters', () => {
 
     expect(readerStore.readerBackgroundConfig).toMatchObject({
       enabled: true,
+      readerEnabled: false,
       fit: 'cover',
       position: 'center',
       overlay: 0.9,
@@ -685,6 +686,7 @@ describe('reader background synchronization', () => {
 
     expect(uploadReaderBackground).toHaveBeenCalledWith(image, {
       enabled: true,
+      readerEnabled: false,
       fit: 'cover',
       position: 'center',
       overlay: 0.45,

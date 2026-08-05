@@ -20,6 +20,8 @@ pub enum ReaderBackgroundPosition {
 #[serde(rename_all = "camelCase")]
 pub struct ReaderBackgroundSettings {
     pub enabled: bool,
+    #[serde(default)]
+    pub reader_enabled: bool,
     pub fit: ReaderBackgroundFit,
     pub position: ReaderBackgroundPosition,
     pub overlay: f32,
@@ -29,6 +31,7 @@ impl Default for ReaderBackgroundSettings {
     fn default() -> Self {
         Self {
             enabled: true,
+            reader_enabled: false,
             fit: ReaderBackgroundFit::Cover,
             position: ReaderBackgroundPosition::Center,
             overlay: 0.45,
@@ -71,5 +74,16 @@ mod tests {
             };
             assert!(settings.validate().is_err());
         }
+    }
+
+    #[test]
+    fn legacy_settings_keep_reader_background_disabled() {
+        let settings: ReaderBackgroundSettings = serde_json::from_str(
+            r#"{"enabled":true,"fit":"cover","position":"center","overlay":0.45}"#,
+        )
+        .unwrap();
+
+        assert!(settings.enabled);
+        assert!(!settings.reader_enabled);
     }
 }

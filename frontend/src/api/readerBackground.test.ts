@@ -50,6 +50,7 @@ describe('reader background api', () => {
     const image = new Blob(['image'], { type: 'image/webp' })
     const settings = {
       enabled: true,
+      readerEnabled: true,
       fit: 'contain' as const,
       position: 'bottom' as const,
       overlay: 0.6,
@@ -62,6 +63,7 @@ describe('reader background api', () => {
     expect(form).toBeInstanceOf(FormData)
     expect(form.get('file')).toBeInstanceOf(Blob)
     expect(form.get('enabled')).toBe('true')
+    expect(form.get('readerEnabled')).toBe('true')
     expect(form.get('fit')).toBe('contain')
     expect(form.get('position')).toBe('bottom')
     expect(form.get('overlay')).toBe('0.6')
@@ -71,6 +73,7 @@ describe('reader background api', () => {
   it('updates settings and removes the remote image', async () => {
     const settings = {
       enabled: false,
+      readerEnabled: false,
       fit: 'cover' as const,
       position: 'top' as const,
       overlay: 0.2,

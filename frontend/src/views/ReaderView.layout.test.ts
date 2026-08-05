@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import source from './ReaderView.vue?raw'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
+const source = readFileSync(resolve(process.cwd(), 'src/styles/reader-view.css'), 'utf8')
 
 function ruleBody(pattern: RegExp) {
   return source.match(pattern)?.groups?.body ?? ''
