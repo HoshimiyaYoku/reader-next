@@ -61,6 +61,8 @@ Reader Next 是一个面向自用与二次开发的阅读 3.0 服务端：Rust �
 
 相对于 fork 时的上游版本，本仓库近期主要增加或改进了：
 
+当前稳定版本为 [v1.0.21](https://github.com/HoshimiyaYoku/reader-next/releases/tag/v1.0.21)。
+
 - 改善 iOS 添加到主屏幕后启动时的安全区域与底部空白问题。
 - 增加“搜索更多”能力，允许继续扩大搜索范围和深度。
 - 加强聚合书源兼容性，保存书籍与章节变量，兼容 `java.get/put` 和 `book/chapter.putVariable`。
@@ -235,6 +237,8 @@ src/util/      通用工具函数
 frontend/      Vue 3 + Vite + Pinia 前端
 docs/          VitePress 文档站
 ```
+
+阅读器前端按职责拆分维护：`ReaderView.vue` 负责页面编排，阅读器样式位于 `frontend/src/styles/reader-view.css`，纯展示逻辑位于 `frontend/src/views/reader/`；reader store 的配置迁移与主题模型、背景同步控制器位于 `frontend/src/stores/reader/`。
 
 ## 问题反馈
 
