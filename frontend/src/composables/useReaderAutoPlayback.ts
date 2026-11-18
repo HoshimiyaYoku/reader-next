@@ -43,6 +43,16 @@ export function useReaderAutoPlayback(
   let currentSpeechParagraph: HTMLElement | null = null
   let currentSpeechSegments: { text: string; nextParagraph: HTMLElement | null }[] = []
   let currentSpeechSegmentIndex = 0
+  let consecutiveSpeechErrors = 0
+
+  // Paragraphs made only of symbols/punctuation (scene breaks, ellipses,
+  // rules like "---") contain nothing a speech engine can read. Several
+  // engines answer such utterances with an error instead of speech, so
+  // they must be skipped before they ever reach TTS.
+  const SPEAKABLE_CHAR = /[\p{L}\p{N}]/u
+  function hasSpeakableText(text: string) {
+    return SPEAKABLE_CHAR.test(text)
+  }
 
   function isSafariSpeechDelayBrowser() {
     if (typeof navigator === 'undefined') return false
@@ -216,12 +226,14 @@ export function useReaderAutoPlayback(
     }
 
     pushCurrent()
-    return chunks.length ? chunks : [rawText]
+    const speakableChunks = chunks.filter(hasSpeakableText)
+    if (speakableChunks.length) return speakableChunks
+    return hasSpeakableText(rawText) ? [rawText] : []
   }
 
   function buildMergedSpeechSegment(paragraph: HTMLElement | null) {
     const currentText = getLogicalParagraphText(paragraph)
-    if (!currentText) {
+    if (!currentText || !hasSpeakableText(currentText)) {
       return {
         text: '',
         nextParagraph: getNextParagraphFrom(paragraph),
@@ -257,7 +269,7 @@ export function useReaderAutoPlayback(
         break
       }
       const nextText = getLogicalParagraphText(list[cursorIndex] || null)
-      if (!nextText) {
+      if (!nextText || !hasSpeakableText(nextText)) {
         cursorIndex = indexAfterLogicalParagraph(cursorIndex)
         continue
       }
@@ -642,7 +654,7 @@ export function useReaderAutoPlayback(
     markReadingParagraph(current)
     showParagraph(current)
     const chunk = ensureSpeechChunkState(current)
-    if (!chunk.text.trim()) {
+    if (!hasSpeakableText(chunk.text)) {
       if (interruptCurrent) {
         speechNext(chunk.nextParagraph)
       } else {
@@ -661,6 +673,7 @@ export function useReaderAutoPlayback(
     })
     store.startTTS(chunk.text, {
       onEnd: () => {
+        consecutiveSpeechErrors = 0
         logSpeech('chunk onEnd', {
           provider: store.speechConfig.provider,
           currentParagraph: paragraphPreview(current),
@@ -680,8 +693,22 @@ export function useReaderAutoPlayback(
           currentParagraph: paragraphPreview(current),
           nextParagraph: paragraphPreview(nextParagraph),
         })
-        resetSpeechChunkState()
-        clearReadingClass()
+        consecutiveSpeechErrors += 1
+        // A single bad chunk (e.g. one a speech engine rejects) must not
+        // end the whole session: skip it like a finished chunk. Only a
+        // run of consecutive failures means TTS itself is broken, so
+        // stop after three in a row instead of churning through the book.
+        if (consecutiveSpeechErrors >= 3) {
+          resetSpeechChunkState()
+          clearReadingClass()
+          return
+        }
+        if (store.speechConfig.provider !== 'system' && currentSpeechParagraph === current && currentSpeechSegmentIndex < currentSpeechSegments.length - 1) {
+          currentSpeechSegmentIndex += 1
+          continueSpeechTarget(current, false)
+          return
+        }
+        continueSpeechTarget(nextParagraph)
       },
     }, interruptCurrent)
     const preloadTexts = getUpcomingSpeechChunks(nextParagraph)

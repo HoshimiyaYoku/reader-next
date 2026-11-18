@@ -250,6 +250,79 @@ describe('useReaderAutoPlayback reading position', () => {
   })
 })
 
+describe('useReaderAutoPlayback symbol-only paragraphs', () => {
+  it('skips a symbol-only paragraph instead of speaking it (system provider)', () => {
+    vi.useFakeTimers()
+    const container = document.createElement('div')
+    const chapterText = document.createElement('div')
+    chapterText.innerHTML = '<p>第一段。</p><p>……</p><p>第二段。</p>'
+    container.appendChild(chapterText)
+    const { store, spoken } = createStore()
+    const playback = createPlayback(store, container, chapterText)
+
+    playback.startSpeech(chapterText.querySelector('p') as HTMLElement)
+    expect(spoken[0]?.text).toBe('第一段。')
+    spoken[0]?.options.onEnd()
+    vi.runAllTimers()
+
+    expect(spoken.map((item) => item.text)).toEqual(['第一段。', '第二段。'])
+  })
+
+  it('skips a symbol-only paragraph instead of speaking it (remote provider)', () => {
+    vi.useFakeTimers()
+    const container = document.createElement('div')
+    const chapterText = document.createElement('div')
+    chapterText.innerHTML = '<p>第一段。</p><p>————</p><p>第二段。</p>'
+    container.appendChild(chapterText)
+    const { store, spoken } = createStore()
+    store.speechConfig.provider = 'openai'
+    const playback = createPlayback(store, container, chapterText)
+
+    playback.startSpeech(chapterText.querySelector('p') as HTMLElement)
+    expect(spoken[0]?.text).toBe('第一段。')
+    spoken[0]?.options.onEnd()
+    vi.runAllTimers()
+
+    expect(spoken.map((item) => item.text)).toEqual(['第一段。', '第二段。'])
+  })
+
+  it('advances past a chunk that errors instead of halting playback', () => {
+    vi.useFakeTimers()
+    const container = document.createElement('div')
+    const chapterText = document.createElement('div')
+    chapterText.innerHTML = '<p>第一段。</p><p>第二段。</p><p>第三段。</p>'
+    container.appendChild(chapterText)
+    const { store, spoken } = createStore()
+    const playback = createPlayback(store, container, chapterText)
+
+    playback.startSpeech(chapterText.querySelector('p') as HTMLElement)
+    spoken[0]?.options.onError()
+    vi.runAllTimers()
+
+    expect(spoken.map((item) => item.text)).toEqual(['第一段。', '第二段。'])
+  })
+
+  it('stops after three consecutive chunk errors', () => {
+    vi.useFakeTimers()
+    const container = document.createElement('div')
+    const chapterText = document.createElement('div')
+    chapterText.innerHTML = '<p>第一段。</p><p>第二段。</p><p>第三段。</p><p>第四段。</p>'
+    container.appendChild(chapterText)
+    const { store, spoken } = createStore()
+    const playback = createPlayback(store, container, chapterText)
+
+    playback.startSpeech(chapterText.querySelector('p') as HTMLElement)
+    spoken[0]?.options.onError()
+    vi.runAllTimers()
+    spoken[1]?.options.onError()
+    vi.runAllTimers()
+    spoken[2]?.options.onError()
+    vi.runAllTimers()
+
+    expect(spoken.map((item) => item.text)).toEqual(['第一段。', '第二段。', '第三段。'])
+  })
+})
+
 describe('useReaderAutoPlayback auto reading', () => {
   function stubAnimationFrame() {
     let callback: FrameRequestCallback | null = null
