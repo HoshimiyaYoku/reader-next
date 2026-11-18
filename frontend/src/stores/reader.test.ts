@@ -1089,3 +1089,103 @@ describe('reader remote speech audio buffers', () => {
     expect(requestOpenAISpeechAudio).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('reader system speech interruption recovery', () => {
+  class FakeUtterance {
+    static instances: FakeUtterance[] = []
+    text: string
+    lang = ''
+    voice: unknown = null
+    rate = 1
+    pitch = 1
+    volume = 1
+    onstart: (() => void) | null = null
+    onboundary: (() => void) | null = null
+    onend: (() => void) | null = null
+    onerror: ((event: { error: string }) => void) | null = null
+
+    constructor(text: string) {
+      this.text = text
+      FakeUtterance.instances.push(this)
+    }
+  }
+
+  const fakeSynth = {
+    speaking: false,
+    pending: false,
+    paused: false,
+    speak: vi.fn(),
+    cancel: vi.fn(),
+    pause: vi.fn(),
+    resume: vi.fn(),
+    getVoices: () => [],
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  }
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    const storage = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn((key: string) => storage.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => storage.set(key, value)),
+      removeItem: vi.fn((key: string) => storage.delete(key)),
+      clear: vi.fn(() => storage.clear()),
+    })
+    vi.stubGlobal('SpeechSynthesisUtterance', FakeUtterance)
+    Object.defineProperty(window, 'speechSynthesis', {
+      value: fakeSynth,
+      configurable: true,
+    })
+    FakeUtterance.instances = []
+    fakeSynth.speak.mockClear()
+    fakeSynth.cancel.mockClear()
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it('advances when the browser interrupts the current utterance', () => {
+    const store = useReaderStore()
+    const onEnd = vi.fn()
+    const onError = vi.fn()
+
+    store.startTTS('第一段', { onEnd, onError })
+    const utterance = FakeUtterance.instances[0]
+    expect(utterance).toBeDefined()
+
+    utterance!.onerror?.({ error: 'interrupted' })
+
+    expect(onEnd).toHaveBeenCalledTimes(1)
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('still reports a genuine synthesis error as an error', () => {
+    const store = useReaderStore()
+    const onEnd = vi.fn()
+    const onError = vi.fn()
+
+    store.startTTS('第一段', { onEnd, onError })
+    FakeUtterance.instances[0]!.onerror?.({ error: 'synthesis-failed' })
+
+    expect(onError).toHaveBeenCalledTimes(1)
+    expect(onEnd).not.toHaveBeenCalled()
+  })
+
+  it('ignores an interruption from an utterance stopped by the user', () => {
+    const store = useReaderStore()
+    const onEnd = vi.fn()
+    const onError = vi.fn()
+
+    store.startTTS('第一段', { onEnd, onError })
+    const utterance = FakeUtterance.instances[0]!
+    store.stopTTS()
+    utterance.onerror?.({ error: 'interrupted' })
+
+    expect(onEnd).not.toHaveBeenCalled()
+    expect(onError).not.toHaveBeenCalled()
+  })
+})

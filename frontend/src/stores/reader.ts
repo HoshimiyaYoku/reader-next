@@ -1231,7 +1231,11 @@ export const useReaderStore = defineStore('reader', () => {
         speaking: synth?.speaking,
         pending: synth?.pending,
       })
-      if (kind === 'end') {
+      if (kind === 'end' || kind === 'interrupted') {
+        // Our own stopTTS() bumps the session before cancelling, so an
+        // interruption that still belongs to the current session came
+        // from the browser/OS killing the utterance. Recover by treating
+        // it as finished instead of leaving playback stalled forever.
         options.onEnd?.()
         return
       }

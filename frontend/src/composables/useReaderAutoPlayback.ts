@@ -672,6 +672,9 @@ export function useReaderAutoPlayback(
       chunkCount: currentSpeechSegments.length,
     })
     store.startTTS(chunk.text, {
+      onStart: () => {
+        consecutiveSpeechErrors = 0
+      },
       onEnd: () => {
         consecutiveSpeechErrors = 0
         logSpeech('chunk onEnd', {
