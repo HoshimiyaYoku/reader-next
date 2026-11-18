@@ -1088,6 +1088,62 @@ describe('reader remote speech audio buffers', () => {
     await vi.waitFor(() => expect(URL.createObjectURL).toHaveBeenCalledTimes(1))
     expect(requestOpenAISpeechAudio).toHaveBeenCalledTimes(2)
   })
+
+  it('resumes remote playback after an external pause', async () => {
+    const store = useReaderStore()
+    store.setSpeechProvider('openai')
+    const onError = vi.fn()
+
+    store.startTTS('第一段', { onError })
+    await vi.waitFor(() => expect(FakeAudio.instances.some((audio) => audio.playCount === 1)).toBe(true))
+    const audio = FakeAudio.instances.find((item) => item.playCount === 1)!
+
+    // Simulate the browser/OS pausing the element on its own.
+    audio.paused = true
+    audio.onpause?.()
+
+    await vi.waitFor(() => expect(audio.playCount).toBe(2), { timeout: 3000 })
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('does not resume remote playback after a user-requested pause', async () => {
+    const store = useReaderStore()
+    store.setSpeechProvider('openai')
+
+    store.startTTS('第一段', {})
+    await vi.waitFor(() => expect(FakeAudio.instances.some((audio) => audio.playCount === 1)).toBe(true))
+    const audio = FakeAudio.instances.find((item) => item.playCount === 1)!
+
+    store.pauseTTS()
+    audio.onpause?.()
+    await new Promise((resolve) => setTimeout(resolve, 900))
+
+    expect(audio.playCount).toBe(1)
+    expect(store.isPaused).toBe(true)
+  })
+
+  it('reports an error when remote playback wedges without progress', async () => {
+    vi.useFakeTimers()
+    try {
+      const store = useReaderStore()
+      store.setSpeechProvider('openai')
+      const onError = vi.fn()
+
+      store.startTTS('第一段', { onError })
+      for (let i = 0; i < 10; i += 1) {
+        await Promise.resolve()
+      }
+      const audio = FakeAudio.instances.find((item) => item.playCount === 1)
+      expect(audio).toBeDefined()
+      ;(audio as unknown as { currentTime: number }).currentTime = 0
+
+      await vi.advanceTimersByTimeAsync(8000)
+
+      expect(onError).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('reader system speech interruption recovery', () => {

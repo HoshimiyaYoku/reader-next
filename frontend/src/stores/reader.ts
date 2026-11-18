@@ -741,6 +741,7 @@ export const useReaderStore = defineStore('reader', () => {
   const remoteSpeechAudioElements: HTMLAudioElement[] = []
   let currentOpenAIAudioUrl = ''
   let currentOpenAIAbortController: AbortController | null = null
+  let remotePauseRequested = false
   let preloadedOpenAIAudio: PreloadedOpenAIAudio[] = []
   let preloadGeneration = 0
   const inFlightPreloadKeys = new Set<string>()
@@ -1116,6 +1117,7 @@ export const useReaderStore = defineStore('reader', () => {
   }
 
   function stopOpenAIAudioPlayback() {
+    remotePauseRequested = false
     if (currentOpenAIAbortController) {
       currentOpenAIAbortController.abort()
       currentOpenAIAbortController = null
@@ -1440,9 +1442,19 @@ export const useReaderStore = defineStore('reader', () => {
       currentOpenAIAbortController = null
 
       let audioReleased = false
+      let stallWatchdog: number | null = null
+      let lastPlaybackTime = -1
+      let stalledPolls = 0
+      const stopStallWatchdog = () => {
+        if (stallWatchdog) {
+          clearInterval(stallWatchdog)
+          stallWatchdog = null
+        }
+      }
       const releaseAudio = () => {
         if (audioReleased) return
         audioReleased = true
+        stopStallWatchdog()
         if (currentOpenAIAudio === audio) currentOpenAIAudio = null
         if (currentOpenAIAudioUrl === audioUrl) currentOpenAIAudioUrl = ''
         URL.revokeObjectURL(audioUrl)
@@ -1461,11 +1473,33 @@ export const useReaderStore = defineStore('reader', () => {
 
       audio.onpause = () => {
         if (!isCurrentTTSSession(sessionId) || currentOpenAIAudio !== audio) return
-        if (!audio.ended) {
+        if (audio.ended) return
+        if (remotePauseRequested) {
+          remotePauseRequested = false
           isPaused.value = true
           isSpeaking.value = false
           setMediaSessionPlaybackState('paused')
+          return
         }
+        // The browser/OS paused playback on its own (audio interruption,
+        // route change, tab backgrounding). The listening session is
+        // still active, so try to resume once shortly after; if the
+        // browser refuses, surface an error so playback advances
+        // instead of sitting paused forever.
+        logTTS('openai external pause', { sessionId, text: rawText.slice(0, 40) })
+        window.setTimeout(() => {
+          if (!isCurrentTTSSession(sessionId) || currentOpenAIAudio !== audio) return
+          if (remotePauseRequested || !audio.paused || audio.ended) return
+          void audio.play().catch((error: Error) => {
+            if (!isCurrentTTSSession(sessionId) || currentOpenAIAudio !== audio) return
+            releaseAudio()
+            isSpeaking.value = false
+            isPaused.value = false
+            setMediaSessionPlaybackState('none')
+            logTTS('openai external pause resume failed', { sessionId, message: error.message })
+            options.onError?.(error)
+          })
+        }, 600)
       }
 
       audio.onended = () => {
@@ -1487,6 +1521,42 @@ export const useReaderStore = defineStore('reader', () => {
         logTTS('openai onerror', { sessionId, text: rawText.slice(0, 40) })
         options.onError?.(error)
       }
+
+      // Remote playback has no engine events to fall back on: if the
+      // audio element wedges (never fires ended/error and its clock
+      // stops), poll for progress and surface an error so the session
+      // advances instead of stalling on this chunk forever.
+      stallWatchdog = window.setInterval(() => {
+        if (!isCurrentTTSSession(sessionId) || currentOpenAIAudio !== audio) {
+          stopStallWatchdog()
+          return
+        }
+        if (audio.ended) {
+          stopStallWatchdog()
+          return
+        }
+        if (audio.paused) {
+          lastPlaybackTime = -1
+          stalledPolls = 0
+          return
+        }
+        const currentTime = audio.currentTime || 0
+        if (lastPlaybackTime >= 0 && currentTime <= lastPlaybackTime) {
+          stalledPolls += 1
+        } else {
+          stalledPolls = 0
+        }
+        lastPlaybackTime = currentTime
+        if (stalledPolls >= 3) {
+          stopStallWatchdog()
+          releaseAudio()
+          isSpeaking.value = false
+          isPaused.value = false
+          setMediaSessionPlaybackState('none')
+          logTTS('openai stall watchdog error', { sessionId, text: rawText.slice(0, 40) })
+          options.onError?.(new Error(`${speechProviderLabel.value} 音频播放停滞`))
+        }
+      }, 1500)
 
       return audio.play().catch((error: Error) => {
         if (!isCurrentTTSSession(sessionId)) return
@@ -1598,11 +1668,13 @@ export const useReaderStore = defineStore('reader', () => {
     if (speechConfig.provider !== 'system') {
       if (!currentOpenAIAudio) return
       if (currentOpenAIAudio.paused) {
+        remotePauseRequested = false
         void currentOpenAIAudio.play()
         isPaused.value = false
         isSpeaking.value = true
         setMediaSessionPlaybackState('playing')
       } else {
+        remotePauseRequested = true
         currentOpenAIAudio.pause()
         isPaused.value = true
         isSpeaking.value = false
