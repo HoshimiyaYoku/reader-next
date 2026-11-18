@@ -1000,6 +1000,64 @@ export const useReaderStore = defineStore('reader', () => {
     })
   }
 
+  // Remote TTS endpoints (especially free tiers) throttle bursty
+  // concurrency: preloading fires several requests at once and the
+  // tail of the burst gets rejected, which used to surface as random
+  // skipped paragraphs. Cap how many synthesis requests run at once
+  // and retry transient failures with backoff before giving up.
+  const SPEECH_REQUEST_CONCURRENCY = 3
+  const SPEECH_REQUEST_ATTEMPTS = 3
+  let speechRequestsActive = 0
+  const speechRequestWaiters: Array<() => void> = []
+
+  function acquireSpeechRequestSlot() {
+    return new Promise<void>((resolve) => {
+      if (speechRequestsActive < SPEECH_REQUEST_CONCURRENCY) {
+        speechRequestsActive += 1
+        resolve()
+        return
+      }
+      speechRequestWaiters.push(() => {
+        speechRequestsActive += 1
+        resolve()
+      })
+    })
+  }
+
+  function releaseSpeechRequestSlot() {
+    speechRequestsActive -= 1
+    const next = speechRequestWaiters.shift()
+    if (next) next()
+  }
+
+  function speechRequestDelay(ms: number) {
+    return new Promise<void>((resolve) => {
+      window.setTimeout(resolve, ms)
+    })
+  }
+
+  async function fetchSpeechAudioWithRetry(rawText: string, signal?: AbortSignal) {
+    let lastError: unknown = null
+    for (let attempt = 0; attempt < SPEECH_REQUEST_ATTEMPTS; attempt += 1) {
+      if (signal?.aborted) {
+        throw lastError instanceof Error ? lastError : new Error('Speech request aborted')
+      }
+      await acquireSpeechRequestSlot()
+      try {
+        return await fetchOpenAIAudioBlob(rawText, signal)
+      } catch (error) {
+        lastError = error
+      } finally {
+        releaseSpeechRequestSlot()
+      }
+      if (signal?.aborted) break
+      if (attempt < SPEECH_REQUEST_ATTEMPTS - 1) {
+        await speechRequestDelay(600 * (attempt + 1))
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error('Speech request failed')
+  }
+
   function getOrStartOpenAIAudioRequest(rawText: string, signal?: AbortSignal) {
     const key = buildOpenAIAudioCacheKey(rawText)
     const existing = inFlightOpenAIAudioRequests.get(key)
@@ -1007,7 +1065,7 @@ export const useReaderStore = defineStore('reader', () => {
       return { key, promise: existing }
     }
 
-    const promise = fetchOpenAIAudioBlob(rawText, signal).finally(() => {
+    const promise = fetchSpeechAudioWithRetry(rawText, signal).finally(() => {
       if (inFlightOpenAIAudioRequests.get(key) === promise) {
         inFlightOpenAIAudioRequests.delete(key)
       }

@@ -1144,6 +1144,39 @@ describe('reader remote speech audio buffers', () => {
       vi.useRealTimers()
     }
   })
+
+  it('retries a transient speech request failure instead of skipping the chunk', async () => {
+    vi.mocked(requestOpenAISpeechAudio).mockRejectedValueOnce(new Error('429 Too Many Requests'))
+    const store = useReaderStore()
+    store.setSpeechProvider('openai')
+    const onError = vi.fn()
+
+    store.startTTS('第一段', { onError })
+
+    await vi.waitFor(
+      () => expect(FakeAudio.instances.some((audio) => audio.playCount === 1)).toBe(true),
+      { timeout: 4000 },
+    )
+    expect(requestOpenAISpeechAudio).toHaveBeenCalledTimes(2)
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('caps concurrent speech requests while preloading', async () => {
+    const resolvers: Array<(blob: Blob) => void> = []
+    vi.mocked(requestOpenAISpeechAudio).mockImplementation(() => new Promise((resolve) => {
+      resolvers.push(resolve)
+    }))
+    const store = useReaderStore()
+    store.setSpeechProvider('openai')
+
+    await store.preloadOpenAITTS(['甲', '乙', '丙', '丁', '戊'])
+    await vi.waitFor(() => expect(requestOpenAISpeechAudio).toHaveBeenCalledTimes(3))
+
+    resolvers[0]!(new Blob(['甲']))
+    await vi.waitFor(() => expect(requestOpenAISpeechAudio).toHaveBeenCalledTimes(4))
+
+    resolvers.forEach((resolve) => resolve(new Blob(['x'])))
+  })
 })
 
 describe('reader system speech interruption recovery', () => {
